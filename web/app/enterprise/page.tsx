@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { encodeFunctionData } from "viem";
 import { useAccount } from "@/components/AccountProvider";
+import { AccountGate } from "@/components/AccountGate";
 import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/components/ui";
 import { erc1155ApprovalAbi, listingWriteAbi, poolWriteAbi, registryWriteAbi } from "@/lib/abis";
 import { signAndRelay, type Call } from "@/lib/client/passkey";
@@ -39,8 +40,7 @@ export default function EnterprisePage() {
   }, [credential]);
   useEffect(() => { refresh(); }, [refresh]);
 
-  if (!userId) return <Notice>請先在<Link className="underline" href="/">首頁</Link>登入。</Notice>;
-  if (!credential || !config) return <Notice>請先在<Link className="underline" href="/">首頁</Link>建立鏈上帳戶。</Notice>;
+  if (!userId || !credential || !config) return <AccountGate />;
   if (tier !== 2) return <Notice>企業功能需要法人身分。請到<Link className="underline" href="/kyc">身分驗證</Link>以工商憑證驗證。</Notice>;
   const d = config.deployment;
 

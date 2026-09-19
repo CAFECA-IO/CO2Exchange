@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { useAccount } from "@/components/AccountProvider";
+import { AccountGate } from "@/components/AccountGate";
 import { Button, Card, Field, Notice, inputCls } from "@/components/ui";
 import { TIER, TIER_LABEL } from "@/lib/deployment";
 import Link from "next/link";
@@ -23,8 +24,7 @@ export default function KycPage() {
   }, [credential]);
   useEffect(() => { refresh(); }, [refresh]);
 
-  if (!userId) return <Notice>請先在<Link className="underline" href="/">首頁</Link>登入。</Notice>;
-  if (!credential) return <Notice>請先在<Link className="underline" href="/">首頁</Link>建立鏈上帳戶。</Notice>;
+  if (!userId || !credential) return <AccountGate />;
 
   const active = identity && identity.tier !== TIER.None && !identity.frozen && identity.expiry * 1000 > Date.now();
 

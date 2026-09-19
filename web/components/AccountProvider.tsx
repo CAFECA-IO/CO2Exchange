@@ -14,6 +14,9 @@ type Ctx = {
   tier: number; // 鏈上身分等級（0 未驗證 / 1 自然人 / 2 法人）
   refreshTier: () => Promise<void>;
   busy: string | null;
+  /// 這個裝置原本綁著的帳戶，在目前的部署上不存在，自動重綁也失敗了，已解除綁定。
+  /// 使用者沒做錯任何事，但畫面必須說出來 —— 否則就是「我明明有帳戶，怎麼叫我重建」。
+  unbound: boolean;
   createAccount: () => Promise<void>;
   useExistingPasskey: () => Promise<void>;
   forget: () => void;
@@ -28,6 +31,7 @@ function Inner({ children }: { children: React.ReactNode }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [me, setMe] = useState<Me>({ email: null, isAdmin: false, isVerifier: false });
   const [tier, setTier] = useState(0);
+  const [unbound, setUnbound] = useState(false);
 
   useEffect(() => { fetch("/api/config").then((r) => r.json()).then(setConfig).catch(() => setConfig(null)); }, []);
   useEffect(() => { fetch("/api/me").then((r) => r.json()).then(setMe).catch(() => {}); }, [userId]);
@@ -42,7 +46,7 @@ function Inner({ children }: { children: React.ReactNode }) {
     const j = await res.json();
     if (!res.ok) throw new Error(j.error ?? "account failed");
     const c: StoredCredential = { id, publicKey, address: j.address, userId: userId! };
-    saveCredential(c); setCredential(c);
+    saveCredential(c); setCredential(c); setUnbound(false);
   }, [userId]);
 
   useEffect(() => { setCredential(userId ? loadCredential(userId) : null); }, [userId]);
@@ -63,7 +67,7 @@ function Inner({ children }: { children: React.ReactNode }) {
       } catch {
         // 重綁失敗（例如這把 passkey 沒對應紀錄）就清掉，讓使用者重新建立，
         // 而不是留著一個永遠失敗的地址。
-        if (live) { clearCredential(); setCredential(null); }
+        if (live) { clearCredential(); setCredential(null); setUnbound(true); }
       } finally {
         if (live) setBusy(null);
       }
@@ -92,13 +96,13 @@ function Inner({ children }: { children: React.ReactNode }) {
       if (!res.ok) throw new Error("這把 passkey 沒有對應帳戶，請改用「建立新帳戶」");
       const j = await res.json();
       const c: StoredCredential = { id, publicKey: j.publicKey, address: j.address, userId };
-      saveCredential(c); setCredential(c);
+      saveCredential(c); setCredential(c); setUnbound(false);
     } finally { setBusy(null); }
   }, [userId]);
 
-  const forget = useCallback(() => { clearCredential(); setCredential(null); }, []);
+  const forget = useCallback(() => { clearCredential(); setCredential(null); setUnbound(false); }, []);
 
-  const value = useMemo(() => ({ config, credential, userId, me, tier, refreshTier, busy, createAccount, useExistingPasskey, forget }), [config, credential, userId, me, tier, refreshTier, busy, createAccount, useExistingPasskey, forget]);
+  const value = useMemo(() => ({ config, credential, userId, me, tier, refreshTier, busy, unbound, createAccount, useExistingPasskey, forget }), [config, credential, userId, me, tier, refreshTier, busy, unbound, createAccount, useExistingPasskey, forget]);
   return <AccountCtx.Provider value={value}>{children}</AccountCtx.Provider>;
 }
 

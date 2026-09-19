@@ -40,11 +40,19 @@ export function Nav() {
         </nav>
         <div className="ml-auto flex items-center gap-3 text-xs text-ink-300">
           <ThemeToggle />
-          {credential && (
+          {/*
+            登入狀態與鏈上帳戶要分開顯示。只顯示「登出」而不說帳戶還沒建立，
+            使用者進到內頁看到「請先建立鏈上帳戶」就會覺得自相矛盾。
+          */}
+          {credential ? (
             <span className="tnum font-mono text-ink-200" title={credential.address}>
               {credential.address.slice(0, 6)}…{credential.address.slice(-4)}
             </span>
-          )}
+          ) : session?.user ? (
+            <Link href="/" className="rounded-[--radius-ctl] border border-warn/50 px-2 py-1 text-warn transition hover:border-warn">
+              尚未建立鏈上帳戶
+            </Link>
+          ) : null}
           {session?.user && (
             <button
               onClick={() => signOut({ callbackUrl: "/" })}

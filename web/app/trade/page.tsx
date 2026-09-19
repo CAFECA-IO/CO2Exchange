@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { encodeFunctionData, keccak256, toBytes, type Address, type Hex } from "viem";
 import { useAccount } from "@/components/AccountProvider";
+import { AccountGate } from "@/components/AccountGate";
 import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/components/ui";
 import { creditAbi, erc20Abi, listingAbi, poolAbi, routerAbi } from "@/lib/abis";
 import { PURPOSE_LABEL } from "@/lib/deployment";
@@ -37,8 +38,7 @@ export default function TradePage() {
   }, [credential]);
   useEffect(() => { refresh(); }, [refresh]);
 
-  if (!userId) return <Notice>請先在<Link className="underline" href="/">首頁</Link>登入。</Notice>;
-  if (!credential || !config) return <Notice>請先在<Link className="underline" href="/">首頁</Link>建立鏈上帳戶。</Notice>;
+  if (!userId || !credential || !config) return <AccountGate />;
   const d = config.deployment;
 
   async function relay(label: string, calls: Call[]) {

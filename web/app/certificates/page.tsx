@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAccount } from "@/components/AccountProvider";
+import { AccountGate } from "@/components/AccountGate";
 import { Card, Notice, fmtKg } from "@/components/ui";
 import { PURPOSE_LABEL } from "@/lib/deployment";
 
@@ -15,8 +16,7 @@ export default function CertificatesPage() {
     fetch(`/api/certificates?account=${credential.address}`).then((r) => r.json()).then((j) => setCerts(j.certificates ?? []));
   }, [credential]);
 
-  if (!userId) return <Notice>請先在<Link className="underline" href="/">首頁</Link>登入。</Notice>;
-  if (!credential) return <Notice>請先在<Link className="underline" href="/">首頁</Link>建立鏈上帳戶。</Notice>;
+  if (!userId || !credential) return <AccountGate />;
 
   return (
     <div className="space-y-4">
