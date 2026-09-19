@@ -60,7 +60,7 @@ HAS_TSTORE=0
 RES=$(cast call --rpc-url "$RPC" --create "$TSTORE_PROBE" 2>&1)
 case "$RES" in
   0x*1) HAS_TSTORE=1; ok "支援，v4 模組可以部署" ;;
-  *)    bad "不支援（或已停用）—— v4 模組無法部署，要用 SKIP_V4=1" ;;
+  *)    bad "不支援（或已停用）—— v4 模組無法部署，改用 script/Deploy.s.sol" ;;
 esac
 echo
 
@@ -113,14 +113,13 @@ echo "────────────────────────�
 if [ "$HAS_MCOPY" = "0" ] || [ "$HAS_TSTORE" = "0" ]; then
   echo "結論：這條鏈比 Cancun 舊。"
   echo
-  echo "  缺 TSTORE  → v4 展示模組不能部署（SKIP_V4=1 跳過，主市場 Listing 不受影響）"
+  echo "  缺 TSTORE  → v4 展示模組不能部署（改用 Deploy.s.sol，主市場 Listing 不受影響）"
   if [ "$HAS_MCOPY" = "0" ]; then
     echo "  缺 MCOPY   → 連其他合約都不能跑：solc 以 evm_version=cancun 編出來的碼會用到 MCOPY，"
     echo "               必須把 foundry.toml 的 evm_version 改成 shanghai 再重編。"
     echo
-    echo "  但 v4-core 的 PoolManager 本身用了 tstore，evm_version=shanghai 會編不過，"
-    echo "  所以這種鏈需要把 v4 從編譯單元裡拆出去（把 Deploy.s.sol 對 v4 的 import 分到獨立 script）。"
-    echo "  這是一次性的重構 —— 把這份輸出貼給 Claude，它會處理。"
+    echo "  v4 的編譯期相依已經拆乾淨了，但 shanghai 這條路還卡在 Safe v1.4.1 編不過，"
+    echo "  詳見 README「目標鏈沒有 Cancun 的話」與 foundry.toml 的 [profile.shanghai]。"
   fi
   echo
   echo "  最省事的另一條路：把這條鏈的節點升級到有 Cancun（EIP-1153 + EIP-5656）的版本。"
@@ -130,12 +129,12 @@ fi
 if [ "$HAS_TSTORE" = "1" ]; then
   echo "結論：完整部署（含 v4 展示模組）"
   echo
-  echo "  forge script script/Deploy.s.sol --rpc-url $RPC --broadcast${LEGACY_FLAG}"
+  echo "  forge script script/DeployV4.s.sol --rpc-url ${RPC} --broadcast${LEGACY_FLAG}"
 else
-  echo "結論：以 SKIP_V4=1 部署（登錄 / 身分 / Listing 市場 / 池化 / 治理全都會部署，只少掉 v4 展示模組）"
+  echo "結論：用 script/Deploy.s.sol 部署（登錄 / 身分 / Listing 市場 / 池化 / 治理全都會部署，只少掉 v4 展示模組）"
   echo "v4 本來就只是展示用，主市場是 Listing，功能不受影響。"
   echo
-  echo "  SKIP_V4=1 forge script script/Deploy.s.sol --rpc-url $RPC --broadcast${LEGACY_FLAG}"
+  echo "  forge script script/Deploy.s.sol --rpc-url ${RPC} --broadcast${LEGACY_FLAG}"
 fi
 echo
 echo "部署後前端（web/.env.local）："

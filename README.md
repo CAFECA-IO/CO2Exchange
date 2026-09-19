@@ -75,13 +75,27 @@ forge test
 ```bash
 anvil
 # 另一個終端
-forge script script/Deploy.s.sol   --rpc-url anvil --broadcast                # 只部署
-forge script script/DemoFlow.s.sol --rpc-url anvil --broadcast --sig "demo()" # 部署 + 完整流程
+forge script script/DeployV4.s.sol   --rpc-url anvil --broadcast                # 只部署（含 v4）
+forge script script/DemoFlowV4.s.sol --rpc-url anvil --broadcast --sig "demo()" # 部署 + 完整流程
 ```
 
-`DemoFlow` 用 Anvil 預設帳戶：account0 = 國家單位 / 營運 / 身分驗證服務 / 查驗機構（Phase 0 合一），
+`DemoFlowV4` 用 Anvil 預設帳戶：account0 = 國家單位 / 營運 / 身分驗證服務 / 查驗機構（Phase 0 合一），
 account1 = 減量企業，account2 = 做市商，account3 = 自然人。流程：憑證 attestation 註冊 → 專案登錄 →
 查驗簽章核發 100 噸 → 30 噸掛單、60 噸入池、做市商提供 v4 流動性 → 自然人從掛單與 v4 各買一次 → 兩邊註銷取得憑證。
+
+### 四支部署腳本
+
+v4 的編譯期相依已經從核心拆出去，所以「要不要 v4」是選腳本，不是設旗標：
+
+| 腳本 | 內容 | 需要 Cancun |
+|---|---|---|
+| `Deploy.s.sol` | 核心：登錄、身分、Listing、池化、憑證、Safe + Timelock、passkey 帳戶工廠 | 否 |
+| `DeployV4.s.sol` | 核心 + v4（PoolManager / Hook / TrustedRouter） | 是 |
+| `DemoFlow.s.sol` | 核心 demo（沒有 v4 時，做市商直接轉 CCT 給自然人，贖回 / 註銷流程照跑） | 否 |
+| `DemoFlowV4.s.sol` | 核心 demo + v4 流動性與 swap | 是 |
+
+用 `Deploy.s.sol` 時部署檔裡 v4 的三個地址會是 0，前端據此自動隱藏 v4 相關 UI
+（`/trade` 的流動性池卡片、`/admin` 的 PoolManager 狀態）。
 
 ## 部署到既有的私有鏈
 
@@ -96,25 +110,38 @@ account1 = 減量企業，account2 = 做市商，account3 = 自然人。流程�
 | 檢查 | 為什麼重要 |
 |---|---|
 | chainId | 決定部署檔寫到 `deployments/<chainId>.json`，前端 `CHAIN_ID` 要對上 |
-| **EIP-1153（TSTORE）** | Uniswap v4 `PoolManager` 的硬需求。缺了就要 `SKIP_V4=1` |
-| **EIP-5656（MCOPY）** | `evm_version = cancun` 編出來的碼會用到。缺了要把 `foundry.toml` 降到 shanghai 重編 |
+| **EIP-1153（TSTORE）** | Uniswap v4 `PoolManager` 的硬需求。缺了就改用 `Deploy.s.sol` |
+| **EIP-5656（MCOPY）** | `evm_version = cancun` 編出來的碼會用到。缺了整條鏈都跑不了，見下方 |
 | EIP-1559 | 沒有 `baseFeePerGas` 的鏈，`forge script` 要加 `--legacy` |
 | 部署者餘額 | 私有鏈上 Anvil 預設金鑰是 0 餘額，要設 `DEPLOYER_PK` |
 
 ```bash
 export RPC_URL=http://127.0.0.1:20024
 export DEPLOYER_PK=0x<這條鏈上有餘額的私鑰>
-forge script script/Deploy.s.sol --rpc-url chain --broadcast            # 鏈支援 Cancun
-SKIP_V4=1 forge script script/Deploy.s.sol --rpc-url chain --broadcast  # 鏈沒有 EIP-1153
+forge script script/DeployV4.s.sol --rpc-url chain --broadcast  # 鏈支援 Cancun
+forge script script/Deploy.s.sol   --rpc-url chain --broadcast  # 鏈沒有 EIP-1153
 ```
-
-`SKIP_V4=1` 只跳過 v4 展示模組（`PoolManager` / `CarbonKYCHook` / `TrustedRouter`）。登錄層、身分層、
-`Listing` 主市場、池化與 CCT、註銷憑證、Safe + Timelock 治理、passkey 帳戶工廠全部照常部署 ——
-v4 本來就標註為非生產展示，Phase 1 主市場是 `Listing`。部署檔中 v4 的三個地址會是 0，
-前端據此自動隱藏 v4 相關 UI（`/trade` 的流動性池卡片、`/admin` 的 PoolManager 狀態）。
 
 前端接上去：`web/.env.local` 設 `RPC_URL` / `CHAIN_ID`，並確認 `RELAYER_PK`、`DOCUMENT_SIGNER_PK`
 在那條鏈上**有餘額** —— Phase 0 由平台代付 gas，沒錢的話建帳戶與註銷都會失敗。
+
+### 目標鏈沒有 Cancun 的話
+
+比 Cancun 舊的鏈（例如 geth 1.12.x）連核心合約都跑不了，不只是少掉 v4：
+`evm_version = cancun` 編出來的碼會用到 MCOPY。要降到 `evm_version = shanghai` 重編，
+而那條路目前卡在一個點上（`foundry.toml` 的 `[profile.shanghai]` 有完整紀錄）：
+
+- `via_ir = false` → `Listing`、`CarbonPool`、`CarbonRegistry`、`CarbonCredit1155`、
+  `RetirementCertificate` 五個全部 stack too deep。沒有 MCOPY 時 solc 的記憶體搬移碼比較吃堆疊，
+  這是系統性的，不是某個函式區域變數太多。
+- `via_ir = true` → 上面五個都過，只剩 Safe v1.4.1 的 `execTransaction` 編不過
+  （Safe 的 inline assembly 沒標 memory-safe，是 Safe 已知的 via_ir 問題）。
+
+所以唯一的阻塞點是 Safe。解法是不要編譯 Safe，改用 Safe v1.4.1 的 canonical creation bytecode
+直接 CREATE —— 官方版本是 solc 0.7.6 編的，本來就不含 Cancun 指令，而且部署出來的 Safe
+會與已稽核的版本位元組完全一致。**尚未實作**（Phase 0 決定留在 Anvil）。
+
+**Phase 1 的 Besu 必須在 genesis 啟用 Cancun**，否則會撞上同一面牆。
 
 ## 前端（web/，Next.js 16 + React 19）
 
@@ -134,7 +161,7 @@ v4 本來就標註為非生產展示，Phase 1 主市場是 `Listing`。部署�
 # 終端 1
 anvil
 # 終端 2：部署 + 種子資料
-forge script script/DemoFlow.s.sol --rpc-url anvil --broadcast --sig "demo()"
+forge script script/DemoFlowV4.s.sol --rpc-url anvil --broadcast --sig "demo()"
 # 終端 3
 cd web && cp .env.example .env.local && npm install && npm run dev
 # 開 http://localhost:3000
@@ -148,7 +175,7 @@ Apple / Google 登入：在 `.env.local` 設 `AUTH_GOOGLE_ID/SECRET`、`AUTH_APP
 
 端到端測試（Chromium 虛擬 passkey，需 `npx playwright install chromium`）：`npm run e2e` 跑兩條流程 ——
 `e2e/flow.mjs`（自然人：KYC 人工核准 → 購買 → 註銷 → 管理員產生 PDF 並回寫 → 下載）與
-`e2e/enterprise.mjs`（法人 KYC → 專案登錄 → 上傳報告 → 查驗核發 → 掛單 + 入池 → 另一自然人購買並註銷）。需 anvil + DemoFlow + `KYC_AUTO_APPROVE=0` 的伺服器。
+`e2e/enterprise.mjs`（法人 KYC → 專案登錄 → 上傳報告 → 查驗核發 → 掛單 + 入池 → 另一自然人購買並註銷）。需 anvil + DemoFlowV4 + `KYC_AUTO_APPROVE=0` 的伺服器。
 
 ## 測試（80）
 

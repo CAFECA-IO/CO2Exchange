@@ -201,7 +201,7 @@ contract Deploy is Script {
         vm.stopBroadcast();
     }
 
-    /// @dev 帳戶層，與 v4 無關，SKIP_V4 時仍要部署。
+    /// @dev 帳戶層，與 v4 無關 —— 不含 v4 的核心部署一樣要有。
     function _deployAccountFactory() internal {
         vm.startBroadcast(cfg.pk);
         accountFactory = new PasskeyAccountFactory();
