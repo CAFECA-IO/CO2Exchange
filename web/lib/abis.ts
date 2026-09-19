@@ -144,3 +144,70 @@ export const certificateAbi = [
       { name: "purpose", type: "uint8", indexed: false } ],
   },
 ] as const;
+
+// ── 企業 / 查驗 / 管理 用 ──
+export const registryWriteAbi = [
+  { type: "function", name: "nextProjectId", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "registerProject", stateMutability: "nonpayable",
+    inputs: [{ type: "string" }, { type: "string" }, { type: "string" }, { type: "string" }], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "serialUsed", stateMutability: "view", inputs: [{ type: "bytes32" }], outputs: [{ type: "bool" }] },
+  { type: "function", name: "attestationUsed", stateMutability: "view", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [{ type: "bool" }] },
+  { type: "function", name: "issue", stateMutability: "nonpayable",
+    inputs: [{ name: "a", type: "tuple", components: [
+      { name: "projectId", type: "uint256" }, { name: "monitoringStart", type: "uint64" }, { name: "monitoringEnd", type: "uint64" },
+      { name: "amountKg", type: "uint256" }, { name: "serialHash", type: "bytes32" }, { name: "reportHash", type: "bytes32" },
+      { name: "attestationId", type: "uint256" }, { name: "deadline", type: "uint256" } ] }, { name: "signature", type: "bytes" }],
+    outputs: [{ type: "uint256" }] },
+  { type: "event", name: "CreditsIssued", inputs: [
+    { name: "projectId", type: "uint256", indexed: true }, { name: "batchId", type: "uint256", indexed: true },
+    { name: "verifier", type: "address", indexed: true }, { name: "amountKg", type: "uint256", indexed: false },
+    { name: "serialHash", type: "bytes32", indexed: false }, { name: "reportHash", type: "bytes32", indexed: false } ] },
+] as const;
+
+export const listingWriteAbi = [
+  { type: "function", name: "list", stateMutability: "nonpayable", inputs: [{ type: "uint256" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "cancel", stateMutability: "nonpayable", inputs: [{ type: "uint256" }], outputs: [] },
+  { type: "function", name: "paused", stateMutability: "view", inputs: [], outputs: [{ type: "bool" }] },
+] as const;
+
+export const poolWriteAbi = [
+  { type: "function", name: "deposit", stateMutability: "nonpayable", inputs: [{ type: "uint256" }, { type: "uint256" }], outputs: [] },
+  { type: "function", name: "paused", stateMutability: "view", inputs: [], outputs: [{ type: "bool" }] },
+] as const;
+
+export const erc1155ApprovalAbi = [
+  { type: "function", name: "setApprovalForAll", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "bool" }], outputs: [] },
+  { type: "function", name: "isApprovedForAll", stateMutability: "view", inputs: [{ type: "address" }, { type: "address" }], outputs: [{ type: "bool" }] },
+] as const;
+
+export const certificateWriteAbi = [
+  { type: "function", name: "setDocumentHash", stateMutability: "nonpayable", inputs: [{ type: "uint256" }, { type: "bytes32" }], outputs: [] },
+] as const;
+
+export const accessControlAbi = [
+  { type: "function", name: "hasRole", stateMutability: "view", inputs: [{ type: "bytes32" }, { type: "address" }], outputs: [{ type: "bool" }] },
+] as const;
+
+export const ownedAbi = [
+  { type: "function", name: "owner", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+] as const;
+
+export const hookViewAbi = [
+  { type: "function", name: "trustedRouter", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+] as const;
+
+export const safeViewAbi = [
+  { type: "function", name: "getOwners", stateMutability: "view", inputs: [], outputs: [{ type: "address[]" }] },
+  { type: "function", name: "getThreshold", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "nonce", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+] as const;
+
+export const timelockAbi = [
+  { type: "function", name: "getMinDelay", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "getOperationState", stateMutability: "view", inputs: [{ type: "bytes32" }], outputs: [{ type: "uint8" }] },
+  { type: "function", name: "getTimestamp", stateMutability: "view", inputs: [{ type: "bytes32" }], outputs: [{ type: "uint256" }] },
+  { type: "event", name: "CallScheduled", inputs: [
+    { name: "id", type: "bytes32", indexed: true }, { name: "index", type: "uint256", indexed: true }, { name: "target", type: "address", indexed: false },
+    { name: "value", type: "uint256", indexed: false }, { name: "data", type: "bytes", indexed: false }, { name: "predecessor", type: "bytes32", indexed: false },
+    { name: "delay", type: "uint256", indexed: false } ] },
+] as const;

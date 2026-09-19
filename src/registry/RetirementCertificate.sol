@@ -14,6 +14,8 @@ contract RetirementCertificate is ERC721, AccessControl {
     bytes32 public constant SOVEREIGN_ROLE = keccak256("SOVEREIGN_ROLE");
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE"); // CarbonCredit1155
+    /// @dev 憑證文件服務的金鑰：只能回寫 PDF hash。由 OPERATOR（營運 Safe）授予 / 撤銷。
+    bytes32 public constant DOCUMENT_ROLE = keccak256("DOCUMENT_ROLE");
 
     enum Purpose {
         Voluntary, // 自願抵銷
@@ -57,6 +59,7 @@ contract RetirementCertificate is ERC721, AccessControl {
         _grantRole(SOVEREIGN_ROLE, sovereign);
         _grantRole(OPERATOR_ROLE, operator);
         _setRoleAdmin(OPERATOR_ROLE, SOVEREIGN_ROLE);
+        _setRoleAdmin(DOCUMENT_ROLE, OPERATOR_ROLE);
     }
 
     function mint(address to, Certificate memory c) external onlyRole(MINTER_ROLE) returns (uint256 certId) {
@@ -66,7 +69,7 @@ contract RetirementCertificate is ERC721, AccessControl {
         emit Retired(certId, c.batchId, c.retiredBy, to, c.amountKg, c.beneficiaryHash, c.purpose);
     }
 
-    function setDocumentHash(uint256 certId, bytes32 documentHash) external onlyRole(OPERATOR_ROLE) {
+    function setDocumentHash(uint256 certId, bytes32 documentHash) external onlyRole(DOCUMENT_ROLE) {
         _requireOwned(certId);
         _certs[certId].documentHash = documentHash;
         emit DocumentHashSet(certId, documentHash);

@@ -5,10 +5,10 @@ import { Button, Card, Field, Notice, inputCls } from "@/components/ui";
 import { TIER, TIER_LABEL } from "@/lib/deployment";
 import Link from "next/link";
 
-type Identity = { tier: number; expiry: number; frozen: boolean; jurisdiction: string; identityHash: string };
+type Identity = { tier: number; expiry: number; frozen: boolean; jurisdiction: string; identityHash: string; application: { id: string; status: string; tier: number; reason?: string; createdAt: string } | null };
 
 export default function KycPage() {
-  const { credential, userId } = useAccount();
+  const { credential, userId, refreshTier } = useAccount();
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [tier, setTier] = useState<number>(TIER.Individual);
   const [idNumber, setIdNumber] = useState("");
@@ -35,8 +35,10 @@ export default function KycPage() {
       const r = await fetch("/api/kyc", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ account: credential!.address, tier, idNumber, name }) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error ?? "失敗");
-      setMsg({ kind: "ok", text: `身分已綁定帳戶。交易 ${j.txHash.slice(0, 10)}…` });
-      await refresh();
+      setMsg(j.status === "approved"
+        ? { kind: "ok", text: `身分已綁定帳戶。交易 ${j.txHash.slice(0, 10)}…` }
+        : { kind: "ok", text: "申請已送出，待身分驗證服務審核。" });
+      await refresh(); await refreshTier();
     } catch (e) { setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) }); }
     finally { setBusy(false); }
   }
@@ -50,9 +52,15 @@ export default function KycPage() {
             <div><dt className="text-zinc-500">有效期限</dt><dd>{identity.expiry ? new Date(identity.expiry * 1000).toLocaleDateString("zh-TW") : "—"}</dd></div>
             <div><dt className="text-zinc-500">狀態</dt><dd>{identity.frozen ? "已凍結" : active ? "有效" : "未驗證 / 已到期"}</dd></div>
             <div><dt className="text-zinc-500">身分雜湊</dt><dd className="font-mono text-xs break-all">{identity.identityHash}</dd></div>
+            {identity.application && (
+              <div><dt className="text-zinc-500">最近申請</dt><dd data-testid="kyc-application">
+                {identity.application.status === "pending" ? "審核中" : identity.application.status === "approved" ? "已核准" : `已退回：${identity.application.reason || "—"}`}
+              </dd></div>
+            )}
           </dl>
         ) : <p className="text-sm text-zinc-500">讀取中…</p>}
-        {active && <div className="mt-4"><Link href="/trade"><Button>前往購買與註銷</Button></Link></div>}
+        {active && <div className="mt-4 flex gap-2"><Link href="/trade"><Button>前往購買與註銷</Button></Link>{identity?.tier === TIER.Corporate && <Link href="/enterprise"><Button variant="secondary">企業功能</Button></Link>}</div>}
+        {identity?.application?.status === "pending" && <div className="mt-3"><Button variant="secondary" onClick={() => { refresh(); refreshTier(); }}>重新整理</Button></div>}
       </Card>
 
       <Card title="以政府憑證驗證身分">

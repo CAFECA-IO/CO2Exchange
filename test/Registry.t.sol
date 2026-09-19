@@ -85,6 +85,33 @@ contract RegistryTest is Fixture {
         assertGt(bytes(cert.tokenURI(certId)).length, 0);
     }
 
+    function test_documentRole_onlyDocumentSignerWritesHash_operatorRotatesIt() public {
+        uint256 pid = _registerProject(companyA);
+        uint256 batch = _issue(pid, 5000, keccak256("S1"));
+        vm.prank(companyA);
+        uint256 certId = credit.retire(_retireReq(companyA, batch, 100, companyA));
+
+        // 主權沒有 DOCUMENT_ROLE
+        vm.prank(sovereign);
+        vm.expectRevert();
+        cert.setDocumentHash(certId, keccak256("pdf"));
+
+        // 營運可把文件服務金鑰換掉
+        address docSvc = makeAddr("docSvc");
+        bytes32 docRole = cert.DOCUMENT_ROLE();
+        vm.startPrank(operator);
+        cert.grantRole(docRole, docSvc);
+        cert.revokeRole(docRole, operator);
+        vm.stopPrank();
+
+        vm.prank(operator);
+        vm.expectRevert();
+        cert.setDocumentHash(certId, keccak256("pdf"));
+        vm.prank(docSvc);
+        cert.setDocumentHash(certId, keccak256("pdf"));
+        assertEq(cert.certificateOf(certId).documentHash, keccak256("pdf"));
+    }
+
     function test_retire_requiresApprovalForThirdParty() public {
         uint256 pid = _registerProject(companyA);
         uint256 batch = _issue(pid, 5000, keccak256("S1"));

@@ -4,12 +4,18 @@ import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { useAccount } from "./AccountProvider";
 
-const links = [["/", "首頁"], ["/kyc", "身分驗證"], ["/trade", "購買與註銷"], ["/certificates", "我的憑證"]] as const;
+const base = [["/", "首頁"], ["/kyc", "身分驗證"], ["/trade", "購買與註銷"], ["/certificates", "我的憑證"]] as const;
 
 export function Nav() {
   const path = usePathname();
   const { data: session } = useSession();
-  const { credential } = useAccount();
+  const { credential, me, tier } = useAccount();
+  const links: readonly (readonly [string, string])[] = [
+    ...base,
+    ...(tier === 2 ? [["/enterprise", "企業"] as const] : []),
+    ...(me.isVerifier ? [["/verifier", "查驗機構"] as const] : []),
+    ...(me.isAdmin ? [["/admin", "管理後台"] as const] : []),
+  ];
   return (
     <header className="border-b border-zinc-200 bg-white/80 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/80">
       <div className="mx-auto flex max-w-5xl items-center gap-6 px-4 py-3">

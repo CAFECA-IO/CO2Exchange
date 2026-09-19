@@ -5,10 +5,14 @@ import type { Deployment } from "@/lib/deployment";
 import { clearCredential, discoverPasskey, loadCredential, registerPasskey, saveCredential, type StoredCredential } from "@/lib/client/passkey";
 
 type Config = { deployment: Deployment; rpcUrl: string; providers: string[] };
+export type Me = { email: string | null; isAdmin: boolean; isVerifier: boolean };
 type Ctx = {
   config: Config | null;
   credential: StoredCredential | null;
   userId: string | null;
+  me: Me;
+  tier: number; // 鏈上身分等級（0 未驗證 / 1 自然人 / 2 法人）
+  refreshTier: () => Promise<void>;
   busy: string | null;
   createAccount: () => Promise<void>;
   useExistingPasskey: () => Promise<void>;
@@ -22,8 +26,17 @@ function Inner({ children }: { children: React.ReactNode }) {
   const [config, setConfig] = useState<Config | null>(null);
   const [credential, setCredential] = useState<StoredCredential | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [me, setMe] = useState<Me>({ email: null, isAdmin: false, isVerifier: false });
+  const [tier, setTier] = useState(0);
 
   useEffect(() => { fetch("/api/config").then((r) => r.json()).then(setConfig).catch(() => setConfig(null)); }, []);
+  useEffect(() => { fetch("/api/me").then((r) => r.json()).then(setMe).catch(() => {}); }, [userId]);
+  const refreshTier = useCallback(async () => {
+    if (!credential) { setTier(0); return; }
+    const r = await fetch(`/api/kyc?account=${credential.address}`);
+    if (r.ok) { const j = await r.json(); setTier(j.frozen || j.expiry * 1000 < Date.now() ? 0 : j.tier); }
+  }, [credential]);
+  useEffect(() => { refreshTier(); }, [refreshTier]);
   useEffect(() => { setCredential(userId ? loadCredential(userId) : null); }, [userId]);
 
   const bind = useCallback(async (id: string, publicKey: `0x${string}`) => {
@@ -59,7 +72,7 @@ function Inner({ children }: { children: React.ReactNode }) {
 
   const forget = useCallback(() => { clearCredential(); setCredential(null); }, []);
 
-  const value = useMemo(() => ({ config, credential, userId, busy, createAccount, useExistingPasskey, forget }), [config, credential, userId, busy, createAccount, useExistingPasskey, forget]);
+  const value = useMemo(() => ({ config, credential, userId, me, tier, refreshTier, busy, createAccount, useExistingPasskey, forget }), [config, credential, userId, me, tier, refreshTier, busy, createAccount, useExistingPasskey, forget]);
   return <AccountCtx.Provider value={value}>{children}</AccountCtx.Provider>;
 }
 

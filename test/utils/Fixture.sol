@@ -84,6 +84,9 @@ abstract contract Fixture is Test {
         registry.approveVerifier(carbonVerifier);
         kyc.addRecoverableToken(address(credit));
         vm.stopPrank();
+        bytes32 docRole = cert.DOCUMENT_ROLE();
+        vm.prank(operator); // DOCUMENT_ROLE 的 admin 是 OPERATOR
+        cert.grantRole(docRole, operator);
 
         // ── 市場層 ──
         twd = new MockTWD(operator);

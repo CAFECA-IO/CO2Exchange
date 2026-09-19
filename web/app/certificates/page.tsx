@@ -34,7 +34,7 @@ export default function CertificatesPage() {
                 <dt className="text-zinc-500">註銷時間</dt><dd>{new Date(c.retiredAt * 1000).toLocaleString("zh-TW")}</dd>
                 <dt className="text-zinc-500">執行者</dt><dd className="font-mono text-xs break-all">{c.retiredBy}</dd>
                 <dt className="text-zinc-500">交易</dt><dd className="font-mono text-xs break-all">{c.txHash}</dd>
-                <dt className="text-zinc-500">正式文件</dt><dd className="font-mono text-xs break-all">{/^0x0+$/.test(c.documentHash) ? "待營運方回寫 PDF hash" : c.documentHash}</dd>
+                <dt className="text-zinc-500">正式文件</dt><dd className="font-mono text-xs break-all">{/^0x0+$/.test(c.documentHash) ? "待營運方回寫 PDF hash" : <><a className="underline" href={`/api/certificates/${c.certId}/pdf`} target="_blank">下載 PDF</a> · {c.documentHash}</>}</dd>
               </dl>
             </Card>
           ))}

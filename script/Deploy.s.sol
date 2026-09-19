@@ -53,6 +53,7 @@ contract Deploy is Script {
         address treasury;
         address identityVerifier;
         address carbonVerifier;
+        address documentSigner; // 憑證 PDF hash 回寫服務
         uint16 vintage;
         // 治理
         address nationalSafe; // 既有 Safe 地址；為 0 則以 nationalOwners/threshold 建立
@@ -110,6 +111,7 @@ contract Deploy is Script {
         cfg.treasury = vm.envOr("TREASURY", cfg.deployer);
         cfg.identityVerifier = vm.envOr("IDENTITY_VERIFIER", cfg.deployer);
         cfg.carbonVerifier = vm.envOr("CARBON_VERIFIER", cfg.deployer);
+        cfg.documentSigner = vm.envOr("DOCUMENT_SIGNER", cfg.deployer);
         cfg.vintage = uint16(vm.envOr("VINTAGE_YEAR", uint256(2025)));
 
         // Phase 0 預設：國家 Safe = Anvil 帳戶 5,6,7（2-of-3）；營運 Safe = 帳戶 8,9（1-of-2）；Timelock 48h
@@ -232,6 +234,7 @@ contract Deploy is Script {
         vm.startBroadcast(cfg.pk);
         credit.setRegistry(address(registry));
         cert.grantRole(cert.MINTER_ROLE(), address(credit));
+        cert.grantRole(cert.DOCUMENT_ROLE(), cfg.documentSigner);
         cct.grantRole(cct.POOL_ROLE(), address(pool));
         kyc.grantRole(kyc.IDENTITY_VERIFIER_ROLE(), cfg.identityVerifier);
         registry.approveVerifier(cfg.carbonVerifier);

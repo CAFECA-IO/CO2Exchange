@@ -85,7 +85,17 @@ account1 = 減量企業，account2 = 做市商，account3 = 自然人。流程�
 
 ## 前端（web/，Next.js 16 + React 19）
 
-登入（Apple / Google / 開發用）→ passkey 建立鏈上帳戶 → 政府憑證身分驗證（Phase 0 模擬）→ 購買（企業掛單或 v4 池）→ 註銷 → 憑證。
+四種角色、七個頁面：
+
+| 角色 | 頁面 | 內容 |
+|---|---|---|
+| 自然人 / 法人 | `/`、`/kyc`、`/trade`、`/certificates` | 登入 → passkey 建帳戶 → 身分驗證申請 → 購買（掛單 / v4 池）→ 註銷 → 憑證（含 PDF 下載） |
+| 法人 | `/enterprise` | 登錄專案、上傳 ISO 14064-3 查驗報告申請核發、批次掛單 / 入池、取消掛單 |
+| 查驗機構（`VERIFIER_EMAILS`） | `/verifier` | 待查驗佇列：檢視報告與雜湊 → 簽署 IssuanceAttestation 核發，或退回 |
+| 管理員（`ADMIN_EMAILS`） | `/admin` | KYC 審核佇列（核准 = 簽 attestation 上鏈）、憑證 PDF 產生與 `documentHash` 回寫、治理狀態（角色矩陣、Safe、Timelock 排程） |
+
+`KYC_AUTO_APPROVE=1` 時申請直接核准（demo）；`0` 時進管理後台佇列。憑證 PDF 用 `fonts/NotoSansTC-Subset.otf`（Big5 常用字子集），
+檔案 SHA-256 由 `DOCUMENT_SIGNER_PK`（`DOCUMENT_ROLE`）回寫鏈上，任何人可重算比對。
 
 ```bash
 # 終端 1
@@ -103,9 +113,11 @@ Phase 1 換成 ERC-4337 EntryPoint + paymaster，帳戶簽章格式與 nonce 語
 
 Apple / Google 登入：在 `.env.local` 設 `AUTH_GOOGLE_ID/SECRET`、`AUTH_APPLE_ID/SECRET` 後自動出現；登入只建立 session，不是身分根。
 
-端到端測試（Chromium 虛擬 passkey，需 `npx playwright install chromium`）：`npm run e2e`（需 anvil + DemoFlow + `npm run dev` 或 `AUTH_DEV_LOGIN=1 npm start`）。
+端到端測試（Chromium 虛擬 passkey，需 `npx playwright install chromium`）：`npm run e2e` 跑兩條流程 ——
+`e2e/flow.mjs`（自然人：KYC 人工核准 → 購買 → 註銷 → 管理員產生 PDF 並回寫 → 下載）與
+`e2e/enterprise.mjs`（法人 KYC → 專案登錄 → 上傳報告 → 查驗核發 → 掛單 + 入池 → 另一自然人購買並註銷）。需 anvil + DemoFlow + `KYC_AUTO_APPROVE=0` 的伺服器。
 
-## 測試（67）
+## 測試（68）
 
 | 檔案 | 涵蓋 |
 |---|---|
@@ -115,6 +127,7 @@ Apple / Google 登入：在 `.env.local` 設 `AUTH_GOOGLE_ID/SECRET`、`AUTH_APP
 | `Pool.t.sol` | 存入鑄幣、年份不符、自然人不可存、FIFO 跨批次贖回、指定贖回費與 1:1 backing、redeemAndRetire |
 | `V4.t.sol` | 建池限 OPERATOR 與合法配對、LP 限法人、自然人買入、未驗證與非信任 Router 被擋、自然人不可賣出、每日限額、買入後註銷 |
 | `Governance.t.sol` | 主權角色移轉、單方面撤銷營運角色、只有 admin 可升級、登錄層無升級路徑、registry 只能設一次 |
+| `Registry.t.sol`（新增） | `DOCUMENT_ROLE`：只有文件服務金鑰能回寫 PDF hash，營運可更換該金鑰 |
 | `SafeGovernance.t.sol` | 真實 Safe v1.4.1 多簽簽章：移轉後 EOA 無角色；國家 Safe 2-of-3 即時凍結 / 暫停 / 撤換營運，單簽被拒；營運 Safe 不能凍結或給角色；升級與主權變更必須經 Timelock 48h，未到期執行失敗；只有國家 Safe 能提案 |
 | `PasskeyAccount.t.sol` | 以 `vm.signP256` 組出完整 WebAuthn 斷言：relayer 代送購買與註銷、重放、竄改、錯誤金鑰、內部 revert、ERC-1271、factory 決定性 |
 
@@ -127,6 +140,7 @@ Phase 1 主市場為 `Listing`，不依賴 v4。
 ## 尚未包含（Phase 0 後續）
 
 - ERC-4337 EntryPoint + paymaster（目前為 relayer 代送）
+- 查驗機構自行簽章（目前簽章金鑰在本站 `CARBON_VERIFIER_PK`）
 - Safe + TimelockController 治理接線（Phase 0 以 EOA 代替）
 - 身分驗證服務：工商憑證 / 自然人憑證 / TW FidO 驗證後端（目前以簽章金鑰模擬）
 - Besu + QBFT 四節點測試網（需啟用 Cancun / EIP-1153）
