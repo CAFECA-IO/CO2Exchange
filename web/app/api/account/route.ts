@@ -7,9 +7,11 @@ import { handle } from "@/lib/server/roles";
 
 /// GET ?credentialId= → 既有帳戶
 export async function GET(req: Request) {
-  const id = new URL(req.url).searchParams.get("credentialId") ?? "";
-  const row = getAccount(id);
-  return row ? Response.json(row) : Response.json({ error: "unknown credential" }, { status: 404 });
+  try {
+    const id = new URL(req.url).searchParams.get("credentialId") ?? "";
+    const row = getAccount(id);
+    return row ? Response.json(row) : Response.json({ error: "unknown credential" }, { status: 404 });
+  } catch (e) { return handle(e); }
 }
 
 /// POST { credentialId, publicKey } → 以 passkey 公鑰決定地址；未部署則由 relayer 代為部署（平台付 gas）

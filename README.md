@@ -178,6 +178,27 @@ Apple / Google 登入：在 `.env.local` 設 `AUTH_GOOGLE_ID/SECRET`、`AUTH_APP
 `e2e/flow.mjs`（自然人：KYC 人工核准 → 購買 → 註銷 → 管理員產生 PDF 並回寫 → 下載）與
 `e2e/enterprise.mjs`（法人 KYC → 專案登錄 → 上傳報告 → 查驗核發 → 掛單 + 入池 → 另一自然人購買並註銷）。需 anvil + DemoFlowV4 + `KYC_AUTO_APPROVE=0` 的伺服器。
 
+### 重新部署之後（`web/data/` 的舊紀錄）
+
+`web/data/` 裡的 KYC 申請、核發申請、passkey 對照都是用**帳戶地址**當鍵的，而地址是合約部署的產物。
+鏈重開、換鏈、或 factory 重新部署之後，那些鍵在新鏈上對不到任何東西——資料讀得出來、畫面也畫得出來，錯得無聲無息。
+
+所以資料夾裡壓了一張 `.deployment.json` 戳記，記下這批資料屬於哪個部署（chainId + 七個決定身分的合約地址的雜湊；
+`poolFee` 這種不影響舊紀錄的參數不計入）。對不上時：
+
+- **申請與憑證紀錄**（`kyc-requests`、`issuance-requests`）直接擋下，API 回 `503 DATA_STALE`，訊息說明怎麼處理。
+  這些是證據，不該悄悄拿舊的來用。
+- **`accounts.json`**（credentialId → 帳戶地址）不擋。那個地址是 CREATE2 從 factory + passkey 公鑰算出來的，**可以重算**，
+  舊對照當作不存在，前端重新註冊一次就拿到新地址（`AccountProvider` 的自動重綁）。硬擋反而會讓自動重綁失效。
+
+確認舊資料不用了：
+
+```bash
+cd web && npm run data:reset   # 搬到 data.bak-<時間戳>，不是刪除
+```
+
+備份裡有上傳的身分文件，確認不需要再自行刪除。想把兩個部署的資料分開留著，設 `DATA_DIR` 指到不同資料夾即可。
+
 ## 測試（80）
 
 | 檔案 | 涵蓋 |

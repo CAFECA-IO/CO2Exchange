@@ -1,5 +1,6 @@
 import "server-only";
 import { auth } from "@/auth";
+import { isStaleData } from "./fingerprint";
 
 /// Phase 0：管理員與查驗機構以 email 允許清單判定（ADMIN_EMAILS / VERIFIER_EMAILS，逗號分隔）。
 /// 正式環境：管理員走機關 SSO；查驗機構用自己的系統簽發 attestation，不經本站。
@@ -73,6 +74,9 @@ export function handle(e: unknown): Response {
       },
       { status: 503 },
     );
+  }
+  if (isStaleData(e)) {
+    return Response.json({ error: e.message, code: "DATA_STALE" }, { status: 503 });
   }
   const msg = e instanceof Error ? e.message : String(e);
   return Response.json({ error: msg }, { status: 400 });

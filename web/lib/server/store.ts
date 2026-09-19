@@ -2,17 +2,21 @@ import "server-only";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { DATA_DIR as DIR, assertDataFresh } from "./fingerprint";
 
 /// Phase 0 資料層：每個集合一個 JSON 檔（web/data/<name>.json）。正式環境換營運資料庫，介面不變。
-const DIR = process.env.DATA_DIR ?? path.resolve(process.cwd(), "data");
+/// 每次進出都先確認資料夾與目前部署是同一批（見 fingerprint.ts）：
+/// 這些紀錄用帳戶地址當鍵，換了部署就全部對不上。
 
 export type WithId = { id: string; createdAt: string; updatedAt: string };
 
 function file(name: string) { return path.join(DIR, `${name}.json`); }
 function load<T extends WithId>(name: string): T[] {
+  assertDataFresh();
   try { return JSON.parse(fs.readFileSync(file(name), "utf8")); } catch { return []; }
 }
 function save<T extends WithId>(name: string, rows: T[]) {
+  assertDataFresh();
   fs.mkdirSync(DIR, { recursive: true });
   fs.writeFileSync(file(name), JSON.stringify(rows, null, 2));
 }
