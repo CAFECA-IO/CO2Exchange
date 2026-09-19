@@ -3,12 +3,6 @@ pragma solidity 0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {PoolManager} from "v4-core/src/PoolManager.sol";
-import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
-import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
-import {Hooks} from "v4-core/src/libraries/Hooks.sol";
-import {PoolKey} from "v4-core/src/types/PoolKey.sol";
-import {Currency} from "v4-core/src/types/Currency.sol";
 
 import {IKYCRegistry} from "../../src/interfaces/IKYCRegistry.sol";
 import {KYCRegistry} from "../../src/identity/KYCRegistry.sol";
@@ -18,8 +12,6 @@ import {CarbonRegistry} from "../../src/registry/CarbonRegistry.sol";
 import {Listing} from "../../src/market/Listing.sol";
 import {CarbonCreditToken} from "../../src/market/CarbonCreditToken.sol";
 import {CarbonPool} from "../../src/market/CarbonPool.sol";
-import {CarbonKYCHook} from "../../src/v4/CarbonKYCHook.sol";
-import {TrustedRouter} from "../../src/v4/TrustedRouter.sol";
 import {MockTWD} from "../../src/mocks/MockTWD.sol";
 
 /// @notice 共用測試環境：部署全套合約並建立幾個角色。
@@ -49,10 +41,6 @@ abstract contract Fixture is Test {
     Listing internal listing;
     CarbonCreditToken internal cct;
     CarbonPool internal pool;
-    PoolManager internal poolManager;
-    CarbonKYCHook internal hook;
-    TrustedRouter internal router;
-    PoolKey internal poolKey;
 
     uint16 internal constant VINTAGE = 2025;
     uint64 internal constant MON_START = 1735689600; // 2025-01-01
@@ -131,31 +119,7 @@ abstract contract Fixture is Test {
         kyc.setSystemContract(address(pool), true);
         vm.stopPrank();
 
-        // ── Uniswap v4（非生產展示）──
-        poolManager = new PoolManager(sovereign);
-        uint160 flags = uint160(
-            Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
-                | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
-        );
-        address hookAddr = address(flags ^ (0x4444 << 144));
-        deployCodeTo(
-            "CarbonKYCHook.sol:CarbonKYCHook", abi.encode(poolManager, kyc, sovereign, sovereign, operator), hookAddr
-        );
-        hook = CarbonKYCHook(hookAddr);
-        router = new TrustedRouter(poolManager);
-        vm.startPrank(operator);
-        hook.setTrustedRouter(address(router));
-        hook.classifyToken(address(cct), true, false);
-        hook.classifyToken(address(twd), false, true);
-        vm.stopPrank();
-        vm.startPrank(sovereign);
-        kyc.setSystemContract(address(poolManager), true);
-        vm.stopPrank();
-
-        (Currency c0, Currency c1) = address(cct) < address(twd)
-            ? (Currency.wrap(address(cct)), Currency.wrap(address(twd)))
-            : (Currency.wrap(address(twd)), Currency.wrap(address(cct)));
-        poolKey = PoolKey({currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: IHooks(hookAddr)});
+        _setUpV4();
 
         // ── 參與者 KYC ──
         _registerIdentity(companyA, IKYCRegistry.Tier.Corporate, keccak256("TW-12345678"));
@@ -167,6 +131,10 @@ abstract contract Fixture is Test {
         twd.mint(companyB, 100_000_000e6);
         vm.stopPrank();
     }
+
+    /// @dev v4 掛載點。核心 Fixture 不含 v4，這樣沒有 EIP-1153 的鏈也能編譯與測試；
+    ///      需要 v4 的測試改繼承 V4Fixture。
+    function _setUpV4() internal virtual {}
 
     // ───────────────────────── helpers ─────────────────────────
 

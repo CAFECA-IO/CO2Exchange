@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import {Fixture} from "./utils/Fixture.sol";
+import {V4Fixture} from "./utils/V4Fixture.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
@@ -14,7 +14,7 @@ import {CarbonKYCHook} from "../src/v4/CarbonKYCHook.sol";
 import {IKYCRegistry} from "../src/interfaces/IKYCRegistry.sol";
 import {RetirementCertificate} from "../src/registry/RetirementCertificate.sol";
 
-contract V4Test is Fixture {
+contract V4Test is V4Fixture {
     uint256 internal batch;
     bool internal twdIsCurrency0;
 

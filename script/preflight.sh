@@ -16,6 +16,10 @@
 
 set -uo pipefail
 
+# 注意：變數展開後面接中文字時一定要用 ${VAR} 大括號。
+# macOS 內建的 bash 3.2 會把後面的多位元組字元當成識別字的一部分，
+# 於是 "$CHAIN_ID）" 會被解析成變數 "CHAIN_ID）"，在 set -u 下直接 unbound variable。
+
 RPC="${1:-${RPC_URL:-http://127.0.0.1:8545}}"
 DEPLOYER_PK="${DEPLOYER_PK:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}"
 
@@ -47,7 +51,7 @@ CLIENT=$(cast rpc web3_clientVersion --rpc-url "$RPC" 2>/dev/null | tr -d '"')
 [ -n "$CLIENT" ] && ok "節點版本：$CLIENT"
 BLOCK=$(cast block-number --rpc-url "$RPC" 2>/dev/null)
 ok "目前高度：${BLOCK:-unknown}"
-echo "  部署檔會寫到 deployments/${CHAIN_ID}.json（前端需設 CHAIN_ID=$CHAIN_ID）"
+echo "  部署檔會寫到 deployments/${CHAIN_ID}.json（前端需設 CHAIN_ID=${CHAIN_ID}）"
 echo
 
 # --- 2. EIP-1153 TSTORE --------------------------------------------------
@@ -75,7 +79,7 @@ echo "[4/5] EIP-1559（動態手續費）"
 BASEFEE=$(cast block latest --json --rpc-url "$RPC" 2>/dev/null | grep -o '"baseFeePerGas":"[^"]*"' | head -1 | cut -d'"' -f4)
 LEGACY_FLAG=""
 if [ -n "$BASEFEE" ] && [ "$BASEFEE" != "null" ]; then
-  ok "支援（baseFeePerGas = $BASEFEE）"
+  ok "支援（baseFeePerGas = ${BASEFEE}）"
 else
   LEGACY_FLAG=" --legacy"
   warn "區塊沒有 baseFeePerGas —— forge script 要加 --legacy"
@@ -97,7 +101,7 @@ if [ "${BAL:-0}" = "0" ]; then
   echo "    私有鏈上 Anvil 的預設金鑰沒有錢。請設一把這條鏈上有餘額的金鑰："
   echo "    export DEPLOYER_PK=0x<你的私鑰>"
 else
-  ok "餘額 $BAL_ETH（整套部署約需數千萬 gas，含 Safe 基礎設施）"
+  ok "餘額 ${BAL_ETH}（整套部署約需數千萬 gas，含 Safe 基礎設施）"
 fi
 echo
 echo "  注意：前端的 RELAYER_PK / CARBON_VERIFIER_PK / DOCUMENT_SIGNER_PK 也要在這條鏈上有餘額，"

@@ -3,13 +3,6 @@ pragma solidity 0.8.26;
 
 import {Script, console2} from "forge-std/Script.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {PoolManager} from "v4-core/src/PoolManager.sol";
-import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
-import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
-import {Hooks} from "v4-core/src/libraries/Hooks.sol";
-import {PoolKey} from "v4-core/src/types/PoolKey.sol";
-import {Currency} from "v4-core/src/types/Currency.sol";
 
 import {KYCRegistry} from "../src/identity/KYCRegistry.sol";
 import {RetirementCertificate} from "../src/registry/RetirementCertificate.sol";
@@ -18,11 +11,8 @@ import {CarbonRegistry} from "../src/registry/CarbonRegistry.sol";
 import {Listing} from "../src/market/Listing.sol";
 import {CarbonCreditToken} from "../src/market/CarbonCreditToken.sol";
 import {CarbonPool} from "../src/market/CarbonPool.sol";
-import {CarbonKYCHook} from "../src/v4/CarbonKYCHook.sol";
-import {TrustedRouter} from "../src/v4/TrustedRouter.sol";
 import {MockTWD} from "../src/mocks/MockTWD.sol";
 import {PasskeyAccountFactory} from "../src/account/PasskeyAccountFactory.sol";
-import {HookMiner} from "./utils/HookMiner.sol";
 import {GovernanceLib} from "../src/governance/GovernanceLib.sol";
 import {Safe} from "safe-smart-account/Safe.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
@@ -43,8 +33,6 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 ///   anvil &
 ///   forge script script/Deploy.s.sol --rpc-url anvil --broadcast
 contract Deploy is Script {
-    address constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
-
     struct Config {
         uint256 pk;
         address deployer;
@@ -63,8 +51,6 @@ contract Deploy is Script {
         address[] operatorOwners;
         uint256 operatorThreshold;
         uint256 timelockDelay;
-        // v4 展示模組需要 EIP-1153；目標鏈不支援時設 SKIP_V4=1（./script/preflight.sh 會告訴你）
-        bool skipV4;
     }
 
     Config internal cfg;
@@ -78,9 +64,11 @@ contract Deploy is Script {
     Listing public listing;
     CarbonCreditToken public cct;
     CarbonPool public pool;
-    PoolManager public poolManager;
-    CarbonKYCHook public hook;
-    TrustedRouter public router;
+    // v4 模組的三個地址。核心部署不含 v4，維持 address(0)；
+    // DeployV4 會填進來。用 address 而不是具體型別，核心編譯單元才不必 import v4。
+    address public poolManager;
+    address public hook;
+    address public router;
     PasskeyAccountFactory public accountFactory;
     Safe public nationalSafe;
     Safe public operatorSafe;
@@ -132,7 +120,6 @@ contract Deploy is Script {
         cfg.operatorOwners = vm.envOr("OPERATOR_OWNERS", ",", op);
         cfg.operatorThreshold = vm.envOr("OPERATOR_THRESHOLD", uint256(1));
         cfg.timelockDelay = vm.envOr("TIMELOCK_DELAY", uint256(48 hours));
-        cfg.skipV4 = vm.envOr("SKIP_V4", false);
     }
 
     /// @dev 治理基礎設施：Safe v1.4.1 + 兩個多簽 + 國家單位 Timelock。
@@ -221,27 +208,9 @@ contract Deploy is Script {
         vm.stopBroadcast();
     }
 
-    /// @dev v4 展示模組。需要 EIP-1153（TSTORE），舊鏈用 SKIP_V4=1 跳過；主市場 Listing 不受影響。
-    function _deployV4() internal {
-        if (cfg.skipV4) {
-            console2.log("SKIP_V4=1 -> v4 module skipped (PoolManager / CarbonKYCHook / TrustedRouter)");
-            return;
-        }
-        vm.startBroadcast(cfg.pk);
-        // 非生產展示：PoolManager.sol 為 BUSL-1.1
-        poolManager = new PoolManager(address(timelock)); // 協議費控制權在國家單位 Timelock
-        uint160 flags = uint160(
-            Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
-                | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
-        );
-        bytes memory hookArgs = abi.encode(poolManager, kyc, cfg.sovereign, cfg.sovereign, cfg.operator);
-        (address hookAddr, bytes32 salt) =
-            HookMiner.find(CREATE2_DEPLOYER, flags, type(CarbonKYCHook).creationCode, hookArgs);
-        hook = new CarbonKYCHook{salt: salt}(poolManager, kyc, cfg.sovereign, cfg.sovereign, cfg.operator);
-        require(address(hook) == hookAddr, "hook address mismatch");
-        router = new TrustedRouter(poolManager);
-        vm.stopBroadcast();
-    }
+    /// @dev v4 展示模組的掛載點。核心部署不含 v4（這樣才能在沒有 EIP-1153 的鏈上編譯與執行）；
+    ///      DeployV4 會覆寫這個函式。見 script/DeployV4.s.sol。
+    function _deployV4() internal virtual {}
 
     /// @dev Phase 0 預設 deployer == sovereign == operator。正式環境這些由 Safe 交易執行。
     function _wireAsSovereign() internal {
@@ -257,27 +226,15 @@ contract Deploy is Script {
         kyc.addRecoverableToken(address(cct));
         kyc.setSystemContract(address(listing), true);
         kyc.setSystemContract(address(pool), true);
-        if (!cfg.skipV4) kyc.setSystemContract(address(poolManager), true);
+        if (poolManager != address(0)) kyc.setSystemContract(poolManager, true);
         vm.stopBroadcast();
     }
 
-    function _wireAsOperator() internal {
-        if (cfg.skipV4) return; // 目前 OPERATOR 的佈線只有 hook
-        require(cfg.deployer == cfg.operator, "Phase 0 script expects deployer == operator");
-        vm.startBroadcast(cfg.pk);
-        hook.setTrustedRouter(address(router));
-        hook.classifyToken(address(cct), true, false);
-        hook.classifyToken(address(twd), false, true);
-        vm.stopBroadcast();
-    }
+    /// @dev 目前 OPERATOR 的佈線只有 v4 hook，核心部署沒有東西要做。
+    function _wireAsOperator() internal virtual {}
 
-    /// @dev 建池：800 mTWD / 噸
-    function _initPool() internal {
-        if (cfg.skipV4) return;
-        vm.startBroadcast(cfg.pk);
-        poolManager.initialize(poolKey(), sqrtPrice(800e6));
-        vm.stopBroadcast();
-    }
+    /// @dev 建池由 DeployV4 覆寫（需要 v4 型別）。
+    function _initPool() internal virtual {}
 
     /// @dev 移轉：DEFAULT_ADMIN（升級、角色結構）→ Timelock；SOVEREIGN（緊急權）→ 國家 Safe；OPERATOR → 營運 Safe；
     ///      部署者 renounce 全部治理角色。保留的服務角色：身分驗證服務簽章、查驗機構簽章、MockTWD 鑄幣（demo faucet）。
@@ -286,7 +243,7 @@ contract Deploy is Script {
         bytes32 SOV = keccak256("SOVEREIGN_ROLE");
         bytes32 OP = keccak256("OPERATOR_ROLE");
         address[7] memory withOperator =
-            [address(kyc), address(cert), address(listing), address(pool), address(hook), address(0), address(0)];
+            [address(kyc), address(cert), address(listing), address(pool), hook, address(0), address(0)];
         address[2] memory sovereignOnly = [address(credit), address(registry)];
 
         vm.startBroadcast(cfg.pk);
@@ -316,20 +273,6 @@ contract Deploy is Script {
         vm.stopBroadcast();
     }
 
-    function poolKey() public view returns (PoolKey memory) {
-        address c = address(cct);
-        address t = address(twd);
-        (Currency c0, Currency c1) = c < t ? (Currency.wrap(c), Currency.wrap(t)) : (Currency.wrap(t), Currency.wrap(c));
-        return PoolKey({currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: IHooks(address(hook))});
-    }
-
-    /// @dev pricePerTonne 以結算幣最小單位計（6 decimals）；CCT 18 decimals。sqrtPriceX96 = sqrt(amount1/amount0)·2^96
-    function sqrtPrice(uint256 pricePerTonne) public view returns (uint160) {
-        bool twdIs0 = address(twd) < address(cct);
-        (uint256 num, uint256 den) = twdIs0 ? (uint256(1e18), pricePerTonne) : (pricePerTonne, uint256(1e18));
-        return uint160(Math.sqrt(Math.mulDiv(num, 1 << 192, den)));
-    }
-
     function _print() internal view {
         console2.log("KYCRegistry          ", address(kyc));
         console2.log("RetirementCertificate", address(cert));
@@ -339,9 +282,9 @@ contract Deploy is Script {
         console2.log("Listing              ", address(listing));
         console2.log("CarbonCreditToken    ", address(cct));
         console2.log("CarbonPool           ", address(pool));
-        console2.log("PoolManager          ", address(poolManager));
-        console2.log("CarbonKYCHook        ", address(hook));
-        console2.log("TrustedRouter        ", address(router));
+        console2.log("PoolManager          ", poolManager);
+        console2.log("CarbonKYCHook        ", hook);
+        console2.log("TrustedRouter        ", router);
         console2.log("PasskeyAccountFactory", address(accountFactory));
         console2.log("NationalSafe         ", address(nationalSafe));
         console2.log("OperatorSafe         ", address(operatorSafe));
@@ -360,9 +303,9 @@ contract Deploy is Script {
         vm.serializeAddress(j, "listing", address(listing));
         vm.serializeAddress(j, "cct", address(cct));
         vm.serializeAddress(j, "carbonPool", address(pool));
-        vm.serializeAddress(j, "poolManager", address(poolManager));
-        vm.serializeAddress(j, "hook", address(hook));
-        vm.serializeAddress(j, "router", address(router));
+        vm.serializeAddress(j, "poolManager", poolManager);
+        vm.serializeAddress(j, "hook", hook);
+        vm.serializeAddress(j, "router", router);
         vm.serializeUint(j, "poolFee", 3000);
         vm.serializeUint(j, "tickSpacing", 60);
         vm.serializeAddress(j, "accountFactory", address(accountFactory));

@@ -10,7 +10,6 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 import {GovernanceLib} from "../src/governance/GovernanceLib.sol";
 import {KYCRegistry} from "../src/identity/KYCRegistry.sol";
 import {IKYCRegistry} from "../src/interfaces/IKYCRegistry.sol";
-import {PoolManager} from "v4-core/src/PoolManager.sol";
 
 contract KYCRegistryV2 is KYCRegistry {
     function version() external pure returns (string memory) {
@@ -49,7 +48,7 @@ contract SafeGovernanceTest is Fixture {
         timelock = GovernanceLib.deployTimelock(48 hours, address(nationalSafe));
 
         // 移轉（與 Deploy.s.sol 的 _handover 相同）
-        address[5] memory withOp = [address(kyc), address(cert), address(listing), address(pool), address(hook)];
+        address[4] memory withOp = [address(kyc), address(cert), address(listing), address(pool)];
         address[2] memory sovOnly = [address(credit), address(registry)];
         vm.startPrank(sovereign);
         for (uint256 i = 0; i < withOp.length; i++) {
@@ -68,7 +67,6 @@ contract SafeGovernanceTest is Fixture {
         }
         cct.grantRole(ADMIN, address(timelock));
         cct.renounceRole(ADMIN, sovereign);
-        poolManager.transferOwnership(address(timelock));
         vm.stopPrank();
         // 營運：原 operator EOA → 營運 Safe（由國家 Safe 執行，SOVEREIGN 是 OPERATOR 的 admin）
         for (uint256 i = 0; i < withOp.length; i++) {
@@ -86,7 +84,6 @@ contract SafeGovernanceTest is Fixture {
         assertTrue(kyc.hasRole(ADMIN, address(timelock)));
         assertTrue(kyc.hasRole(SOV, address(nationalSafe)));
         assertTrue(kyc.hasRole(OP, address(operatorSafe)));
-        assertEq(poolManager.owner(), address(timelock));
         assertEq(nationalSafe.getThreshold(), 2);
     }
 

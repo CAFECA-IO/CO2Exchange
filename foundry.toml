@@ -17,6 +17,29 @@ fs_permissions = [{ access = "read", path = "./out" }, { access = "read-write", 
 via_ir = true
 optimizer_runs = 44444444
 
+# 目標鏈比 Cancun 舊（缺 EIP-1153 TSTORE / EIP-5656 MCOPY）時使用，例如 iSunCoin（geth 1.12.x）。
+# v4 的編譯期相依已經拆乾淨（Deploy / DemoFlow / Fixture 都不 import v4），所以這裡只要 skip 掉
+# 對 v4 有相依的那幾個檔案。
+#
+# ⚠️ 尚未可用 —— solc 0.8.26 在 evm_version=shanghai 下有兩條死路，還沒解：
+#   1. via_ir = false → src/market 與 src/registry 出現 "Stack too deep"（沒有 MCOPY，
+#      記憶體搬移改用比較吃堆疊的碼）。
+#   2. via_ir = true  → 換成 Safe v1.4.1 的 execTransaction 編不過
+#      （Safe 的 inline assembly 沒有標記 memory-safe，是 Safe 已知的 via_ir 問題）。
+# 可行的解法（擇一，尚未實作）：
+#   A. 縮減 src/market、src/registry 裡最大函式的區域變數，讓 via_ir=false 能過。
+#   B. via_ir=true，並且不要編譯 Safe —— 改用 Safe v1.4.1 的官方 creation bytecode 部署。
+#      這條路另有好處：部署出來的 Safe 與已稽核的 canonical 版本位元組完全一致。
+[profile.shanghai]
+evm_version = "shanghai"
+skip = [
+  "src/v4/**",
+  "script/DeployV4.s.sol",
+  "script/DemoFlowV4.s.sol",
+  "test/V4.t.sol",
+  "test/utils/V4Fixture.sol",
+]
+
 [profile.default.fuzz]
 runs = 256
 

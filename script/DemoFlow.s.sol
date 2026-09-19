@@ -2,9 +2,6 @@
 pragma solidity 0.8.26;
 
 import {console2} from "forge-std/Script.sol";
-import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
-import {TickMath} from "v4-core/src/libraries/TickMath.sol";
-import {Currency} from "v4-core/src/types/Currency.sol";
 import {Deploy} from "./Deploy.s.sol";
 import {KYCRegistry} from "../src/identity/KYCRegistry.sol";
 import {IKYCRegistry} from "../src/interfaces/IKYCRegistry.sol";
@@ -23,6 +20,14 @@ contract DemoFlow is Deploy {
     uint256 constant PK_A = 0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d;
     uint256 constant PK_B = 0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a;
     uint256 constant PK_ALICE = 0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6;
+
+    /// @dev v4 掛載點。核心 demo 不含 v4；DemoFlowV4 覆寫這兩個。
+    ///      回傳 false 代表「這次沒有 v4 流動性」，呼叫端改走替代路徑。
+    function _demoProvideLiquidity() internal virtual returns (bool) {
+        return false;
+    }
+
+    function _demoSwap() internal virtual {}
 
     function demo() external {
         deployAll();
@@ -58,23 +63,10 @@ contract DemoFlow is Deploy {
         cct.transfer(companyB, 40e18);
         vm.stopBroadcast();
 
-        // 5. companyB 提供 v4 流動性（SKIP_V4 時改為直接把 CCT 轉給 alice，讓贖回 / 註銷流程仍有資料）
+        // 5. companyB：有 v4 就提供流動性；沒有就直接把 CCT 轉給 alice，讓贖回 / 註銷流程仍有資料
         vm.startBroadcast(PK_B);
-        if (cfg.skipV4) {
+        if (!_demoProvideLiquidity()) {
             cct.transfer(alice, 5e18); // 5 噸
-        } else {
-            cct.approve(address(router), type(uint256).max);
-            twd.approve(address(router), type(uint256).max);
-            router.modifyLiquidity(
-                poolKey(),
-                IPoolManager.ModifyLiquidityParams({
-                    tickLower: TickMath.minUsableTick(60),
-                    tickUpper: TickMath.maxUsableTick(60),
-                    liquidityDelta: 1e15,
-                    salt: 0
-                }),
-                block.timestamp + 300
-            );
         }
         vm.stopBroadcast();
 
@@ -82,20 +74,7 @@ contract DemoFlow is Deploy {
         vm.startBroadcast(PK_ALICE);
         twd.approve(address(listing), type(uint256).max);
         listing.buy(1, 2_000);
-        if (!cfg.skipV4) {
-            twd.approve(address(router), type(uint256).max);
-            bool zeroForOne = Currency.unwrap(poolKey().currency0) == address(twd);
-            router.swap(
-                poolKey(),
-                IPoolManager.SwapParams({
-                    zeroForOne: zeroForOne,
-                    amountSpecified: -int256(4_000e6),
-                    sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
-                }),
-                0,
-                block.timestamp + 300
-            );
-        }
+        _demoSwap();
         uint256 kg = cct.balanceOf(alice) / 1e15;
         pool.redeemAndRetire(
             kg,
