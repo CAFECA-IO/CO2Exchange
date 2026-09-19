@@ -8,7 +8,8 @@ type KycReq = { id: string; account: string; tier: number; idNumberMasked: strin
 type Cert = { certId: number; batchId: number; amountKg: number; beneficiary: string; purpose: number; retiredAt: number; owner: string; pdfHash: string | null; onchainHash: string | null; anchored: boolean };
 type Gov = {
   matrix: { name: string; address: string; admin: boolean; sovereign: boolean | null; operator: boolean | null }[];
-  poolManagerOwner: string; poolManagerOwnerIsTimelock: boolean; listingPaused: boolean; poolPaused: boolean; trustedRouter: string; swapsEnabled: boolean;
+  hasV4: boolean;
+  poolManagerOwner: string | null; poolManagerOwnerIsTimelock: boolean; listingPaused: boolean; poolPaused: boolean; trustedRouter: string | null; swapsEnabled: boolean;
   nationalSafe: { address: string; owners: string[]; threshold: number }; operatorSafe: { address: string; owners: string[]; threshold: number };
   timelock: { address: string; delay: number; proposer: boolean; executor: boolean; canceller: boolean; operations: { id: string; target: string; data: string; state: string; readyAt: number; txHash: string }[] };
 };
@@ -114,7 +115,12 @@ export default function AdminPage() {
                 <tr key={m.name} className="border-t border-zinc-200 dark:border-zinc-800"><td className="py-1">{m.name} <span className="font-mono text-xs text-zinc-400">{m.address.slice(0, 8)}…</span></td><td><Bool v={m.admin} /></td><td><Bool v={m.sovereign} /></td><td><Bool v={m.operator} /></td></tr>
               ))}</tbody>
             </table>
-            <p className="mt-2 text-xs">PoolManager owner = Timelock <Bool v={gov.poolManagerOwnerIsTimelock} /> · Listing 暫停 {gov.listingPaused ? "是" : "否"} · Pool 暫停 {gov.poolPaused ? "是" : "否"} · v4 swap {gov.swapsEnabled ? "開啟" : "關閉"}</p>
+            <p className="mt-2 text-xs">
+              Listing 暫停 {gov.listingPaused ? "是" : "否"} · Pool 暫停 {gov.poolPaused ? "是" : "否"}
+              {gov.hasV4
+                ? <> · PoolManager owner = Timelock <Bool v={gov.poolManagerOwnerIsTimelock} /> · v4 swap {gov.swapsEnabled ? "開啟" : "關閉"}</>
+                : <> · v4 模組未部署（此鏈不支援 EIP-1153，以 SKIP_V4 部署）</>}
+            </p>
           </Card>
           <Card title={`國家單位 Safe（${gov.nationalSafe.threshold}-of-${gov.nationalSafe.owners.length}）`}>
             <div className="font-mono text-xs break-all">{gov.nationalSafe.address}</div>

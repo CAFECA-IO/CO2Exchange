@@ -3,6 +3,7 @@ import { accountFactoryAbi } from "@/lib/abis";
 import { deployment, publicClient, relayerClient } from "@/lib/server/chain";
 import { getAccount, putAccount } from "@/lib/server/accounts";
 import { auth } from "@/auth";
+import { handle } from "@/lib/server/roles";
 
 /// GET ?credentialId= → 既有帳戶
 export async function GET(req: Request) {
@@ -19,6 +20,7 @@ export async function POST(req: Request) {
   if (!credentialId || !isHex(publicKey) || publicKey.length !== 130) {
     return Response.json({ error: "publicKey must be 64-byte hex (x||y)" }, { status: 400 });
   }
+  try {
   const qx = `0x${publicKey.slice(2, 66)}` as Hex;
   const qy = `0x${publicKey.slice(66, 130)}` as Hex;
   const d = deployment();
@@ -32,4 +34,5 @@ export async function POST(req: Request) {
   }
   putAccount(credentialId, { publicKey: publicKey as Hex, address });
   return Response.json({ address, deployed: !!txHash, txHash });
+  } catch (e) { return handle(e); }
 }

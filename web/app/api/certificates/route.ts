@@ -1,10 +1,12 @@
 import { parseAbiItem, type Address } from "viem";
 import { certificateAbi } from "@/lib/abis";
 import { deployment, isAddress, publicClient } from "@/lib/server/chain";
+import { handle } from "@/lib/server/roles";
 
 export async function GET(req: Request) {
   const account = new URL(req.url).searchParams.get("account");
   if (!isAddress(account)) return Response.json({ error: "account" }, { status: 400 });
+  try {
   const d = deployment();
   const logs = await publicClient.getLogs({
     address: d.retirementCertificate,
@@ -21,4 +23,5 @@ export async function GET(req: Request) {
     };
   }));
   return Response.json({ certificates: certs.sort((a, b) => b.certId - a.certId) });
+  } catch (e) { return handle(e); }
 }

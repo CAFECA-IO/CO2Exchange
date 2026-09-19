@@ -11,7 +11,7 @@ import { signAndRelay, type Call } from "@/lib/client/passkey";
 type Order = { orderId: number; batchId: number; remainingKg: number; pricePerTonne: string; minFillKg: number; project: { name: string; methodology: string; location: string }; vintageYear: number };
 type Market = {
   orders: Order[]; spotPricePerTonne: number | null; listingFeeBps: number;
-  poolKey: { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address };
+  poolKey: { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address } | null; // SKIP_V4 部署時為 null
   holdings: { twd: string; cct: string; batches: { batchId: number; kg: number; vintageYear: number; project: string }[] } | null;
 };
 
@@ -69,11 +69,12 @@ export default function TradePage() {
 
   function buyPool() {
     const amountIn = BigInt(Math.round(Number(twdIn) * 1e6));
-    const zeroForOne = m!.poolKey.currency0.toLowerCase() === d.settlementToken.toLowerCase();
+    if (!m?.poolKey) return; // 這條鏈沒部署 v4 模組
+    const zeroForOne = m.poolKey.currency0.toLowerCase() === d.settlementToken.toLowerCase();
     relay(`流動性池購買（${twdIn} mTWD）`, [
       { target: d.settlementToken, value: 0n, data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [d.router, amountIn] }) },
       { target: d.router, value: 0n, data: encodeFunctionData({ abi: routerAbi, functionName: "swap", args: [
-        m!.poolKey, { zeroForOne, amountSpecified: -amountIn, sqrtPriceLimitX96: zeroForOne ? MIN_SQRT + 1n : MAX_SQRT - 1n },
+        m.poolKey, { zeroForOne, amountSpecified: -amountIn, sqrtPriceLimitX96: zeroForOne ? MIN_SQRT + 1n : MAX_SQRT - 1n },
         0n, BigInt(Math.floor(Date.now() / 1000) + 600) ] }) },
     ]);
   }
@@ -116,15 +117,17 @@ export default function TradePage() {
           <div className="mt-3"><Button variant="secondary" onClick={faucet} disabled={!!busy}>領取測試用 mTWD</Button></div>
         </Card>
 
-        <Card title="流動性池（Uniswap v4，展示）" className="md:col-span-2">
-          <p className="mb-2 text-sm text-zinc-600 dark:text-zinc-400">
-            現貨參考價 {m?.spotPricePerTonne ? `${m.spotPricePerTonne.toLocaleString("zh-TW", { maximumFractionDigits: 0 })} mTWD / 噸` : "—"}（不含 0.3% 手續費與滑價）
-          </p>
-          <div className="flex flex-wrap items-end gap-2">
-            <Field label="支付 mTWD"><input className={inputCls} type="number" min="1" value={twdIn} onChange={(e) => setTwdIn(e.target.value)} /></Field>
-            <Button onClick={buyPool} disabled={!!busy || !m}>{busy?.startsWith("流動性池") ? "簽章中…" : "以 passkey 簽章購買"}</Button>
-          </div>
-        </Card>
+        {(!m || m.poolKey) && (
+          <Card title="流動性池（Uniswap v4，展示）" className="md:col-span-2">
+            <p className="mb-2 text-sm text-zinc-600 dark:text-zinc-400">
+              現貨參考價 {m?.spotPricePerTonne ? `${m.spotPricePerTonne.toLocaleString("zh-TW", { maximumFractionDigits: 0 })} mTWD / 噸` : "—"}（不含 0.3% 手續費與滑價）
+            </p>
+            <div className="flex flex-wrap items-end gap-2">
+              <Field label="支付 mTWD"><input className={inputCls} type="number" min="1" value={twdIn} onChange={(e) => setTwdIn(e.target.value)} /></Field>
+              <Button onClick={buyPool} disabled={!!busy || !m}>{busy?.startsWith("流動性池") ? "簽章中…" : "以 passkey 簽章購買"}</Button>
+            </div>
+          </Card>
+        )}
       </div>
 
       <Card title="企業掛單">

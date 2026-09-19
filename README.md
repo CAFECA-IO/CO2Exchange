@@ -83,6 +83,39 @@ forge script script/DemoFlow.s.sol --rpc-url anvil --broadcast --sig "demo()" # 
 account1 = 減量企業，account2 = 做市商，account3 = 自然人。流程：憑證 attestation 註冊 → 專案登錄 →
 查驗簽章核發 100 噸 → 30 噸掛單、60 噸入池、做市商提供 v4 流動性 → 自然人從掛單與 v4 各買一次 → 兩邊註銷取得憑證。
 
+## 部署到既有的私有鏈
+
+不是 Anvil、而是已經在跑的鏈（自建 Besu / geth 系私有鏈等），先跑部署前檢查：
+
+```bash
+./script/preflight.sh http://127.0.0.1:20024
+```
+
+它會檢查五件事並直接印出該用哪道部署指令：
+
+| 檢查 | 為什麼重要 |
+|---|---|
+| chainId | 決定部署檔寫到 `deployments/<chainId>.json`，前端 `CHAIN_ID` 要對上 |
+| **EIP-1153（TSTORE）** | Uniswap v4 `PoolManager` 的硬需求。缺了就要 `SKIP_V4=1` |
+| **EIP-5656（MCOPY）** | `evm_version = cancun` 編出來的碼會用到。缺了要把 `foundry.toml` 降到 shanghai 重編 |
+| EIP-1559 | 沒有 `baseFeePerGas` 的鏈，`forge script` 要加 `--legacy` |
+| 部署者餘額 | 私有鏈上 Anvil 預設金鑰是 0 餘額，要設 `DEPLOYER_PK` |
+
+```bash
+export RPC_URL=http://127.0.0.1:20024
+export DEPLOYER_PK=0x<這條鏈上有餘額的私鑰>
+forge script script/Deploy.s.sol --rpc-url chain --broadcast            # 鏈支援 Cancun
+SKIP_V4=1 forge script script/Deploy.s.sol --rpc-url chain --broadcast  # 鏈沒有 EIP-1153
+```
+
+`SKIP_V4=1` 只跳過 v4 展示模組（`PoolManager` / `CarbonKYCHook` / `TrustedRouter`）。登錄層、身分層、
+`Listing` 主市場、池化與 CCT、註銷憑證、Safe + Timelock 治理、passkey 帳戶工廠全部照常部署 ——
+v4 本來就標註為非生產展示，Phase 1 主市場是 `Listing`。部署檔中 v4 的三個地址會是 0，
+前端據此自動隱藏 v4 相關 UI（`/trade` 的流動性池卡片、`/admin` 的 PoolManager 狀態）。
+
+前端接上去：`web/.env.local` 設 `RPC_URL` / `CHAIN_ID`，並確認 `RELAYER_PK`、`DOCUMENT_SIGNER_PK`
+在那條鏈上**有餘額** —— Phase 0 由平台代付 gas，沒錢的話建帳戶與註銷都會失敗。
+
 ## 前端（web/，Next.js 16 + React 19）
 
 四種角色、七個頁面：

@@ -2,20 +2,24 @@ import "server-only";
 import { encodeAbiParameters, keccak256, encodePacked, type Address } from "viem";
 import { creditAbi, erc20Abi, listingAbi, poolAbi, poolManagerAbi, registryAbi } from "@/lib/abis";
 import { deployment, publicClient } from "./chain";
+import { hasV4 } from "@/lib/deployment";
 
 export type Order = {
   orderId: number; seller: Address; batchId: number; remainingKg: number; pricePerTonne: string; minFillKg: number;
   project: { name: string; methodology: string; location: string }; vintageYear: number;
 };
 
+/// SKIP_V4 部署時回 null —— 呼叫端據此隱藏 v4 相關 UI。
 export function poolKey() {
   const d = deployment();
+  if (!hasV4(d)) return null;
   const [c0, c1] = d.cct.toLowerCase() < d.settlementToken.toLowerCase() ? [d.cct, d.settlementToken] : [d.settlementToken, d.cct];
   return { currency0: c0, currency1: c1, fee: d.poolFee, tickSpacing: d.tickSpacing, hooks: d.hook } as const;
 }
 
 export function poolId() {
   const k = poolKey();
+  if (!k) return null;
   return keccak256(encodeAbiParameters(
     [{ type: "address" }, { type: "address" }, { type: "uint24" }, { type: "int24" }, { type: "address" }],
     [k.currency0, k.currency1, k.fee, k.tickSpacing, k.hooks],
@@ -25,13 +29,15 @@ export function poolId() {
 /// v4 現貨價：sqrtPriceX96 → mTWD / 噸（6 decimals），不含手續費與滑價
 export async function poolSpotPricePerTonne(): Promise<number | null> {
   const d = deployment();
-  const slot = keccak256(encodePacked(["bytes32", "bytes32"], [poolId(), `0x${(6).toString(16).padStart(64, "0")}`]));
+  const pid = poolId();
+  if (!pid) return null; // SKIP_V4 部署：沒有 v4 池，也就沒有現貨價
+  const slot = keccak256(encodePacked(["bytes32", "bytes32"], [pid, `0x${(6).toString(16).padStart(64, "0")}`]));
   const raw = await publicClient.readContract({ address: d.poolManager, abi: poolManagerAbi, functionName: "extsload", args: [slot] });
   const sqrtP = BigInt(raw) & ((1n << 160n) - 1n);
   if (sqrtP === 0n) return null;
   // price1/0 = (sqrtP / 2^96)^2 ；用 1e18 精度做整數運算
   const priceX = (sqrtP * sqrtP * 10n ** 18n) >> 192n; // amount1 per amount0 * 1e18
-  const twdIs0 = poolKey().currency0.toLowerCase() === d.settlementToken.toLowerCase();
+  const twdIs0 = poolKey()!.currency0.toLowerCase() === d.settlementToken.toLowerCase();
   // 1 噸 = 1e18 CCT raw；TWD raw(6 dec) / 噸：
   //   CCT 是 currency0 → price = TWD/CCT → perTonne = priceX
   //   TWD 是 currency0 → price = CCT/TWD → perTonne = 1e36 / priceX

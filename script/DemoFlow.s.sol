@@ -58,38 +58,44 @@ contract DemoFlow is Deploy {
         cct.transfer(companyB, 40e18);
         vm.stopBroadcast();
 
-        // 5. companyB 提供 v4 流動性
+        // 5. companyB 提供 v4 流動性（SKIP_V4 時改為直接把 CCT 轉給 alice，讓贖回 / 註銷流程仍有資料）
         vm.startBroadcast(PK_B);
-        cct.approve(address(router), type(uint256).max);
-        twd.approve(address(router), type(uint256).max);
-        router.modifyLiquidity(
-            poolKey(),
-            IPoolManager.ModifyLiquidityParams({
-                tickLower: TickMath.minUsableTick(60),
-                tickUpper: TickMath.maxUsableTick(60),
-                liquidityDelta: 1e15,
-                salt: 0
-            }),
-            block.timestamp + 300
-        );
+        if (cfg.skipV4) {
+            cct.transfer(alice, 5e18); // 5 噸
+        } else {
+            cct.approve(address(router), type(uint256).max);
+            twd.approve(address(router), type(uint256).max);
+            router.modifyLiquidity(
+                poolKey(),
+                IPoolManager.ModifyLiquidityParams({
+                    tickLower: TickMath.minUsableTick(60),
+                    tickUpper: TickMath.maxUsableTick(60),
+                    liquidityDelta: 1e15,
+                    salt: 0
+                }),
+                block.timestamp + 300
+            );
+        }
         vm.stopBroadcast();
 
         // 6. alice：掛單買 2 噸；v4 買 4000 元；兩邊都註銷
         vm.startBroadcast(PK_ALICE);
         twd.approve(address(listing), type(uint256).max);
-        twd.approve(address(router), type(uint256).max);
         listing.buy(1, 2_000);
-        bool zeroForOne = Currency.unwrap(poolKey().currency0) == address(twd);
-        router.swap(
-            poolKey(),
-            IPoolManager.SwapParams({
-                zeroForOne: zeroForOne,
-                amountSpecified: -int256(4_000e6),
-                sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
-            }),
-            0,
-            block.timestamp + 300
-        );
+        if (!cfg.skipV4) {
+            twd.approve(address(router), type(uint256).max);
+            bool zeroForOne = Currency.unwrap(poolKey().currency0) == address(twd);
+            router.swap(
+                poolKey(),
+                IPoolManager.SwapParams({
+                    zeroForOne: zeroForOne,
+                    amountSpecified: -int256(4_000e6),
+                    sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+                }),
+                0,
+                block.timestamp + 300
+            );
+        }
         uint256 kg = cct.balanceOf(alice) / 1e15;
         pool.redeemAndRetire(
             kg,

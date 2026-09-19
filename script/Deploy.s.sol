@@ -63,6 +63,8 @@ contract Deploy is Script {
         address[] operatorOwners;
         uint256 operatorThreshold;
         uint256 timelockDelay;
+        // v4 展示模組需要 EIP-1153；目標鏈不支援時設 SKIP_V4=1（./script/preflight.sh 會告訴你）
+        bool skipV4;
     }
 
     Config internal cfg;
@@ -94,6 +96,7 @@ contract Deploy is Script {
         _loadConfig();
         _deployGovernance();
         _deployCore();
+        _deployAccountFactory();
         _deployV4();
         _wireAsSovereign();
         _wireAsOperator();
@@ -129,6 +132,7 @@ contract Deploy is Script {
         cfg.operatorOwners = vm.envOr("OPERATOR_OWNERS", ",", op);
         cfg.operatorThreshold = vm.envOr("OPERATOR_THRESHOLD", uint256(1));
         cfg.timelockDelay = vm.envOr("TIMELOCK_DELAY", uint256(48 hours));
+        cfg.skipV4 = vm.envOr("SKIP_V4", false);
     }
 
     /// @dev 治理基礎設施：Safe v1.4.1 + 兩個多簽 + 國家單位 Timelock。
@@ -210,7 +214,19 @@ contract Deploy is Script {
         vm.stopBroadcast();
     }
 
+    /// @dev 帳戶層，與 v4 無關，SKIP_V4 時仍要部署。
+    function _deployAccountFactory() internal {
+        vm.startBroadcast(cfg.pk);
+        accountFactory = new PasskeyAccountFactory();
+        vm.stopBroadcast();
+    }
+
+    /// @dev v4 展示模組。需要 EIP-1153（TSTORE），舊鏈用 SKIP_V4=1 跳過；主市場 Listing 不受影響。
     function _deployV4() internal {
+        if (cfg.skipV4) {
+            console2.log("SKIP_V4=1 -> v4 module skipped (PoolManager / CarbonKYCHook / TrustedRouter)");
+            return;
+        }
         vm.startBroadcast(cfg.pk);
         // 非生產展示：PoolManager.sol 為 BUSL-1.1
         poolManager = new PoolManager(address(timelock)); // 協議費控制權在國家單位 Timelock
@@ -224,7 +240,6 @@ contract Deploy is Script {
         hook = new CarbonKYCHook{salt: salt}(poolManager, kyc, cfg.sovereign, cfg.sovereign, cfg.operator);
         require(address(hook) == hookAddr, "hook address mismatch");
         router = new TrustedRouter(poolManager);
-        accountFactory = new PasskeyAccountFactory();
         vm.stopBroadcast();
     }
 
@@ -242,11 +257,12 @@ contract Deploy is Script {
         kyc.addRecoverableToken(address(cct));
         kyc.setSystemContract(address(listing), true);
         kyc.setSystemContract(address(pool), true);
-        kyc.setSystemContract(address(poolManager), true);
+        if (!cfg.skipV4) kyc.setSystemContract(address(poolManager), true);
         vm.stopBroadcast();
     }
 
     function _wireAsOperator() internal {
+        if (cfg.skipV4) return; // 目前 OPERATOR 的佈線只有 hook
         require(cfg.deployer == cfg.operator, "Phase 0 script expects deployer == operator");
         vm.startBroadcast(cfg.pk);
         hook.setTrustedRouter(address(router));
@@ -257,6 +273,7 @@ contract Deploy is Script {
 
     /// @dev 建池：800 mTWD / 噸
     function _initPool() internal {
+        if (cfg.skipV4) return;
         vm.startBroadcast(cfg.pk);
         poolManager.initialize(poolKey(), sqrtPrice(800e6));
         vm.stopBroadcast();

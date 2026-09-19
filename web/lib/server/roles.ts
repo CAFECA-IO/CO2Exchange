@@ -29,8 +29,27 @@ export async function requireRole(role: "admin" | "verifier" | "user"): Promise<
 export class HttpError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
+
+/// 節點連不上（RPC 沒開、port 不對、鏈掛了）與合約層錯誤要分開：
+/// 前者是環境問題，回 503 並給出可操作的訊息，不要把 viem 的 stack trace 丟到畫面上。
+export function isChainUnreachable(e: unknown): boolean {
+  for (let cur: unknown = e, i = 0; cur && i < 8; i++) {
+    const m = cur instanceof Error ? cur.message : "";
+    if (/fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|other side closed|HTTP request failed/i.test(m)) return true;
+    cur = (cur as { cause?: unknown } | null)?.cause;
+  }
+  return false;
+}
+
 export function handle(e: unknown): Response {
   if (e instanceof HttpError) return Response.json({ error: e.message }, { status: e.status });
+  if (isChainUnreachable(e)) {
+    const rpc = process.env.RPC_URL ?? "http://127.0.0.1:8545";
+    return Response.json(
+      { error: `無法連線到區塊鏈節點（${rpc}）。請確認節點已啟動，且 web/.env.local 的 RPC_URL / CHAIN_ID 指向正確的鏈。`, code: "CHAIN_UNREACHABLE" },
+      { status: 503 },
+    );
+  }
   const msg = e instanceof Error ? e.message : String(e);
   return Response.json({ error: msg }, { status: 400 });
 }

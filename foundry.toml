@@ -22,3 +22,5 @@ runs = 256
 
 [rpc_endpoints]
 anvil = "http://127.0.0.1:8545"
+# 既有私有鏈：export RPC_URL=http://127.0.0.1:20024 後用 --rpc-url chain
+chain = "${RPC_URL}"
