@@ -183,8 +183,12 @@ Apple / Google 登入：在 `.env.local` 設 `AUTH_GOOGLE_ID/SECRET`、`AUTH_APP
 `web/data/` 裡的 KYC 申請、核發申請、passkey 對照都是用**帳戶地址**當鍵的，而地址是合約部署的產物。
 鏈重開、換鏈、或 factory 重新部署之後，那些鍵在新鏈上對不到任何東西——資料讀得出來、畫面也畫得出來，錯得無聲無息。
 
-所以資料夾裡壓了一張 `.deployment.json` 戳記，記下這批資料屬於哪個部署（chainId + 七個決定身分的合約地址的雜湊；
-`poolFee` 這種不影響舊紀錄的參數不計入）。對不上時：
+所以資料夾裡壓了一張 `.deployment.json` 戳記，記下這批資料屬於哪一**次**部署：chainId、七個決定身分的合約地址的雜湊，
+再加上部署檔裡的 `deployedAt`（`vm.unixTime()`，主機時鐘毫秒）。`poolFee` 這種不影響舊紀錄的參數不計入。
+
+`deployedAt` 不是多餘的——**Anvil 重開後重新部署會產生一模一樣的地址**（同一個部署者、同樣的 nonce 順序，實測七個全同）。
+只比對地址的話，鏈重開這件事完全看不出來，但鏈上狀態已經歸零：本機寫著「已核准」的 KYC 紀錄，
+對應帳戶在新鏈上 `identityOf` 回 tier 0。加上 `deployedAt` 之後這種情況才擋得到。對不上時：
 
 - **申請與憑證紀錄**（`kyc-requests`、`issuance-requests`）直接擋下，API 回 `503 DATA_STALE`，訊息說明怎麼處理。
   這些是證據，不該悄悄拿舊的來用。
@@ -219,13 +223,16 @@ cd web && npm run data:reset   # 搬到 data.bak-<時間戳>，不是刪除
 
 正式第三方稽核前的內部檢查，供未來稽核方與國家單位承接時參考：
 
-- **靜態分析**：Slither 全跑過（Aderyn 需連外抓 solc binary，本開發環境網路受限未能執行，留給有網路的環境）。
+- **靜態分析**：Slither 與 Aderyn 0.6.8 都跑過。
   6 項具體修正（`TrustedRouter` 重入/callback 完整性防護、多處零地址檢查、`CarbonPool` 單次贖回批次數上限、
   event 補 indexed、區域變數顯式初始化、`KYCRegistry` 防止系統合約 tier 被覆寫），修正後 34 項殘留發現逐項附理由。
-  詳見 [`reports/static-analysis.md`](reports/static-analysis.md)（原始 Slither 輸出於 [`reports/slither.md`](reports/slither.md)）。
+  Aderyn 4 High + 12 Low 逐項判讀後只改一項（`nonReentrant` 排到第一個 modifier，6 處），其餘是誤報或既有設計。
+  詳見 [`reports/static-analysis.md`](reports/static-analysis.md)（原始輸出於 [`reports/slither.md`](reports/slither.md)、
+  [`reports/aderyn.md`](reports/aderyn.md)）。
 - **Fuzz / Invariant 測試**：見上方測試表 `Fuzz.t.sol`、`Invariant.t.sol`。
 - **Gas 報告**：`forge test --gas-report` 全量輸出、按生命週期分組的關鍵操作耗用、部署成本，以及
-  `via_ir`/production profile 待補測的說明，見 [`reports/gas-report.md`](reports/gas-report.md)；
+  production profile（`via_ir`）的實測比較——執行期呼叫便宜 3–8%，但 bytecode 全面變大、部署變貴，合計 +3.3%，
+  見 [`reports/gas-report.md`](reports/gas-report.md)；
   `.gas-snapshot`（`forge snapshot`）已提交，CI 或發版前可用 `forge snapshot --check` 偵測非預期的 gas 迴歸
   （執行時排除 fuzz/invariant：`--no-match-contract "FuzzTest|PoolInvariantTest"`）。
 - **尚未涵蓋**：正式第三方合約稽核、形式驗證（如 Certora）、經濟/賽局面攻擊面分析、跨合約 MEV/夾單分析、
