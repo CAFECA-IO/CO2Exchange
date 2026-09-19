@@ -154,7 +154,8 @@ forge script script/Deploy.s.sol   --rpc-url chain --broadcast  # 鏈沒有 EIP-
 | 查驗機構（`VERIFIER_EMAILS`） | `/verifier` | 待查驗佇列：檢視報告與雜湊 → 簽署 IssuanceAttestation 核發，或退回 |
 | 管理員（`ADMIN_EMAILS`） | `/admin` | KYC 審核佇列（核准 = 簽 attestation 上鏈）、憑證 PDF 產生與 `documentHash` 回寫、治理狀態（角色矩陣、Safe、Timelock 排程） |
 
-`KYC_AUTO_APPROVE=1` 時申請直接核准（demo）；`0` 時進管理後台佇列。憑證 PDF 用 `fonts/NotoSansTC-Subset.otf`（Big5 常用字子集），
+`KYC_AUTO_APPROVE=1` 時申請直接核准（demo）；`0` 時進管理後台佇列——**這時 `ADMIN_EMAILS` 必須包含你自己登入用的 email**，
+否則申請會卡在沒有人能核准的佇列裡（要走查驗核發那條線同理，`VERIFIER_EMAILS` 也要加）。憑證 PDF 用 `fonts/NotoSansTC-Subset.otf`（Big5 常用字子集），
 檔案 SHA-256 由 `DOCUMENT_SIGNER_PK`（`DOCUMENT_ROLE`）回寫鏈上，任何人可重算比對。
 
 ```bash
