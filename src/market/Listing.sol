@@ -73,6 +73,7 @@ contract Listing is
     error ExceedsRemaining();
     error FeeTooHigh();
     error ZeroAmount();
+    error ZeroAddress();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -102,6 +103,7 @@ contract Listing is
         credit = credit_;
         settlementToken = settlementToken_;
         if (feeBps_ > MAX_FEE_BPS) revert FeeTooHigh();
+        if (treasury_ == address(0)) revert ZeroAddress();
         treasury = treasury_;
         feeBps = feeBps_;
         nextOrderId = 1;
@@ -111,6 +113,7 @@ contract Listing is
 
     function setFee(uint256 feeBps_, address treasury_) external onlyRole(OPERATOR_ROLE) {
         if (feeBps_ > MAX_FEE_BPS) revert FeeTooHigh();
+        if (treasury_ == address(0)) revert ZeroAddress();
         feeBps = feeBps_;
         treasury = treasury_;
         emit FeeUpdated(feeBps_, treasury_);

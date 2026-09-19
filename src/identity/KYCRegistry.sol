@@ -91,6 +91,7 @@ contract KYCRegistry is Initializable, UUPSUpgradeable, AccessControlUpgradeable
         address signer = ECDSA.recover(_hashAttestation(a), signature);
         if (!hasRole(IDENTITY_VERIFIER_ROLE, signer)) revert InvalidAttestation();
 
+        if (_identities[a.account].tier == Tier.SystemContract) revert InvalidTier();
         nonces[a.account]++;
         Identity storage id = _identities[a.account];
         // 凍結狀態不因重新驗證而解除

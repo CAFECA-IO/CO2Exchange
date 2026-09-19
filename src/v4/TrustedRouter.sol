@@ -19,6 +19,8 @@ contract TrustedRouter is IUnlockCallback {
     using SafeERC20 for IERC20;
 
     IPoolManager public immutable poolManager;
+    /// @dev 目前正在 unlock 的使用者；unlockCallback 只接受與其一致的 user，防止任何形式的資料偽造
+    address private _currentUser;
 
     enum Action {
         Swap,
@@ -35,6 +37,8 @@ contract TrustedRouter is IUnlockCallback {
 
     error NotPoolManager();
     error Expired();
+    error UnexpectedUser();
+    error Reentrancy();
     error TooLittleReceived(uint256 received, uint256 minimum);
 
     constructor(IPoolManager poolManager_) {
@@ -47,10 +51,13 @@ contract TrustedRouter is IUnlockCallback {
         returns (BalanceDelta delta)
     {
         if (block.timestamp > deadline) revert Expired();
+        if (_currentUser != address(0)) revert Reentrancy();
+        _currentUser = msg.sender;
         IPoolManager.ModifyLiquidityParams memory empty;
         delta = abi.decode(
             poolManager.unlock(abi.encode(CallbackData(Action.Swap, msg.sender, key, params, empty))), (BalanceDelta)
         );
+        _currentUser = address(0);
         if (params.amountSpecified < 0) {
             int128 out = params.zeroForOne ? delta.amount1() : delta.amount0();
             uint256 received = out > 0 ? uint256(uint128(out)) : 0;
@@ -63,16 +70,20 @@ contract TrustedRouter is IUnlockCallback {
         returns (BalanceDelta delta)
     {
         if (block.timestamp > deadline) revert Expired();
+        if (_currentUser != address(0)) revert Reentrancy();
+        _currentUser = msg.sender;
         IPoolManager.SwapParams memory empty;
         delta = abi.decode(
             poolManager.unlock(abi.encode(CallbackData(Action.ModifyLiquidity, msg.sender, key, empty, params))),
             (BalanceDelta)
         );
+        _currentUser = address(0);
     }
 
     function unlockCallback(bytes calldata rawData) external returns (bytes memory) {
         if (msg.sender != address(poolManager)) revert NotPoolManager();
         CallbackData memory d = abi.decode(rawData, (CallbackData));
+        if (d.user != _currentUser) revert UnexpectedUser();
         bytes memory hookData = abi.encode(d.user);
 
         BalanceDelta delta;

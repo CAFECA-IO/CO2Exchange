@@ -1,0 +1,130 @@
+INFO:Detectors:
+Detector: arbitrary-send-erc20
+TrustedRouter._settle(Currency,address) (src/v4/TrustedRouter.sol#101-110) uses arbitrary from in transferFrom: IERC20(Currency.unwrap(currency)).safeTransferFrom(user,address(poolManager),uint256(- delta)) (src/v4/TrustedRouter.sol#105)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#arbitrary-from-in-transferfrom
+INFO:Detectors:
+Detector: arbitrary-send-eth
+PasskeyAccount.execute(PasskeyAccount.Call[],bytes) (src/account/PasskeyAccount.sol#48-58) sends eth to arbitrary user
+	Dangerous calls:
+	- (ok,ret) = calls[i].target.call{value: calls[i].value}(calls[i].data) (src/account/PasskeyAccount.sol#54)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#functions-that-send-ether-to-arbitrary-destinations
+INFO:Detectors:
+Detector: divide-before-multiply
+Listing.buy(uint256,uint256) (src/market/Listing.sol#159-178) performs a multiplication on the result of a division:
+	- cost = amountKg * o.pricePerTonne / KG_PER_TONNE (src/market/Listing.sol#167)
+	- fee = cost * feeBps / 10_000 (src/market/Listing.sol#168)
+CarbonRegistry._yearOf(uint64) (src/registry/CarbonRegistry.sol#185-196) performs a multiplication on the result of a division:
+	- doe = z - era * 146097 (src/registry/CarbonRegistry.sol#188)
+	- era = z - 146096 / 146097 (src/registry/CarbonRegistry.sol#187)
+CarbonRegistry._yearOf(uint64) (src/registry/CarbonRegistry.sol#185-196) performs a multiplication on the result of a division:
+	- y = yoe + era * 400 (src/registry/CarbonRegistry.sol#190)
+	- era = z - 146096 / 146097 (src/registry/CarbonRegistry.sol#187)
+CarbonRegistry._yearOf(uint64) (src/registry/CarbonRegistry.sol#185-196) performs a multiplication on the result of a division:
+	- yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365 (src/registry/CarbonRegistry.sol#189)
+	- doy = doe - (365 * yoe + yoe / 4 - yoe / 100) (src/registry/CarbonRegistry.sol#191)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#divide-before-multiply
+INFO:Detectors:
+Detector: reentrancy-no-eth
+Reentrancy in TrustedRouter.modifyLiquidity(PoolKey,IPoolManager.ModifyLiquidityParams,uint256) (src/v4/TrustedRouter.sol#68-81):
+	External calls:
+	- delta = abi.decode(poolManager.unlock(abi.encode(CallbackData(Action.ModifyLiquidity,msg.sender,key,empty,params))),(BalanceDelta)) (src/v4/TrustedRouter.sol#76-79)
+	State variables written after the call(s):
+	- _currentUser = address(0) (src/v4/TrustedRouter.sol#80)
+	TrustedRouter._currentUser (src/v4/TrustedRouter.sol#23) can be used in cross function reentrancies:
+	- TrustedRouter.modifyLiquidity(PoolKey,IPoolManager.ModifyLiquidityParams,uint256) (src/v4/TrustedRouter.sol#68-81)
+	- TrustedRouter.swap(PoolKey,IPoolManager.SwapParams,uint256,uint256) (src/v4/TrustedRouter.sol#49-66)
+	- TrustedRouter.unlockCallback(bytes) (src/v4/TrustedRouter.sol#83-99)
+Reentrancy in TrustedRouter.swap(PoolKey,IPoolManager.SwapParams,uint256,uint256) (src/v4/TrustedRouter.sol#49-66):
+	External calls:
+	- delta = abi.decode(poolManager.unlock(abi.encode(CallbackData(Action.Swap,msg.sender,key,params,empty))),(BalanceDelta)) (src/v4/TrustedRouter.sol#57-59)
+	State variables written after the call(s):
+	- _currentUser = address(0) (src/v4/TrustedRouter.sol#60)
+	TrustedRouter._currentUser (src/v4/TrustedRouter.sol#23) can be used in cross function reentrancies:
+	- TrustedRouter.modifyLiquidity(PoolKey,IPoolManager.ModifyLiquidityParams,uint256) (src/v4/TrustedRouter.sol#68-81)
+	- TrustedRouter.swap(PoolKey,IPoolManager.SwapParams,uint256,uint256) (src/v4/TrustedRouter.sol#49-66)
+	- TrustedRouter.unlockCallback(bytes) (src/v4/TrustedRouter.sol#83-99)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#reentrancy-vulnerabilities-2
+INFO:Detectors:
+Detector: uninitialized-local
+TrustedRouter.swap(PoolKey,IPoolManager.SwapParams,uint256,uint256).empty (src/v4/TrustedRouter.sol#56) is a local variable never initialized
+TrustedRouter.modifyLiquidity(PoolKey,IPoolManager.ModifyLiquidityParams,uint256).empty (src/v4/TrustedRouter.sol#75) is a local variable never initialized
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#uninitialized-local-variables
+INFO:Detectors:
+Detector: unused-return
+CarbonCredit1155._update(address,address,uint256[],uint256[]) (src/registry/CarbonCredit1155.sol#186-198) ignores return value by _held[from].remove(ids[i_scope_0]) (src/registry/CarbonCredit1155.sol#195)
+CarbonCredit1155._update(address,address,uint256[],uint256[]) (src/registry/CarbonCredit1155.sol#186-198) ignores return value by _held[to].add(ids[i_scope_0]) (src/registry/CarbonCredit1155.sol#196)
+TrustedRouter.unlockCallback(bytes) (src/v4/TrustedRouter.sol#83-99) ignores return value by (delta,None) = poolManager.modifyLiquidity(d.key,d.liquidityParams,hookData) (src/v4/TrustedRouter.sol#93)
+TrustedRouter._settle(Currency,address) (src/v4/TrustedRouter.sol#101-110) ignores return value by poolManager.settle() (src/v4/TrustedRouter.sol#106)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#unused-return
+INFO:Detectors:
+Detector: missing-zero-check
+CarbonKYCHook.setTrustedRouter(address).router (src/v4/CarbonKYCHook.sol#90) lacks a zero-check on :
+		- trustedRouter = router (src/v4/CarbonKYCHook.sol#91)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#missing-zero-address-validation
+INFO:Detectors:
+Detector: calls-loop
+PasskeyAccount.execute(PasskeyAccount.Call[],bytes) (src/account/PasskeyAccount.sol#48-58) has external calls inside a loop: (ok,ret) = calls[i].target.call{value: calls[i].value}(calls[i].data) (src/account/PasskeyAccount.sol#54)
+KYCRegistry.recover(address,KYCRegistry.IdentityAttestation,bytes) (src/identity/KYCRegistry.sol#138-162) has external calls inside a loop: IRecoverable(recoverableTokens[i]).recoverBalances(oldAccount,a.account) (src/identity/KYCRegistry.sol#159)
+CarbonPool.redeem(uint256) (src/market/CarbonPool.sol#139-153) has external calls inside a loop: credit.safeTransferFrom(address(this),msg.sender,ids[i],amounts[i],) (src/market/CarbonPool.sol#150)
+CarbonPool.redeemAndRetire(uint256,bytes32,string,RetirementCertificate.Purpose,string) (src/market/CarbonPool.sol#171-198) has external calls inside a loop: certIds[i] = credit.retire(CarbonCredit1155.RetireRequest({holder:address(this),batchId:ids[i],amountKg:amounts[i],certificateTo:msg.sender,beneficiaryHash:beneficiaryHash,beneficiary:beneficiary,purpose:purpose,memo:memo})) (src/market/CarbonPool.sol#184-195)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation/#calls-inside-a-loop
+INFO:Detectors:
+Detector: reentrancy-events
+Reentrancy in PasskeyAccount.execute(PasskeyAccount.Call[],bytes) (src/account/PasskeyAccount.sol#48-58):
+	External calls:
+	- (ok,ret) = calls[i].target.call{value: calls[i].value}(calls[i].data) (src/account/PasskeyAccount.sol#54)
+	Event emitted after the call(s):
+	- Executed(n,calls.length) (src/account/PasskeyAccount.sol#57)
+Reentrancy in CarbonRegistry.issue(CarbonRegistry.IssuanceAttestation,bytes) (src/registry/CarbonRegistry.sol#128-160):
+	External calls:
+	- batchId = credit.issue(p.owner,CarbonCredit1155.Batch({projectId:a.projectId,monitoringStart:a.monitoringStart,monitoringEnd:a.monitoringEnd,vintageYear:_yearOf(a.monitoringEnd),serialHash:a.serialHash,reportHash:a.reportHash,verifier:verifier,issuedAt:0,issuedKg:a.amountKg,retiredKg:0,frozen:false})) (src/registry/CarbonRegistry.sol#143-158)
+	Event emitted after the call(s):
+	- CreditsIssued(a.projectId,batchId,verifier,a.amountKg,a.serialHash,a.reportHash) (src/registry/CarbonRegistry.sol#159)
+Reentrancy in KYCRegistry.recover(address,KYCRegistry.IdentityAttestation,bytes) (src/identity/KYCRegistry.sol#138-162):
+	External calls:
+	- IRecoverable(recoverableTokens[i]).recoverBalances(oldAccount,a.account) (src/identity/KYCRegistry.sol#159)
+	Event emitted after the call(s):
+	- Recovered(oldAccount,a.account,a.identityHash) (src/identity/KYCRegistry.sol#161)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#reentrancy-vulnerabilities-4
+INFO:Detectors:
+Detector: timestamp
+KYCRegistry.register(KYCRegistry.IdentityAttestation,bytes) (src/identity/KYCRegistry.sol#86-103) uses timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp > a.deadline (src/identity/KYCRegistry.sol#88)
+KYCRegistry.recover(address,KYCRegistry.IdentityAttestation,bytes) (src/identity/KYCRegistry.sol#138-162) uses timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp > a.deadline (src/identity/KYCRegistry.sol#145)
+KYCRegistry.isActive(address) (src/identity/KYCRegistry.sol#178-183) uses timestamp for comparisons
+	Dangerous comparisons:
+	- id.expiry > block.timestamp (src/identity/KYCRegistry.sol#182)
+KYCRegistry._active(IKYCRegistry.Identity) (src/identity/KYCRegistry.sol#223-227) uses timestamp for comparisons
+	Dangerous comparisons:
+	- id.expiry > block.timestamp (src/identity/KYCRegistry.sol#226)
+CarbonRegistry.issue(CarbonRegistry.IssuanceAttestation,bytes) (src/registry/CarbonRegistry.sol#128-160) uses timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp > a.deadline (src/registry/CarbonRegistry.sol#132)
+TrustedRouter.swap(PoolKey,IPoolManager.SwapParams,uint256,uint256) (src/v4/TrustedRouter.sol#49-66) uses timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp > deadline (src/v4/TrustedRouter.sol#53)
+TrustedRouter.modifyLiquidity(PoolKey,IPoolManager.ModifyLiquidityParams,uint256) (src/v4/TrustedRouter.sol#68-81) uses timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp > deadline (src/v4/TrustedRouter.sol#72)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#block-timestamp
+INFO:Detectors:
+Detector: low-level-calls
+Low level call in PasskeyAccount.execute(PasskeyAccount.Call[],bytes) (src/account/PasskeyAccount.sol#48-58):
+	- (ok,ret) = calls[i].target.call{value: calls[i].value}(calls[i].data) (src/account/PasskeyAccount.sol#54)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#low-level-calls
+INFO:Detectors:
+Detector: too-many-digits
+PasskeyAccountFactory.getAddress(bytes32,bytes32) (src/account/PasskeyAccountFactory.sol#18-22) uses literals with too many digits:
+	- Create2.computeAddress(_salt(qx,qy),keccak256(bytes)(abi.encodePacked(type()(PasskeyAccount).creationCode,abi.encode(qx,qy)))) (src/account/PasskeyAccountFactory.sol#19-21)
+WebAuthn.slitherConstructorConstantVariables() (src/account/WebAuthn.sol#11-63) uses literals with too many digits:
+	- P256_N_DIV_2 = 0x7fffffff800000007fffffffffffffffde737d56d38bcf4279dce5617e3192a8 (src/account/WebAuthn.sol#23)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#too-many-digits
+INFO:Detectors:
+Detector: unindexed-event-address
+Event CarbonPool.FeeUpdated(uint256,address) (src/market/CarbonPool.sol#50) has address parameters but no indexed parameters
+Event Listing.FeeUpdated(uint256,address) (src/market/Listing.sol#66) has address parameters but no indexed parameters
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#unindexed-event-address-parameters
+INFO:Slither:. analyzed (126 contracts with 102 detectors), 34 result(s) found

@@ -56,12 +56,13 @@ contract CarbonCredit1155 is ERC1155, AccessControl, IRecoverable {
         uint256 amountKg,
         uint256 certId
     );
-    event RegistrySet(address registry);
+    event RegistrySet(address indexed registry);
     event BalancesRecovered(address indexed from, address indexed to, uint256 batches);
 
     error OnlyRegistry();
     error OnlyKYC();
     error RegistryAlreadySet();
+    error ZeroAddress();
     error BatchIsFrozen(uint256 batchId);
     error NotAuthorized();
     error UnknownBatch(uint256 batchId);
@@ -83,6 +84,7 @@ contract CarbonCredit1155 is ERC1155, AccessControl, IRecoverable {
 
     function setRegistry(address registry_) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (registry != address(0)) revert RegistryAlreadySet();
+        if (registry_ == address(0)) revert ZeroAddress();
         registry = registry_;
         emit RegistrySet(registry_);
     }

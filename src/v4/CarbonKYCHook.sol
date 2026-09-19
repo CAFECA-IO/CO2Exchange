@@ -42,8 +42,8 @@ contract CarbonKYCHook is IHooks, AccessControl {
     /// @notice user => day => 已成交碳權數量
     mapping(address => mapping(uint256 => uint256)) public dailyVolume;
 
-    event TrustedRouterSet(address router);
-    event TokenClassified(address token, bool carbon, bool settlement);
+    event TrustedRouterSet(address indexed router); // address(0) = 關閉所有 swap / 流動性操作
+    event TokenClassified(address indexed token, bool carbon, bool settlement);
     event DailyLimitSet(IKYCRegistry.Tier tier, uint256 limit);
     event PoolAuthorized(PoolId indexed poolId, address carbonToken, address settlementToken);
 

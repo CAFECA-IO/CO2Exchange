@@ -30,6 +30,8 @@ contract CarbonPool is
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
     uint256 public constant CCT_PER_KG = 1e15; // 1e18 / 1000
     uint256 public constant MAX_FEE_BPS = 2000;
+    /// @dev 一次 FIFO 贖回最多跨越的批次數，避免小額批次過多時 gas 爆掉；超過請分次贖回
+    uint256 public constant MAX_BATCHES_PER_REDEEM = 20;
 
     IKYCRegistry public kyc;
     CarbonCredit1155 public credit;
@@ -55,6 +57,8 @@ contract CarbonPool is
     error InsufficientLiquidity();
     error FeeTooHigh();
     error ZeroAmount();
+    error ZeroAddress();
+    error TooManyBatches(uint256 needed, uint256 max);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -86,12 +90,14 @@ contract CarbonPool is
         cct = cct_;
         vintageYear = vintageYear_;
         if (selectiveRedeemFeeBps_ > MAX_FEE_BPS) revert FeeTooHigh();
+        if (treasury_ == address(0)) revert ZeroAddress();
         selectiveRedeemFeeBps = selectiveRedeemFeeBps_;
         treasury = treasury_;
     }
 
     function setFee(uint256 feeBps_, address treasury_) external onlyRole(OPERATOR_ROLE) {
         if (feeBps_ > MAX_FEE_BPS) revert FeeTooHigh();
+        if (treasury_ == address(0)) revert ZeroAddress();
         selectiveRedeemFeeBps = feeBps_;
         treasury = treasury_;
         emit FeeUpdated(feeBps_, treasury_);
@@ -196,7 +202,7 @@ contract CarbonPool is
     function _takeFifo(uint256 amountKg) internal returns (uint256[] memory ids, uint256[] memory amounts) {
         uint256 remaining = amountKg;
         uint256 head = _queueHead;
-        uint256 count;
+        uint256 count = 0;
         // 先數需要幾個批次
         for (uint256 i = head; i < _queue.length && remaining > 0; i++) {
             uint256 avail = pooledKg[_queue[i]];
@@ -205,11 +211,12 @@ contract CarbonPool is
             remaining = avail >= remaining ? 0 : remaining - avail;
         }
         if (remaining > 0) revert InsufficientLiquidity();
+        if (count > MAX_BATCHES_PER_REDEEM) revert TooManyBatches(count, MAX_BATCHES_PER_REDEEM);
 
         ids = new uint256[](count);
         amounts = new uint256[](count);
         remaining = amountKg;
-        uint256 k;
+        uint256 k = 0;
         for (uint256 i = head; i < _queue.length && remaining > 0; i++) {
             uint256 id = _queue[i];
             uint256 avail = pooledKg[id];
