@@ -27,9 +27,15 @@ mock               MockTWD                6 decimals 結算幣；正式由金融
 
 ## 安裝
 
+第一次（會裝 Foundry、git init、以釘死版本加入依賴、build、test）：
+
 ```bash
-curl -L https://foundry.paradigm.xyz | bash && foundryup   # 需 forge ≥ 1.0，solc 0.8.26 會自動下載
-git submodule update --init --recursive
+bash setup.sh
+```
+
+之後：
+
+```bash
 forge build
 forge test
 ```
