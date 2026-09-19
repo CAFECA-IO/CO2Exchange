@@ -1,1 +1,72 @@
 @import "tailwindcss";
+
+/* ──────────────────────────────────────────────────────────────────────
+   TideBit-DeFi 設計語彙（取自 CAFECA-IO/TideBit-DeFi 的 tailwind.config.js
+   與 src/constants/display.ts）。深色優先的交易終端配色。
+
+   注意 up / down 這組綠紅：在色盲（deuteranopia）下兩者的 ΔE 只有 4.2，
+   遠低於可辨識門檻。所以本專案規定「漲跌永遠不能只靠顏色」——
+   數字一律帶正負號、加上 ▲ / ▼，K 線則用實心（跌）對空心（漲）的傳統畫法，
+   不看顏色也讀得出來。
+   ────────────────────────────────────────────────────────────────────── */
+@theme {
+  /* 表面 */
+  --color-ink-900: #121214; /* 最深：頁面底 */
+  --color-ink-800: #161719; /* 頁面背景 */
+  --color-ink-700: #1e2329; /* 卡片 / 面板 */
+  --color-ink-600: #242a31; /* 抬升 / hover */
+  --color-ink-500: #2a3139; /* 邊框 */
+  --color-ink-400: #404a55; /* 較亮的分隔線 */
+
+  /* 文字 */
+  --color-ink-50: #f2f2f2; /* 主要文字 */
+  --color-ink-200: #bebebe; /* 次要文字 */
+  --color-ink-300: #8b8e91; /* 弱化文字 / 軸標 */
+
+  /* 品牌與狀態 */
+  --color-tide: #29c1e1; /* TideBit 主色 */
+  --color-tide-dim: #1c8ba4;
+  --color-up: #17bf88; /* 漲 */
+  --color-up-soft: #1ae2a0;
+  --color-down: #e86d6d; /* 跌 */
+  --color-warn: #f9c53d;
+
+  --radius-card: 12px;
+  --radius-ctl: 10px;
+
+  --font-display: Barlow, ui-sans-serif, system-ui, sans-serif;
+  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-ink-800);
+  color: var(--color-ink-50);
+}
+
+/* 數字在表格與軸標要對齊，但大字級的英雄數字用比例字寬才不會鬆散 */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* K 線 / 面積圖的漸層填色，對應 TideBit 的 greenLinear / redLinear */
+.fill-up-grad {
+  background: linear-gradient(180deg, #1ae2a0cc 0%, #1ae2a000 100%);
+}
+.fill-down-grad {
+  background: linear-gradient(180deg, #e86d6dcc 0%, #e86d6d00 100%);
+}
+
+::selection {
+  background: var(--color-tide);
+  color: #06232a;
+}
+
+/* 捲軸配合深色 */
+* {
+  scrollbar-color: var(--color-ink-500) transparent;
+  scrollbar-width: thin;
+}

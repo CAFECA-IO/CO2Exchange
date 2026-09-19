@@ -3,6 +3,7 @@ import { useState } from "react";
 import { signIn, useSession } from "next-auth/react";
 import { useAccount } from "@/components/AccountProvider";
 import { Button, Card, Field, Notice, inputCls } from "@/components/ui";
+import { MarketPanel } from "@/components/MarketPanel";
 import Link from "next/link";
 
 /// 專案生命週期。本平台只負責最後兩段（交易、註銷）—— 前面七段在主管機關與查驗機構手上。
@@ -27,9 +28,9 @@ const ISO_PARTS = [
 function Section({ id, eyebrow, title, children }: { id: string; eyebrow: string; title: string; children: React.ReactNode }) {
   return (
     <section id={id} className="scroll-mt-8">
-      <p className="text-xs font-medium uppercase tracking-wider text-emerald-700 dark:text-emerald-500">{eyebrow}</p>
-      <h2 className="mt-1 text-xl font-semibold tracking-tight">{title}</h2>
-      <div className="mt-4 space-y-4 text-sm leading-7 text-zinc-700 dark:text-zinc-300">{children}</div>
+      <p className="text-xs font-medium uppercase tracking-wider text-tide">{eyebrow}</p>
+      <h2 className="mt-1 font-display text-xl font-semibold tracking-tight text-ink-50">{title}</h2>
+      <div className="mt-4 space-y-4 text-sm leading-7 text-ink-200">{children}</div>
     </section>
   );
 }
@@ -48,22 +49,25 @@ export default function Home() {
 
   return (
     <div className="space-y-14">
+      {/* ── 行情：進站第一眼就是市場 ─────────────────────────────── */}
+      <MarketPanel />
+
       {/* ── Hero + 登入 ────────────────────────────────────────────── */}
       <div className="grid gap-6 md:grid-cols-[1.2fr_1fr]">
         <div className="space-y-4">
-          <h1 className="text-2xl font-semibold tracking-tight">減量額度登錄、交易與註銷平台</h1>
-          <p className="text-sm leading-7 text-zinc-600 dark:text-zinc-400">
+          <h1 className="font-display text-3xl font-bold tracking-tight text-ink-50">減量額度登錄、交易與註銷平台</h1>
+          <p className="text-sm leading-7 text-ink-200">
             企業執行溫室氣體自願減量專案、通過第三方查驗後取得減量額度。本平台就是這些額度的登錄簿與交易場所——
             查驗機構在鏈上簽章核發，額度可販售給個人、機構或其他企業，買方註銷後取得可附於申報文件的憑證。
           </p>
-          <p className="text-sm leading-7 text-zinc-600 dark:text-zinc-400">
+          <p className="text-sm leading-7 text-ink-200">
             每一單位額度都能回溯到它的專案、監測期間與查驗簽章；註銷之後永久退出流通，無法再被轉讓或重複主張。
           </p>
           <div className="flex flex-wrap gap-2 pt-1 text-xs">
-            <a href="#project" className="rounded-full border border-zinc-300 px-3 py-1 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">什麼是自願減量專案</a>
-            <a href="#paris" className="rounded-full border border-zinc-300 px-3 py-1 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">巴黎協定第六條</a>
-            <a href="#iso" className="rounded-full border border-zinc-300 px-3 py-1 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">ISO 14064</a>
-            <a href="#lifecycle" className="rounded-full border border-zinc-300 px-3 py-1 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">專案生命週期</a>
+            <a href="#project" className="rounded-full border border-ink-500 px-3 py-1 text-ink-300 transition hover:border-tide/60 hover:text-ink-50">什麼是自願減量專案</a>
+            <a href="#paris" className="rounded-full border border-ink-500 px-3 py-1 text-ink-300 transition hover:border-tide/60 hover:text-ink-50">巴黎協定第六條</a>
+            <a href="#iso" className="rounded-full border border-ink-500 px-3 py-1 text-ink-300 transition hover:border-tide/60 hover:text-ink-50">ISO 14064</a>
+            <a href="#lifecycle" className="rounded-full border border-ink-500 px-3 py-1 text-ink-300 transition hover:border-tide/60 hover:text-ink-50">專案生命週期</a>
           </div>
         </div>
 
@@ -80,13 +84,13 @@ export default function Home() {
                   </form>
                 )}
                 {!providers.includes("google") && !providers.includes("apple") && (
-                  <p className="text-xs text-zinc-500">在 .env.local 設定 AUTH_GOOGLE_ID / AUTH_APPLE_ID 後會出現 Google / Apple 登入。</p>
+                  <p className="text-xs text-ink-300">在 .env.local 設定 AUTH_GOOGLE_ID / AUTH_APPLE_ID 後會出現 Google / Apple 登入。</p>
                 )}
               </div>
             </Card>
           ) : !credential ? (
             <Card title="建立鏈上帳戶">
-              <p className="mb-3 text-sm text-zinc-600 dark:text-zinc-400">已登入：{session.user.email}。接下來用 passkey 建立帳戶；地址由公鑰決定，換裝置後同一把 passkey 仍對到同一地址。</p>
+              <p className="mb-3 text-sm text-ink-200">已登入：{session.user.email}。接下來用 passkey 建立帳戶；地址由公鑰決定，換裝置後同一把 passkey 仍對到同一地址。</p>
               <div className="flex flex-wrap gap-2">
                 <Button onClick={() => run(createAccount)} disabled={!!busy}>{busy ?? "建立新帳戶（passkey）"}</Button>
                 <Button variant="secondary" onClick={() => run(useExistingPasskey)} disabled={!!busy}>我已有 passkey</Button>
@@ -95,8 +99,8 @@ export default function Home() {
           ) : (
             <Card title="帳戶已就緒">
               <dl className="space-y-1 text-sm">
-                <div><dt className="text-zinc-500">登入</dt><dd>{session.user.email}</dd></div>
-                <div><dt className="text-zinc-500">鏈上地址</dt><dd className="font-mono break-all">{credential.address}</dd></div>
+                <div><dt className="text-ink-300">登入</dt><dd className="text-ink-50">{session.user.email}</dd></div>
+                <div><dt className="text-ink-300">鏈上地址</dt><dd className="font-mono break-all text-ink-50">{credential.address}</dd></div>
               </dl>
               <div className="mt-4 flex gap-2">
                 <Link href="/kyc"><Button>下一步：身分驗證</Button></Link>
@@ -107,14 +111,14 @@ export default function Home() {
           {err && <Notice kind="error">{err}</Notice>}
 
           <Card title="開始使用">
-            <ol className="space-y-2 text-sm text-zinc-700 dark:text-zinc-300">
+            <ol className="space-y-2 text-sm text-ink-200">
               <li><b>1. 登入</b> — Apple / Google 帳號只用來建立 session。</li>
               <li><b>2. 建立帳戶</b> — 用裝置的 passkey（FaceID / TouchID）當鏈上帳戶的唯一金鑰，沒有助記詞、沒有第三方託管。</li>
               <li><b>3. 身分驗證</b> — 以工商憑證 / 自然人憑證綁定帳戶地址（Phase 0 為模擬）。</li>
               <li><b>4. 購買並註銷</b> — 從企業掛單或流動性池買入，註銷後取得憑證。</li>
             </ol>
             {config && (
-              <p className="mt-3 text-xs text-zinc-500">鏈 ID {config.deployment.chainId} · RPC {config.rpcUrl}</p>
+              <p className="mt-3 text-xs text-ink-300">鏈 ID {config.deployment.chainId} · RPC {config.rpcUrl}</p>
             )}
           </Card>
         </div>
@@ -137,9 +141,9 @@ export default function Home() {
             ["洩漏 Leakage", "減量有沒有只是被推到別處去？專案邊界外增加的排放必須扣回來。"],
             ["重複計算 Double counting", "同一噸減量有沒有被兩個人同時主張？登錄簿、唯一序號與註銷紀錄就是為了擋這件事。"],
           ].map(([t, d]) => (
-            <div key={t} className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-              <h3 className="text-sm font-semibold">{t}</h3>
-              <p className="mt-1 text-sm leading-6 text-zinc-600 dark:text-zinc-400">{d}</p>
+            <div key={t} className="rounded-[--radius-card] border border-ink-500 bg-ink-700 p-4">
+              <h3 className="text-sm font-semibold text-ink-50">{t}</h3>
+              <p className="mt-1 text-sm leading-6 text-ink-300">{d}</p>
             </div>
           ))}
         </div>
@@ -166,12 +170,12 @@ export default function Home() {
             ["第 6.4 條", "巴黎協定額度機制（PACM）", "聯合國層級的集中式額度機制，由 12 人組成的第 6.4 條監督機構管理，依 Decision 3/CMA.3 建立，接續清潔發展機制（CDM）的角色，並處理既有 CDM 專案的轉換。專案經註冊、查證後核發額度。"],
             ["第 6.8 條", "非市場方法", "不涉及額度交易的合作，例如資金支援、技術移轉與能力建構。"],
           ].map(([no, name, body]) => (
-            <div key={no} className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+            <div key={no} className="rounded-[--radius-card] border border-ink-500 bg-ink-700 p-4">
               <div className="flex flex-wrap items-baseline gap-2">
-                <span className="rounded bg-emerald-600 px-2 py-0.5 text-xs font-medium text-white">{no}</span>
-                <h3 className="text-sm font-semibold">{name}</h3>
+                <span className="rounded bg-tide px-2 py-0.5 text-xs font-medium text-ink-900">{no}</span>
+                <h3 className="text-sm font-semibold text-ink-50">{name}</h3>
               </div>
-              <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">{body}</p>
+              <p className="mt-2 text-sm leading-6 text-ink-300">{body}</p>
             </div>
           ))}
         </div>
@@ -190,17 +194,17 @@ export default function Home() {
           ISO 14064 是溫室氣體量化與查驗的國際標準，分成三部分。本平台交易的額度，其可信度直接建立在其中兩部分上：
           <b>14064-2 決定減量怎麼算</b>，<b>14064-3 決定誰來查、怎麼查</b>。
         </p>
-        <div className="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800">
+        <div className="overflow-hidden rounded-[--radius-card] border border-ink-500">
           <table className="w-full text-sm">
-            <thead className="bg-zinc-100 text-left text-xs uppercase tracking-wider text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+            <thead className="bg-ink-600 text-left text-xs uppercase tracking-wider text-ink-300">
               <tr><th className="px-4 py-2 font-medium">標準</th><th className="px-4 py-2 font-medium">層級</th><th className="px-4 py-2 font-medium">內容</th></tr>
             </thead>
-            <tbody className="divide-y divide-zinc-200 bg-white dark:divide-zinc-800 dark:bg-zinc-900">
+            <tbody className="divide-y divide-ink-500 bg-ink-700">
               {ISO_PARTS.map((p) => (
-                <tr key={p.part} className={p.highlight ? "bg-emerald-50 dark:bg-emerald-950/40" : undefined}>
+                <tr key={p.part} className={p.highlight ? "bg-tide/10" : undefined}>
                   <td className="px-4 py-3 align-top font-medium whitespace-nowrap">{p.part}</td>
-                  <td className="px-4 py-3 align-top whitespace-nowrap text-zinc-600 dark:text-zinc-400">{p.level}</td>
-                  <td className="px-4 py-3 align-top leading-6 text-zinc-600 dark:text-zinc-400">{p.what}</td>
+                  <td className="px-4 py-3 align-top whitespace-nowrap text-ink-300">{p.level}</td>
+                  <td className="px-4 py-3 align-top leading-6 text-ink-300">{p.what}</td>
                 </tr>
               ))}
             </tbody>
@@ -216,7 +220,7 @@ export default function Home() {
           一個專案在生命週期中會被查兩次：計畫階段確證、監測期滿查證。這也是為什麼查驗機構的獨立性與許可資格
           （氣候變遷因應法第 22 條）是整個制度的信任根基。
         </p>
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-ink-300">
           ISO 14060 系列是「GHG 制度中立」的——若另有適用的溫室氣體管理制度，該制度的要求會疊加在 ISO 標準之上。
           台灣的情形就是：ISO 14064-2／-3 提供方法與查驗框架，氣候變遷因應法與其子法提供法律效力與主管機關核准程序。
         </p>
@@ -234,22 +238,22 @@ export default function Home() {
               key={s.n}
               className={`rounded-lg border p-4 ${
                 s.here
-                  ? "border-emerald-500 bg-emerald-50 dark:border-emerald-600 dark:bg-emerald-950/40"
-                  : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"
+                  ? "border-tide/70 bg-tide/10"
+                  : "border-ink-500 bg-ink-700"
               }`}
             >
               <div className="flex items-center gap-2">
                 <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
-                  s.here ? "bg-emerald-600 text-white" : "bg-zinc-200 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200"
+                  s.here ? "bg-tide text-ink-900" : "bg-ink-600 text-ink-200"
                 }`}>{s.n}</span>
-                <h3 className="text-sm font-semibold">{s.title}</h3>
+                <h3 className="text-sm font-semibold text-ink-50">{s.title}</h3>
               </div>
-              <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">{s.body}</p>
+              <p className="mt-2 text-sm leading-6 text-ink-300">{s.body}</p>
               <div className="mt-3 flex flex-wrap gap-1.5 text-[11px]">
                 <span className={`rounded px-1.5 py-0.5 ${
-                  s.here ? "bg-emerald-600 text-white" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+                  s.here ? "bg-tide text-ink-900" : "bg-ink-600 text-ink-300"
                 }`}>{s.who}</span>
-                {s.iso && <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">{s.iso}</span>}
+                {s.iso && <span className="rounded bg-ink-600 px-1.5 py-0.5 text-ink-300">{s.iso}</span>}
               </div>
             </li>
           ))}
@@ -273,7 +277,7 @@ export default function Home() {
           CBAM 承認的是<b>在生產國實際已支付的碳價</b>，並非自願性抵換額度。
           因此本平台不將「用於 CBAM 扣抵」列為額度用途；若未來規則變動，會依主管機關與歐盟公告更新。
         </Notice>
-        <p className="text-xs leading-6 text-zinc-500">
+        <p className="text-xs leading-6 text-ink-300">
           本站目前為 Phase 0 展示版本：身分驗證、查驗機構簽章與結算幣皆為模擬，額度不具法律效力，不得作為任何申報依據。
           正式營運的前提是主管機關認可、查驗機構自行簽章，以及金融機構提供的結算工具。
         </p>

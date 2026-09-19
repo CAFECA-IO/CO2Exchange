@@ -17,17 +17,40 @@ export function Nav() {
     ...(me.isAdmin ? [["/admin", "管理後台"] as const] : []),
   ];
   return (
-    <header className="border-b border-zinc-200 bg-white/80 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/80">
-      <div className="mx-auto flex max-w-5xl items-center gap-6 px-4 py-3">
-        <Link href="/" className="font-semibold tracking-tight">CO2Exchange</Link>
-        <nav className="flex gap-4 text-sm">
+    <header className="sticky top-0 z-50 border-b border-ink-500 bg-ink-900/80 backdrop-blur">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
+        <Link href="/" className="font-display text-base font-bold tracking-tight">
+          <span className="text-tide">CO2</span>Exchange
+        </Link>
+        <nav className="flex flex-wrap gap-4 text-sm">
           {links.map(([href, label]) => (
-            <Link key={href} href={href} className={path === href ? "font-medium text-emerald-700 dark:text-emerald-400" : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"}>{label}</Link>
+            <Link
+              key={href}
+              href={href}
+              className={
+                path === href
+                  ? "border-b-2 border-tide pb-0.5 font-medium text-tide"
+                  : "pb-0.5 text-ink-300 transition hover:text-ink-50"
+              }
+            >
+              {label}
+            </Link>
           ))}
         </nav>
-        <div className="ml-auto flex items-center gap-3 text-xs text-zinc-500">
-          {credential && <span className="font-mono" title={credential.address}>{credential.address.slice(0, 6)}…{credential.address.slice(-4)}</span>}
-          {session?.user && <button onClick={() => signOut({ callbackUrl: "/" })} className="rounded border border-zinc-300 px-2 py-1 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">登出</button>}
+        <div className="ml-auto flex items-center gap-3 text-xs text-ink-300">
+          {credential && (
+            <span className="tnum font-mono text-ink-200" title={credential.address}>
+              {credential.address.slice(0, 6)}…{credential.address.slice(-4)}
+            </span>
+          )}
+          {session?.user && (
+            <button
+              onClick={() => signOut({ callbackUrl: "/" })}
+              className="rounded-[--radius-ctl] border border-ink-500 px-2 py-1 transition hover:border-tide/60 hover:text-ink-50"
+            >
+              登出
+            </button>
+          )}
         </div>
       </div>
     </header>
