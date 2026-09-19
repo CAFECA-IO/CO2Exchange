@@ -33,22 +33,20 @@ export function MarketPanel() {
 
   useEffect(() => {
     let live = true;
-    setLoading(true);
-    fetch(`/api/market/ticker?hours=${hours}`)
-      .then((r) => r.json())
-      .then((d) => {
+    (async () => {
+      setLoading(true);
+      try {
+        const d = await (await fetch(`/api/market/ticker?hours=${hours}`)).json();
         if (!live) return;
         if (d.error) setErr(d.error);
-        else {
-          setT(d);
-          setErr(null);
-        }
-      })
-      .catch((e) => live && setErr(String(e)))
-      .finally(() => live && setLoading(false));
-    return () => {
-      live = false;
-    };
+        else { setT(d); setErr(null); }
+      } catch (e) {
+        if (live) setErr(String(e));
+      } finally {
+        if (live) setLoading(false);
+      }
+    })();
+    return () => { live = false; };
   }, [hours]);
 
   const up = (t?.changePct ?? 0) >= 0;

@@ -29,8 +29,11 @@ await waitOk(page, "流動性池購買（2000 mTWD）完成");
 console.log("✔ 掛單 + v4 購買");
 
 await page.getByPlaceholder("某某股份有限公司").fill("Alice Chen");
+// 別寫死批次編號。掛單簿按價格排序，只要鏈上多了一筆更便宜的掛單（例如先跑過
+// enterprise.mjs），買到的就不是批次 #1，測試會在這裡假性失敗。
+const bought = (await page.locator('[data-testid="batches"]').innerText()).match(/#(\d+)/)[1];
 await page.getByRole("button", { name: "註銷", exact: true }).first().click();
-await waitOk(page, "註銷批次 #1 1 噸完成");
+await waitOk(page, `註銷批次 #${bought} 1 噸完成`);
 await page.getByRole("button", { name: "註銷", exact: true }).first().click();
 await waitOk(page, "註銷池化額度");
 await page.goto(`${BASE}/certificates`);

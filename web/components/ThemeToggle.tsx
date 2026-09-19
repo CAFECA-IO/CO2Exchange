@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 export type ThemeChoice = "system" | "light" | "dark";
 export const THEME_KEY = "co2x.theme";
@@ -34,27 +34,41 @@ const ICONS: Record<ThemeChoice, React.ReactNode> = {
 
 const LABEL: Record<ThemeChoice, string> = { system: "跟隨系統", light: "淺色", dark: "深色" };
 
-export function ThemeToggle() {
-  // 先以 system 呈現，掛載後再讀 localStorage —— 伺服器端算不出使用者選了什麼，
-  // 直接渲染真實值會造成 hydration 不一致。避免閃爍是靠 layout 裡的 inline script。
-  const [choice, setChoice] = useState<ThemeChoice>("system");
-  const [ready, setReady] = useState(false);
+/// 使用者選的配色存在 localStorage，那是 React 之外的狀態，所以用 useSyncExternalStore
+/// 訂閱，而不是「先渲染 system、掛載後再 setState 改成真值」——後者每次進站都多一輪
+/// 渲染。伺服器端沒有 localStorage，一律回 "system"，hydrate 之後才會是真值；
+/// 首屏不閃爍是靠 layout 裡的 inline script，與這裡無關。
+/// 另一個分頁改了設定，storage 事件也會同步過來。
+const themeListeners = new Set<() => void>();
+function subscribeTheme(cb: () => void) {
+  themeListeners.add(cb);
+  window.addEventListener("storage", cb);
+  return () => { themeListeners.delete(cb); window.removeEventListener("storage", cb); };
+}
+function themeSnapshot(): ThemeChoice {
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    return v === "light" || v === "dark" ? v : "system";
+  } catch { return "system"; }
+}
+function themeServerSnapshot(): ThemeChoice { return "system"; }
 
-  useEffect(() => {
-    const saved = (localStorage.getItem(THEME_KEY) as ThemeChoice | null) ?? "system";
-    setChoice(saved);
-    setReady(true);
-  }, []);
+export function ThemeToggle() {
+  const choice = useSyncExternalStore(subscribeTheme, themeSnapshot, themeServerSnapshot);
+
+  // 把選擇套到 <html> 上。這是「用 React 狀態去同步外部系統」，effect 的正當用途。
+  // 放在這裡而不是放在 pick() 裡，另一個分頁改設定時這個分頁才會跟著換色，
+  // 而不是只有按鈕的高亮跟著動。
+  useEffect(() => { applyTheme(choice); }, [choice]);
 
   function pick(next: ThemeChoice) {
-    setChoice(next);
     try {
       if (next === "system") localStorage.removeItem(THEME_KEY);
       else localStorage.setItem(THEME_KEY, next);
     } catch {
       /* 無痕模式等情況下寫不進去，畫面仍然照選的走 */
     }
-    applyTheme(next);
+    for (const l of themeListeners) l(); // 通知訂閱者（含上面的 effect）重新讀 snapshot
   }
 
   return (
@@ -67,12 +81,12 @@ export function ThemeToggle() {
         <button
           key={k}
           role="radio"
-          aria-checked={ready && choice === k}
+          aria-checked={choice === k}
           aria-label={LABEL[k]}
           title={LABEL[k]}
           onClick={() => pick(k)}
           className={`rounded px-1.5 py-1 transition ${
-            ready && choice === k ? "bg-tide text-ink-900" : "text-ink-300 hover:bg-ink-600 hover:text-ink-50"
+            choice === k ? "bg-tide text-ink-900" : "text-ink-300 hover:bg-ink-600 hover:text-ink-50"
           }`}
         >
           {ICONS[k]}

@@ -1,5 +1,6 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { useReload } from "@/lib/client/useReload";
 import { useAccount } from "@/components/AccountProvider";
 import { Button, Card, Notice, fmtKg } from "@/components/ui";
 
@@ -12,10 +13,16 @@ export default function VerifierPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [reason, setReason] = useState<Record<string, string>>({});
 
-  const refresh = useCallback(async () => {
-    const r = await fetch("/api/issuance"); if (r.ok) setRows((await r.json()).requests ?? []);
-  }, []);
-  useEffect(() => { if (me.isVerifier) refresh(); }, [me.isVerifier, refresh]);
+  const [reloadKey, reload] = useReload();
+  useEffect(() => {
+    if (!me.isVerifier) return;
+    let ignore = false;
+    (async () => {
+      const r = await fetch("/api/issuance");
+      if (!ignore && r.ok) setRows((await r.json()).requests ?? []);
+    })();
+    return () => { ignore = true; };
+  }, [me.isVerifier, reloadKey]);
 
   if (!me.isVerifier) return <Notice>此頁面限查驗機構帳號。</Notice>;
 
@@ -26,7 +33,7 @@ export default function VerifierPage() {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error ?? "失敗");
       setMsg({ kind: "ok", text: approve ? `已簽章核發：批次 #${j.batchId}，tx ${j.txHash.slice(0, 10)}…` : "已退回" });
-      await refresh();
+      reload();
     } catch (e) { setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) }); }
     finally { setBusy(null); }
   }

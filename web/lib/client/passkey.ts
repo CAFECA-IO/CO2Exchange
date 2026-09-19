@@ -7,16 +7,48 @@ import { createPublicClient, http } from "viem";
 export type StoredCredential = { id: string; publicKey: Hex; address: Address; userId: string };
 const KEY = "co2x.credential";
 
-export function loadCredential(userId: string): StoredCredential | null {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return null;
-    const c = JSON.parse(raw) as StoredCredential;
-    return c.userId === userId ? c : null;
-  } catch { return null; }
+/// ── 憑證儲存：一個可訂閱的小 store ──
+///
+/// 用 useSyncExternalStore 讀，而不是「先渲染空的、掛載後再用 effect 補上」——
+/// 後者每次都多一輪渲染，也正是 React 的 set-state-in-effect 規則要擋的東西。
+/// localStorage 本來就是 React 之外的狀態，訂閱它才是對的做法；
+/// 附帶好處是另一個分頁登出或改綁時，這個分頁會跟著更新。
+///
+/// snapshot 必須回穩定的參考（同樣內容要是同一個物件），否則 React 會判定每次都變了
+/// 而無限重繪，所以這裡快取解析結果，只有 localStorage 內容真的變了才換新物件。
+let snap: { raw: string | null; value: StoredCredential | null } | null = null;
+const listeners = new Set<() => void>();
+
+function emit() { for (const l of listeners) l(); }
+
+export function subscribeCredential(cb: () => void) {
+  listeners.add(cb);
+  window.addEventListener("storage", cb);
+  return () => { listeners.delete(cb); window.removeEventListener("storage", cb); };
 }
-export function saveCredential(c: StoredCredential) { try { localStorage.setItem(KEY, JSON.stringify(c)); } catch {} }
-export function clearCredential() { try { localStorage.removeItem(KEY); } catch {} }
+
+export function credentialSnapshot(): StoredCredential | null {
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(KEY); } catch { raw = null; }
+  if (!snap || snap.raw !== raw) {
+    let value: StoredCredential | null = null;
+    try { value = raw ? (JSON.parse(raw) as StoredCredential) : null; } catch { value = null; }
+    snap = { raw, value };
+  }
+  return snap.value;
+}
+
+/// 伺服器端渲染時沒有 localStorage，一律當作沒有憑證；hydrate 之後才會是真值。
+export function credentialServerSnapshot(): StoredCredential | null { return null; }
+
+export function saveCredential(c: StoredCredential) {
+  try { localStorage.setItem(KEY, JSON.stringify(c)); } catch {}
+  emit();
+}
+export function clearCredential() {
+  try { localStorage.removeItem(KEY); } catch {}
+  emit();
+}
 
 /// 建立新 passkey（金鑰存在裝置 Keychain / Google 密碼管理員），回傳 64-byte 公鑰
 export async function registerPasskey(label: string) {

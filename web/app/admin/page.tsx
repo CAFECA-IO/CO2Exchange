@@ -1,5 +1,6 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { useReload } from "@/lib/client/useReload";
 import { useAccount } from "@/components/AccountProvider";
 import { Button, Card, Notice, fmtKg } from "@/components/ui";
 import { PURPOSE_LABEL, TIER_LABEL } from "@/lib/deployment";
@@ -16,6 +17,13 @@ type Gov = {
 
 const tabs = ["KYC 審核", "憑證文件", "治理狀態"] as const;
 
+/// 定義在元件內部的話，每次 render 都是一個新的元件型別，React 會把整棵子樹卸載重建。
+function Bool({ v }: { v: boolean | null }) {
+  return v === null
+    ? <span className="text-ink-300">—</span>
+    : <span className={v ? "text-tide" : "font-semibold text-down"}>{v ? "✓" : "✗"}</span>;
+}
+
 export default function AdminPage() {
   const { me } = useAccount();
   const [tab, setTab] = useState<(typeof tabs)[number]>("KYC 審核");
@@ -26,13 +34,19 @@ export default function AdminPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [reason, setReason] = useState<Record<string, string>>({});
 
-  const refresh = useCallback(async () => {
-    const [k, c, g] = await Promise.all([fetch("/api/kyc/queue"), fetch("/api/certificates/all"), fetch("/api/governance")]);
-    if (k.ok) setKyc((await k.json()).requests ?? []);
-    if (c.ok) setCerts((await c.json()).certificates ?? []);
-    if (g.ok) setGov(await g.json());
-  }, []);
-  useEffect(() => { if (me.isAdmin) refresh(); }, [me.isAdmin, refresh]);
+  const [reloadKey, reload] = useReload();
+  useEffect(() => {
+    if (!me.isAdmin) return;
+    let ignore = false;
+    (async () => {
+      const [k, c, g] = await Promise.all([fetch("/api/kyc/queue"), fetch("/api/certificates/all"), fetch("/api/governance")]);
+      if (ignore) return;
+      if (k.ok) setKyc((await k.json()).requests ?? []);
+      if (c.ok) setCerts((await c.json()).certificates ?? []);
+      if (g.ok) setGov(await g.json());
+    })();
+    return () => { ignore = true; };
+  }, [me.isAdmin, reloadKey]);
 
   if (!me.isAdmin) return <Notice>此頁面限管理員帳號。</Notice>;
 
@@ -42,12 +56,11 @@ export default function AdminPage() {
       const r = await fn(); const j = await r.json();
       if (!r.ok) throw new Error(j.error ?? "失敗");
       setMsg({ kind: "ok", text: `${label}完成${j.txHash ? ` · tx ${j.txHash.slice(0, 10)}…` : ""}${j.sha256 ? ` · SHA-256 ${j.sha256.slice(0, 14)}…` : ""}` });
-      await refresh();
+      reload();
     } catch (e) { setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) }); }
     finally { setBusy(null); }
   }
   const post = (url: string, body?: unknown) => fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-  const Bool = ({ v }: { v: boolean | null }) => v === null ? <span className="text-ink-300">—</span> : <span className={v ? "text-tide" : "font-semibold text-down"}>{v ? "✓" : "✗"}</span>;
 
   const pendingKyc = kyc.filter((r) => r.status === "pending");
 

@@ -1,5 +1,6 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { useReload } from "@/lib/client/useReload";
 import Link from "next/link";
 import { encodeFunctionData } from "viem";
 import { useAccount } from "@/components/AccountProvider";
@@ -27,18 +28,23 @@ export default function EnterprisePage() {
   const [listForm, setListForm] = useState<Record<number, { kg: string; price: string; minFill: string }>>({});
   const [depositKg, setDepositKg] = useState<Record<number, string>>({});
 
-  const refresh = useCallback(async () => {
+  const [reloadKey, reload] = useReload();
+  useEffect(() => {
     if (!credential) return;
     const a = credential.address;
-    const [p, i, m] = await Promise.all([
-      fetch(`/api/projects?owner=${a}`).then((r) => r.json()),
-      fetch(`/api/issuance?owner=${a}`).then((r) => r.json()),
-      fetch(`/api/market?account=${a}`).then((r) => r.json()),
-    ]);
-    setProjects(p.projects ?? []); setIssuances(i.requests ?? []); setHoldings(m.holdings?.batches ?? []);
-    setOrders((m.orders ?? []).filter((o: Order) => o.seller.toLowerCase() === a.toLowerCase()));
-  }, [credential]);
-  useEffect(() => { refresh(); }, [refresh]);
+    let ignore = false;
+    (async () => {
+      const [p, i, m] = await Promise.all([
+        fetch(`/api/projects?owner=${a}`).then((r) => r.json()),
+        fetch(`/api/issuance?owner=${a}`).then((r) => r.json()),
+        fetch(`/api/market?account=${a}`).then((r) => r.json()),
+      ]);
+      if (ignore) return;
+      setProjects(p.projects ?? []); setIssuances(i.requests ?? []); setHoldings(m.holdings?.batches ?? []);
+      setOrders((m.orders ?? []).filter((o: Order) => o.seller.toLowerCase() === a.toLowerCase()));
+    })();
+    return () => { ignore = true; };
+  }, [credential, reloadKey]);
 
   if (!userId || !credential || !config) return <AccountGate />;
   if (tier !== 2) return <Notice>企業功能需要法人身分。請到<Link className="underline" href="/kyc">身分驗證</Link>以工商憑證驗證。</Notice>;
@@ -49,7 +55,7 @@ export default function EnterprisePage() {
     try {
       const r = await signAndRelay(config!.rpcUrl, credential!, calls);
       setMsg({ kind: "ok", text: `${label}完成 · tx ${r.txHash.slice(0, 10)}…` });
-      await refresh();
+      reload();
     } catch (e) { setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) }); }
     finally { setBusy(null); }
   }
@@ -72,7 +78,7 @@ export default function EnterprisePage() {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error ?? "失敗");
       setMsg({ kind: "ok", text: `核發申請已送出（報告雜湊 ${j.reportHash.slice(0, 12)}…），待查驗機構審核。` });
-      setReport(null); await refresh();
+      setReport(null); reload();
     } catch (e) { setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) }); }
     finally { setBusy(null); }
   }

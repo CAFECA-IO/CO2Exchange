@@ -1,5 +1,6 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { useReload } from "@/lib/client/useReload";
 import { useAccount } from "@/components/AccountProvider";
 import { AccountGate } from "@/components/AccountGate";
 import { Button, Card, Field, Notice, inputCls } from "@/components/ui";
@@ -17,16 +18,25 @@ export default function KycPage() {
   const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const refresh = useCallback(async () => {
+  // 效期是否過了，在「拿到資料的當下」判定並記下來；render 期間不呼叫 Date.now()
+  // （那是不純的讀取，會讓同一份資料在不同 render 得到不同結果）。
+  const [checkedAt, setCheckedAt] = useState(0);
+  const [reloadKey, reload] = useReload();
+  useEffect(() => {
     if (!credential) return;
-    const r = await fetch(`/api/kyc?account=${credential.address}`);
-    if (r.ok) setIdentity(await r.json());
-  }, [credential]);
-  useEffect(() => { refresh(); }, [refresh]);
+    let ignore = false;
+    (async () => {
+      const r = await fetch(`/api/kyc?account=${credential.address}`);
+      if (ignore || !r.ok) return;
+      setIdentity(await r.json());
+      setCheckedAt(Date.now());
+    })();
+    return () => { ignore = true; };
+  }, [credential, reloadKey]);
 
   if (!userId || !credential) return <AccountGate />;
 
-  const active = identity && identity.tier !== TIER.None && !identity.frozen && identity.expiry * 1000 > Date.now();
+  const active = !!identity && identity.tier !== TIER.None && !identity.frozen && identity.expiry * 1000 > checkedAt;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -38,7 +48,7 @@ export default function KycPage() {
       setMsg(j.status === "approved"
         ? { kind: "ok", text: `身分已綁定帳戶。交易 ${j.txHash.slice(0, 10)}…` }
         : { kind: "ok", text: "申請已送出，待身分驗證服務審核。" });
-      await refresh(); await refreshTier();
+      reload(); await refreshTier();
     } catch (e) { setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) }); }
     finally { setBusy(false); }
   }
@@ -60,7 +70,7 @@ export default function KycPage() {
           </dl>
         ) : <p className="text-sm text-ink-300">讀取中…</p>}
         {active && <div className="mt-4 flex gap-2"><Link href="/trade"><Button>前往購買與註銷</Button></Link>{identity?.tier === TIER.Corporate && <Link href="/enterprise"><Button variant="secondary">企業功能</Button></Link>}</div>}
-        {identity?.application?.status === "pending" && <div className="mt-3"><Button variant="secondary" onClick={() => { refresh(); refreshTier(); }}>重新整理</Button></div>}
+        {identity?.application?.status === "pending" && <div className="mt-3"><Button variant="secondary" onClick={() => { reload(); refreshTier(); }}>重新整理</Button></div>}
       </Card>
 
       <Card title="以政府憑證驗證身分">

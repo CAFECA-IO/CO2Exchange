@@ -1,6 +1,6 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
+import { useEffect, useState } from "react";
+import { useReload } from "@/lib/client/useReload";
 import { encodeFunctionData, keccak256, toBytes, type Address, type Hex } from "viem";
 import { useAccount } from "@/components/AccountProvider";
 import { AccountGate } from "@/components/AccountGate";
@@ -32,11 +32,15 @@ export default function TradePage() {
   const [memo, setMemo] = useState("");
   const [retireKg, setRetireKg] = useState<Record<string, string>>({});
 
-  const refresh = useCallback(async () => {
-    const r = await fetch(`/api/market${credential ? `?account=${credential.address}` : ""}`);
-    if (r.ok) setM(await r.json());
-  }, [credential]);
-  useEffect(() => { refresh(); }, [refresh]);
+  const [reloadKey, reload] = useReload();
+  useEffect(() => {
+    let ignore = false;
+    (async () => {
+      const r = await fetch(`/api/market${credential ? `?account=${credential.address}` : ""}`);
+      if (!ignore && r.ok) setM(await r.json());
+    })();
+    return () => { ignore = true; };
+  }, [credential, reloadKey]);
 
   if (!userId || !credential || !config) return <AccountGate />;
   const d = config.deployment;
@@ -46,7 +50,7 @@ export default function TradePage() {
     try {
       const r = await signAndRelay(config!.rpcUrl, credential!, calls);
       setMsg({ kind: "ok", text: `${label}完成 · tx ${r.txHash.slice(0, 10)}… · gas ${Number(r.gasUsed).toLocaleString()}（平台代付）` });
-      await refresh();
+      reload();
     } catch (e) {
       console.error("relay failed", e);
       setMsg({ kind: "error", text: e instanceof Error ? `${e.name}: ${e.message}` : String(e) });
@@ -55,7 +59,7 @@ export default function TradePage() {
 
   async function faucet() {
     setBusy("領取"); setMsg(null);
-    try { await fetch("/api/faucet", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ account: credential!.address }) }); await refresh(); }
+    try { await fetch("/api/faucet", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ account: credential!.address }) }); reload(); }
     finally { setBusy(null); }
   }
 
