@@ -21,17 +21,20 @@ optimizer_runs = 44444444
 # v4 的編譯期相依已經拆乾淨（Deploy / DemoFlow / Fixture 都不 import v4），所以這裡只要 skip 掉
 # 對 v4 有相依的那幾個檔案。
 #
-# ⚠️ 尚未可用 —— solc 0.8.26 在 evm_version=shanghai 下有兩條死路，還沒解：
-#   1. via_ir = false → src/market 與 src/registry 出現 "Stack too deep"（沒有 MCOPY，
-#      記憶體搬移改用比較吃堆疊的碼）。
-#   2. via_ir = true  → 換成 Safe v1.4.1 的 execTransaction 編不過
-#      （Safe 的 inline assembly 沒有標記 memory-safe，是 Safe 已知的 via_ir 問題）。
-# 可行的解法（擇一，尚未實作）：
-#   A. 縮減 src/market、src/registry 裡最大函式的區域變數，讓 via_ir=false 能過。
-#   B. via_ir=true，並且不要編譯 Safe —— 改用 Safe v1.4.1 的官方 creation bytecode 部署。
-#      這條路另有好處：部署出來的 Safe 與已稽核的 canonical 版本位元組完全一致。
+# ⚠️ 還差一步 —— 已實測到的狀況：
+#   via_ir = false → Listing / CarbonPool / CarbonRegistry / CarbonCredit1155 /
+#                    RetirementCertificate 五個合約全部 "Stack too deep"。沒有 MCOPY 時
+#                    solc 產出的記憶體搬移碼比較吃堆疊，這是系統性的，不是某個函式區域變數太多。
+#   via_ir = true  → 上面五個全過（實測 Compiler run successful），只剩 Safe v1.4.1 的
+#                    execTransaction 編不過（Safe 的 inline assembly 沒標 memory-safe，
+#                    是 Safe 已知的 via_ir 問題）。
+#
+# 所以唯一的阻塞點是 Safe。解法：不要編譯 Safe，改用 Safe v1.4.1 的 canonical creation
+# bytecode 直接 CREATE（Safe v1.4.1 官方是 solc 0.7.6 編的，本來就不含 Cancun 指令）。
+# 附帶好處：部署出來的 Safe 與已稽核的 canonical 版本位元組完全一致，而不是我們自己重編的版本。
 [profile.shanghai]
 evm_version = "shanghai"
+via_ir = true
 skip = [
   "src/v4/**",
   "script/DeployV4.s.sol",
