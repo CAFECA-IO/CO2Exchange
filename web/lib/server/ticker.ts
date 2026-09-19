@@ -33,7 +33,8 @@ function bucketFor(rangeHours: number): number {
   if (rangeHours <= 6) return 5;
   if (rangeHours <= 24) return 15;
   if (rangeHours <= 24 * 7) return 60;
-  return 60 * 24;
+  if (rangeHours <= 24 * 30) return 60 * 4;
+  return 60 * 24; // 90 天以上走日線
 }
 
 export async function readTrades(): Promise<Trade[]> {

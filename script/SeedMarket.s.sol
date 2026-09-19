@@ -3,6 +3,7 @@ pragma solidity 0.8.26;
 
 import {Script, console2} from "forge-std/Script.sol";
 import {KYCRegistry} from "../src/identity/KYCRegistry.sol";
+import {IKYCRegistry} from "../src/interfaces/IKYCRegistry.sol";
 import {CarbonRegistry} from "../src/registry/CarbonRegistry.sol";
 import {CarbonCredit1155} from "../src/registry/CarbonCredit1155.sol";
 import {Listing} from "../src/market/Listing.sol";
@@ -24,12 +25,16 @@ contract SeedMarket is Script {
     uint256 constant PK_B = 0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a;
     uint256 constant PK_ALICE = 0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6;
 
-    /// 掛單筆數 = 之後的成交筆數
-    uint256 constant N = 72;
-    /// 每筆成交量（kg）
+    /// 每筆最大成交量（kg）。實際成交量由 fills 腳本逐筆變化，這裡是掛單量上限。
     uint256 constant LOT_KG = 2_000;
     /// 起始價：每噸 800 mTWD（與 DemoFlow 的第一筆掛單一致）
     uint256 constant START = 800e6;
+
+    /// 掛單筆數 = 之後的成交筆數。用 SEED_TRADES 覆寫，例如一年份日線：
+    ///   SEED_TRADES=1095 forge script script/SeedMarket.s.sol --sig "seed()" ...
+    function _count() internal view returns (uint256) {
+        return vm.envOr("SEED_TRADES", uint256(72));
+    }
 
     KYCRegistry kyc;
     CarbonRegistry registry;
@@ -41,7 +46,8 @@ contract SeedMarket is Script {
         _load();
 
         address companyA = vm.addr(PK_A);
-        uint256 need = N * LOT_KG;
+        uint256 n = _count();
+        uint256 need = n * LOT_KG;
 
         // 1. 核發足夠的額度給 companyA（查驗簽章由 Phase 0 的服務金鑰代簽）
         vm.startBroadcast(PK_A);
@@ -57,34 +63,70 @@ contract SeedMarket is Script {
         twd.mint(vm.addr(PK_B), 500_000_000e6);
         vm.stopBroadcast();
 
+        // 2b. 延長買方的身分效期。
+        //     DemoFlow 給的憑證效期是一年；要鋪一年以上的歷史，跑到後段時
+        //     KYC 會過期、成交被 checkTransfer 擋下來（這是規則正確生效，不是 bug）。
+        //     這裡重新簽發一張涵蓋整段模擬期間的憑證。
+        uint64 until = uint64(block.timestamp + vm.envOr("SEED_KYC_YEARS", uint256(12)) * 365 days);
+        _reattest(vm.addr(PK_ALICE), IKYCRegistry.Tier.Individual, keccak256("TW-ID-A123456789"), until);
+        _reattest(vm.addr(PK_B), IKYCRegistry.Tier.Corporate, keccak256("TW-UBN-87654321"), until);
+        _reattest(companyA, IKYCRegistry.Tier.Corporate, keccak256("TW-UBN-12345678"), until);
+
         // 3. 依決定性價格路徑掛出 N 筆單（每筆一個價位，之後逐筆成交 → 一條走勢）
         vm.startBroadcast(PK_A);
         credit.setApprovalForAll(address(listing), true);
         uint256 price = START;
         uint256 first = listing.nextOrderId();
-        for (uint256 i = 0; i < N; i++) {
-            price = _walk(price, i);
+        for (uint256 i = 0; i < n; i++) {
+            price = _walk(price, i, n);
             listing.list(batch, LOT_KG, price, 0);
         }
         vm.stopBroadcast();
 
         console2.log("seed batch      ", batch);
         console2.log("first orderId   ", first);
-        console2.log("order count     ", N);
+        console2.log("order count     ", n);
         console2.log("lot kg          ", LOT_KG);
         console2.log("companyA        ", companyA);
     }
 
-    /// @dev 決定性的隨機漫步：有輕微上行趨勢，並限制在 560–1240 之間，
-    ///      走勢看起來才像市場而不是鋸齒。用 keccak 當亂數源，重跑結果一致。
-    function _walk(uint256 p, uint256 i) internal pure returns (uint256) {
+    /// @dev 決定性的價格路徑：雜訊 + 往趨勢線的均值回歸。
+    ///
+    ///      純隨機漫步的變異數隨步數線性成長，跑一年（上千步）會一路撞到上下限，
+    ///      看起來就不像市場。所以這裡讓價格被拉向一條緩慢上行的錨定線：
+    ///      anchor(i) = START * (1 + 0.25 * i/n)，年漲幅約 25%。
+    ///      用 keccak 當亂數源，同樣參數重跑結果一致。
+    function _walk(uint256 p, uint256 i, uint256 n) internal pure returns (uint256) {
+        uint256 anchor = START + (START * 25 * i) / (100 * n);
+
+        // 雜訊：±1.6%
         uint256 r = uint256(keccak256(abi.encode("co2", i))) % 1000;
-        // -3.0% ~ +3.4%（偏多 0.2%，模擬緩升）
-        int256 bps = int256(r) * 64 / 1000 - 30; // -30 ~ +34（千分比）
-        int256 next = int256(p) + (int256(p) * bps) / 1000;
-        if (next < int256(560e6)) next = int256(560e6);
-        if (next > int256(1240e6)) next = int256(1240e6);
+        int256 noiseBps = int256(r) * 32 / 1000 - 16;
+        int256 next = int256(p) + (int256(p) * noiseBps) / 1000;
+
+        // 均值回歸：往錨定線收斂 6%
+        next += (int256(anchor) - next) * 6 / 100;
+
+        if (next < int256(400e6)) next = int256(400e6);
+        if (next > int256(2000e6)) next = int256(2000e6);
         return uint256(next);
+    }
+
+    /// @dev 以身分驗證服務金鑰重簽一張新效期的憑證（覆寫既有的那張）。
+    function _reattest(address account, IKYCRegistry.Tier tier, bytes32 identityHash, uint64 expiry) internal {
+        KYCRegistry.IdentityAttestation memory a = KYCRegistry.IdentityAttestation({
+            account: account,
+            tier: tier,
+            expiry: expiry,
+            jurisdiction: bytes2("TW"),
+            identityHash: identityHash,
+            nonce: kyc.nonces(account),
+            deadline: block.timestamp + 1 hours
+        });
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(PK_DEPLOYER, kyc.hashAttestation(a));
+        vm.startBroadcast(PK_DEPLOYER);
+        kyc.register(a, abi.encodePacked(r, s, v));
+        vm.stopBroadcast();
     }
 
     function _issue(uint256 projectId, uint256 amountKg, bytes32 serial) internal returns (uint256 batchId) {

@@ -21,20 +21,20 @@ export default function CertificatesPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">我的註銷憑證</h1>
-      {!certs ? <p className="text-sm text-zinc-500">讀取中…</p> : certs.length === 0 ? <Notice>尚無憑證。到<Link className="underline" href="/trade">購買與註銷</Link>完成第一筆。</Notice> : (
+      {!certs ? <p className="text-sm text-ink-300">讀取中…</p> : certs.length === 0 ? <Notice>尚無憑證。到<Link className="underline" href="/trade">購買與註銷</Link>完成第一筆。</Notice> : (
         <div className="grid gap-4 md:grid-cols-2">
           {certs.map((c) => (
             <Card key={c.certId} title={`憑證 #${c.certId}`}>
               <dl className="grid grid-cols-[6rem_1fr] gap-y-1 text-sm">
-                <dt className="text-zinc-500">數量</dt><dd data-testid="cert-kg">{fmtKg(c.amountKg)}（{c.amountKg.toLocaleString()} kg）</dd>
-                <dt className="text-zinc-500">批次</dt><dd>#{c.batchId}</dd>
-                <dt className="text-zinc-500">受益人</dt><dd>{c.beneficiary || "—"}</dd>
-                <dt className="text-zinc-500">用途</dt><dd>{PURPOSE_LABEL[c.purpose]}</dd>
-                <dt className="text-zinc-500">備註</dt><dd>{c.memo || "—"}</dd>
-                <dt className="text-zinc-500">註銷時間</dt><dd>{new Date(c.retiredAt * 1000).toLocaleString("zh-TW")}</dd>
-                <dt className="text-zinc-500">執行者</dt><dd className="font-mono text-xs break-all">{c.retiredBy}</dd>
-                <dt className="text-zinc-500">交易</dt><dd className="font-mono text-xs break-all">{c.txHash}</dd>
-                <dt className="text-zinc-500">正式文件</dt><dd className="font-mono text-xs break-all">{/^0x0+$/.test(c.documentHash) ? "待營運方回寫 PDF hash" : <><a className="underline" href={`/api/certificates/${c.certId}/pdf`} target="_blank">下載 PDF</a> · {c.documentHash}</>}</dd>
+                <dt className="text-ink-300">數量</dt><dd data-testid="cert-kg">{fmtKg(c.amountKg)}（{c.amountKg.toLocaleString()} kg）</dd>
+                <dt className="text-ink-300">批次</dt><dd>#{c.batchId}</dd>
+                <dt className="text-ink-300">受益人</dt><dd>{c.beneficiary || "—"}</dd>
+                <dt className="text-ink-300">用途</dt><dd>{PURPOSE_LABEL[c.purpose]}</dd>
+                <dt className="text-ink-300">備註</dt><dd>{c.memo || "—"}</dd>
+                <dt className="text-ink-300">註銷時間</dt><dd>{new Date(c.retiredAt * 1000).toLocaleString("zh-TW")}</dd>
+                <dt className="text-ink-300">執行者</dt><dd className="font-mono text-xs break-all">{c.retiredBy}</dd>
+                <dt className="text-ink-300">交易</dt><dd className="font-mono text-xs break-all">{c.txHash}</dd>
+                <dt className="text-ink-300">正式文件</dt><dd className="font-mono text-xs break-all">{/^0x0+$/.test(c.documentHash) ? "待營運方回寫 PDF hash" : <><a className="underline" href={`/api/certificates/${c.certId}/pdf`} target="_blank">下載 PDF</a> · {c.documentHash}</>}</dd>
               </dl>
             </Card>
           ))}

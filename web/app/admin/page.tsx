@@ -47,28 +47,28 @@ export default function AdminPage() {
     finally { setBusy(null); }
   }
   const post = (url: string, body?: unknown) => fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-  const Bool = ({ v }: { v: boolean | null }) => v === null ? <span className="text-zinc-400">—</span> : <span className={v ? "text-emerald-600" : "font-semibold text-red-600"}>{v ? "✓" : "✗"}</span>;
+  const Bool = ({ v }: { v: boolean | null }) => v === null ? <span className="text-ink-300">—</span> : <span className={v ? "text-tide" : "font-semibold text-down"}>{v ? "✓" : "✗"}</span>;
 
   const pendingKyc = kyc.filter((r) => r.status === "pending");
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2">{tabs.map((t) => <button key={t} onClick={() => setTab(t)} className={`rounded-lg px-3 py-1.5 text-sm ${tab === t ? "bg-emerald-600 text-white" : "border border-zinc-300 dark:border-zinc-700"}`}>{t}</button>)}</div>
+      <div className="flex gap-2">{tabs.map((t) => <button key={t} onClick={() => setTab(t)} className={`rounded-lg px-3 py-1.5 text-sm ${tab === t ? "bg-tide text-white" : "border border-ink-500"}`}>{t}</button>)}</div>
       {msg && <Notice kind={msg.kind}>{msg.text}</Notice>}
 
       {tab === "KYC 審核" && (
         <Card title={`待審核（${pendingKyc.length}）`}>
-          <p className="mb-3 text-xs text-zinc-500">核准 = 身分驗證服務簽發 attestation 並上鏈。正式環境此處為憑證鏈驗證結果，不是人工按鈕。</p>
-          {pendingKyc.length === 0 ? <p className="text-sm text-zinc-500">沒有待審申請。</p> : (
+          <p className="mb-3 text-xs text-ink-300">核准 = 身分驗證服務簽發 attestation 並上鏈。正式環境此處為憑證鏈驗證結果，不是人工按鈕。</p>
+          {pendingKyc.length === 0 ? <p className="text-sm text-ink-300">沒有待審申請。</p> : (
             <ul className="space-y-2 text-sm">
               {pendingKyc.map((r) => (
-                <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800" data-testid="kyc-row">
+                <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-ink-500 p-3" data-testid="kyc-row">
                   <div className="flex-1">
                     <div>{TIER_LABEL[r.tier]} · {r.name || "—"} · {r.idNumberMasked} · {r.email}</div>
-                    <div className="font-mono text-xs text-zinc-500">{r.account}</div>
+                    <div className="font-mono text-xs text-ink-300">{r.account}</div>
                   </div>
                   <Button onClick={() => act("核准", () => post("/api/kyc/decide", { id: r.id, approve: true }))} disabled={!!busy}>核准</Button>
-                  <input className="w-40 rounded-lg border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-950" placeholder="退回原因" value={reason[r.id] ?? ""} onChange={(e) => setReason({ ...reason, [r.id]: e.target.value })} />
+                  <input className="w-40 rounded-lg border border-ink-500 px-2 py-1 text-xs" placeholder="退回原因" value={reason[r.id] ?? ""} onChange={(e) => setReason({ ...reason, [r.id]: e.target.value })} />
                   <Button variant="secondary" onClick={() => act("退回", () => post("/api/kyc/decide", { id: r.id, approve: false, reason: reason[r.id] ?? "" }))} disabled={!!busy}>退回</Button>
                 </li>
               ))}
@@ -76,9 +76,9 @@ export default function AdminPage() {
           )}
           <h3 className="mt-5 mb-2 text-sm font-semibold">歷史</h3>
           <table className="w-full text-xs">
-            <thead className="text-left text-zinc-500"><tr><th className="py-1">時間</th><th>帳戶</th><th>類型</th><th>結果</th><th>處理者</th></tr></thead>
+            <thead className="text-left text-ink-300"><tr><th className="py-1">時間</th><th>帳戶</th><th>類型</th><th>結果</th><th>處理者</th></tr></thead>
             <tbody>{kyc.filter((r) => r.status !== "pending").map((r) => (
-              <tr key={r.id} className="border-t border-zinc-200 dark:border-zinc-800"><td className="py-1">{new Date(r.createdAt).toLocaleString("zh-TW")}</td><td className="font-mono">{r.account.slice(0, 10)}…</td><td>{TIER_LABEL[r.tier]}</td><td>{r.status === "approved" ? "核准" : `退回：${r.reason || "—"}`}</td><td>{r.decidedBy}</td></tr>
+              <tr key={r.id} className="border-t border-ink-500"><td className="py-1">{new Date(r.createdAt).toLocaleString("zh-TW")}</td><td className="font-mono">{r.account.slice(0, 10)}…</td><td>{TIER_LABEL[r.tier]}</td><td>{r.status === "approved" ? "核准" : `退回：${r.reason || "—"}`}</td><td>{r.decidedBy}</td></tr>
             ))}</tbody>
           </table>
         </Card>
@@ -86,15 +86,15 @@ export default function AdminPage() {
 
       {tab === "憑證文件" && (
         <Card title="註銷憑證 PDF 與鏈上雜湊回寫">
-          <p className="mb-3 text-xs text-zinc-500">流程：產生 PDF → 檔案 SHA-256 → 以 DOCUMENT_ROLE 金鑰回寫 <code>documentHash</code>。回寫後不可重新產生。</p>
-          {certs.length === 0 ? <p className="text-sm text-zinc-500">尚無憑證。</p> : (
+          <p className="mb-3 text-xs text-ink-300">流程：產生 PDF → 檔案 SHA-256 → 以 DOCUMENT_ROLE 金鑰回寫 <code>documentHash</code>。回寫後不可重新產生。</p>
+          {certs.length === 0 ? <p className="text-sm text-ink-300">尚無憑證。</p> : (
             <table className="w-full text-sm">
-              <thead className="text-left text-zinc-500"><tr><th className="py-1">#</th><th>受益人</th><th>數量</th><th>用途</th><th>PDF</th><th>鏈上</th><th></th></tr></thead>
+              <thead className="text-left text-ink-300"><tr><th className="py-1">#</th><th>受益人</th><th>數量</th><th>用途</th><th>PDF</th><th>鏈上</th><th></th></tr></thead>
               <tbody>{certs.map((c) => (
-                <tr key={c.certId} className="border-t border-zinc-200 dark:border-zinc-800" data-testid="cert-row">
+                <tr key={c.certId} className="border-t border-ink-500" data-testid="cert-row">
                   <td className="py-2">{c.certId}</td><td>{c.beneficiary || "—"}</td><td>{fmtKg(c.amountKg)}</td><td>{PURPOSE_LABEL[c.purpose]}</td>
                   <td className="font-mono text-xs">{c.pdfHash ? <a className="underline" href={`/api/certificates/${c.certId}/pdf`} target="_blank">{c.pdfHash.slice(0, 12)}…</a> : "—"}</td>
-                  <td className="font-mono text-xs">{c.onchainHash ? `${c.onchainHash.slice(0, 12)}…` : "—"} {c.anchored && <span className="text-emerald-600">✓</span>}</td>
+                  <td className="font-mono text-xs">{c.onchainHash ? `${c.onchainHash.slice(0, 12)}…` : "—"} {c.anchored && <span className="text-tide">✓</span>}</td>
                   <td className="text-right">
                     {!c.onchainHash && <Button variant="secondary" onClick={() => act(`產生 PDF #${c.certId}`, () => post(`/api/certificates/${c.certId}/pdf`))} disabled={!!busy}>{c.pdfHash ? "重新產生" : "產生 PDF"}</Button>}
                     {c.pdfHash && !c.onchainHash && <span className="ml-2"><Button onClick={() => act(`回寫 #${c.certId}`, () => post(`/api/certificates/${c.certId}/anchor`))} disabled={!!busy}>回寫鏈上</Button></span>}
@@ -110,9 +110,9 @@ export default function AdminPage() {
         <div className="grid gap-4 md:grid-cols-2">
           <Card title="角色矩陣" className="md:col-span-2">
             <table className="w-full text-sm">
-              <thead className="text-left text-zinc-500"><tr><th className="py-1">合約</th><th>admin = Timelock</th><th>sovereign = 國家 Safe</th><th>operator = 營運 Safe</th></tr></thead>
+              <thead className="text-left text-ink-300"><tr><th className="py-1">合約</th><th>admin = Timelock</th><th>sovereign = 國家 Safe</th><th>operator = 營運 Safe</th></tr></thead>
               <tbody>{gov.matrix.map((m) => (
-                <tr key={m.name} className="border-t border-zinc-200 dark:border-zinc-800"><td className="py-1">{m.name} <span className="font-mono text-xs text-zinc-400">{m.address.slice(0, 8)}…</span></td><td><Bool v={m.admin} /></td><td><Bool v={m.sovereign} /></td><td><Bool v={m.operator} /></td></tr>
+                <tr key={m.name} className="border-t border-ink-500"><td className="py-1">{m.name} <span className="font-mono text-xs text-ink-300">{m.address.slice(0, 8)}…</span></td><td><Bool v={m.admin} /></td><td><Bool v={m.sovereign} /></td><td><Bool v={m.operator} /></td></tr>
               ))}</tbody>
             </table>
             <p className="mt-2 text-xs">
@@ -132,17 +132,17 @@ export default function AdminPage() {
           </Card>
           <Card title={`Timelock（延遲 ${gov.timelock.delay / 3600} 小時）`} className="md:col-span-2">
             <p className="text-xs">proposer <Bool v={gov.timelock.proposer} /> executor <Bool v={gov.timelock.executor} /> canceller <Bool v={gov.timelock.canceller} /> = 國家 Safe</p>
-            {gov.timelock.operations.length === 0 ? <p className="mt-2 text-sm text-zinc-500">沒有排程中的操作。</p> : (
+            {gov.timelock.operations.length === 0 ? <p className="mt-2 text-sm text-ink-300">沒有排程中的操作。</p> : (
               <table className="mt-2 w-full text-xs">
-                <thead className="text-left text-zinc-500"><tr><th className="py-1">操作 id</th><th>目標</th><th>狀態</th><th>可執行時間</th></tr></thead>
+                <thead className="text-left text-ink-300"><tr><th className="py-1">操作 id</th><th>目標</th><th>狀態</th><th>可執行時間</th></tr></thead>
                 <tbody>{gov.timelock.operations.map((o) => (
-                  <tr key={o.id} className="border-t border-zinc-200 dark:border-zinc-800"><td className="py-1 font-mono">{o.id.slice(0, 14)}…</td><td className="font-mono">{o.target.slice(0, 10)}… <span className="text-zinc-400">{o.data.slice(0, 10)}</span></td><td>{o.state}</td><td>{o.readyAt > 1 ? new Date(o.readyAt * 1000).toLocaleString("zh-TW") : "—"}</td></tr>
+                  <tr key={o.id} className="border-t border-ink-500"><td className="py-1 font-mono">{o.id.slice(0, 14)}…</td><td className="font-mono">{o.target.slice(0, 10)}… <span className="text-ink-300">{o.data.slice(0, 10)}</span></td><td>{o.state}</td><td>{o.readyAt > 1 ? new Date(o.readyAt * 1000).toLocaleString("zh-TW") : "—"}</td></tr>
                 ))}</tbody>
               </table>
             )}
           </Card>
         </div>
-      ) : <p className="text-sm text-zinc-500">讀取中…</p>)}
+      ) : <p className="text-sm text-ink-300">讀取中…</p>)}
     </div>
   );
 }

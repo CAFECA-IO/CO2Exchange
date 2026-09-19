@@ -45,22 +45,58 @@ export async function poolSpotPricePerTonne(): Promise<number | null> {
   return Number(perTonne6) / 1e6;
 }
 
-export async function listOrders(): Promise<Order[]> {
+/// 掛單簿。從最新的 orderId 往回掃，收滿 limit 筆有效單就停。
+///
+/// 原本是從 1 一路掃到 nextOrderId、每筆三次 contract read。鋪了一年的模擬資料
+/// 之後有上千筆單，這條路要三秒以上。改成往回掃 + 分批平行讀，並限制掃描深度。
+export async function listOrders(limit = 60, maxScan = 400): Promise<Order[]> {
   const d = deployment();
-  const next = await publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "nextOrderId" });
+  const next = Number(await publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "nextOrderId" }));
+  const ids: number[] = [];
+  for (let i = next - 1; i >= 1 && ids.length < maxScan; i--) ids.push(i);
+
   const out: Order[] = [];
-  for (let i = 1n; i < next; i++) {
-    const o = await publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "orderOf", args: [i] });
-    if (!o.active) continue;
-    const b = await publicClient.readContract({ address: d.carbonCredit1155, abi: creditAbi, functionName: "batchOf", args: [o.batchId] });
-    const p = await publicClient.readContract({ address: d.carbonRegistry, abi: registryAbi, functionName: "projectOf", args: [b.projectId] });
-    out.push({
-      orderId: Number(i), seller: o.seller, batchId: Number(o.batchId), remainingKg: Number(o.remainingKg),
-      pricePerTonne: o.pricePerTonne.toString(), minFillKg: Number(o.minFillKg),
-      project: { name: p.name, methodology: p.methodology, location: p.location }, vintageYear: b.vintageYear,
-    });
+  const CHUNK = 40;
+  for (let i = 0; i < ids.length && out.length < limit; i += CHUNK) {
+    const slice = ids.slice(i, i + CHUNK);
+    const orders = await Promise.all(
+      slice.map((id) =>
+        publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "orderOf", args: [BigInt(id)] })
+          .then((o) => ({ id, o })),
+      ),
+    );
+    const active = orders.filter((x) => x.o.active && x.o.remainingKg > 0n);
+    if (active.length === 0) continue;
+
+    // 批次與專案資料會大量重複，查過就快取
+    const batches = await Promise.all(
+      [...new Set(active.map((x) => x.o.batchId))].map((bid) =>
+        publicClient.readContract({ address: d.carbonCredit1155, abi: creditAbi, functionName: "batchOf", args: [bid] })
+          .then((b) => [bid.toString(), b] as const),
+      ),
+    );
+    const byBatch = new Map(batches);
+    const projects = await Promise.all(
+      [...new Set(batches.map(([, b]) => b.projectId))].map((pid) =>
+        publicClient.readContract({ address: d.carbonRegistry, abi: registryAbi, functionName: "projectOf", args: [pid] })
+          .then((p) => [pid.toString(), p] as const),
+      ),
+    );
+    const byProject = new Map(projects);
+
+    for (const { id, o } of active) {
+      if (out.length >= limit) break;
+      const b = byBatch.get(o.batchId.toString())!;
+      const p = byProject.get(b.projectId.toString())!;
+      out.push({
+        orderId: id, seller: o.seller, batchId: Number(o.batchId), remainingKg: Number(o.remainingKg),
+        pricePerTonne: o.pricePerTonne.toString(), minFillKg: Number(o.minFillKg),
+        project: { name: p.name, methodology: p.methodology, location: p.location }, vintageYear: b.vintageYear,
+      });
+    }
   }
-  return out;
+  // 掛單簿由低價往高價排（最佳賣價在前）
+  return out.sort((a, b) => Number(BigInt(a.pricePerTonne) - BigInt(b.pricePerTonne)));
 }
 
 export async function holdings(account: Address) {

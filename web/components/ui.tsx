@@ -12,7 +12,7 @@ export function Card({ title, children, className = "", action }: { title?: stri
   );
 }
 
-export function Button({ children, variant = "primary", ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "ghost" }) {
+export function Button({ children, variant = "primary", className = "", ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "ghost" }) {
   const base =
     "inline-flex items-center justify-center rounded-[--radius-ctl] px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50";
   const cls =
@@ -21,7 +21,7 @@ export function Button({ children, variant = "primary", ...rest }: React.ButtonH
       : variant === "ghost"
         ? "text-ink-200 hover:bg-ink-600 hover:text-ink-50"
         : "border border-ink-500 bg-ink-600 text-ink-50 hover:border-tide/60 hover:bg-ink-500";
-  return <button className={`${base} ${cls}`} {...rest}>{children}</button>;
+  return <button className={`${base} ${cls} ${className}`} {...rest}>{children}</button>;
 }
 
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {

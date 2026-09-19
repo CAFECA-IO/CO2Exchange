@@ -48,23 +48,23 @@ export default function KycPage() {
       <Card title="身分狀態">
         {identity ? (
           <dl className="space-y-1 text-sm">
-            <div><dt className="text-zinc-500">等級</dt><dd>{TIER_LABEL[identity.tier]}</dd></div>
-            <div><dt className="text-zinc-500">有效期限</dt><dd>{identity.expiry ? new Date(identity.expiry * 1000).toLocaleDateString("zh-TW") : "—"}</dd></div>
-            <div><dt className="text-zinc-500">狀態</dt><dd>{identity.frozen ? "已凍結" : active ? "有效" : "未驗證 / 已到期"}</dd></div>
-            <div><dt className="text-zinc-500">身分雜湊</dt><dd className="font-mono text-xs break-all">{identity.identityHash}</dd></div>
+            <div><dt className="text-ink-300">等級</dt><dd>{TIER_LABEL[identity.tier]}</dd></div>
+            <div><dt className="text-ink-300">有效期限</dt><dd>{identity.expiry ? new Date(identity.expiry * 1000).toLocaleDateString("zh-TW") : "—"}</dd></div>
+            <div><dt className="text-ink-300">狀態</dt><dd>{identity.frozen ? "已凍結" : active ? "有效" : "未驗證 / 已到期"}</dd></div>
+            <div><dt className="text-ink-300">身分雜湊</dt><dd className="font-mono text-xs break-all">{identity.identityHash}</dd></div>
             {identity.application && (
-              <div><dt className="text-zinc-500">最近申請</dt><dd data-testid="kyc-application">
+              <div><dt className="text-ink-300">最近申請</dt><dd data-testid="kyc-application">
                 {identity.application.status === "pending" ? "審核中" : identity.application.status === "approved" ? "已核准" : `已退回：${identity.application.reason || "—"}`}
               </dd></div>
             )}
           </dl>
-        ) : <p className="text-sm text-zinc-500">讀取中…</p>}
+        ) : <p className="text-sm text-ink-300">讀取中…</p>}
         {active && <div className="mt-4 flex gap-2"><Link href="/trade"><Button>前往購買與註銷</Button></Link>{identity?.tier === TIER.Corporate && <Link href="/enterprise"><Button variant="secondary">企業功能</Button></Link>}</div>}
         {identity?.application?.status === "pending" && <div className="mt-3"><Button variant="secondary" onClick={() => { refresh(); refreshTier(); }}>重新整理</Button></div>}
       </Card>
 
       <Card title="以政府憑證驗證身分">
-        <p className="mb-3 text-xs text-zinc-500">
+        <p className="mb-3 text-xs text-ink-300">
           正式環境：此步驟以工商憑證（法人）或自然人憑證 / TW FidO（個人）對帳戶地址簽章，由身分驗證服務驗證憑證鏈後簽發 attestation。
           Phase 0 只檢查格式並模擬簽發。鏈上只存雜湊，不存個資。
         </p>

@@ -115,7 +115,7 @@ export default function EnterprisePage() {
         </Card>
 
         <Card title="申請核發額度（上傳 ISO 14064-3 查驗報告）">
-          {projects.length === 0 ? <p className="text-sm text-zinc-500">先登錄專案。</p> : (
+          {projects.length === 0 ? <p className="text-sm text-ink-300">先登錄專案。</p> : (
             <form className="space-y-3" onSubmit={submitIssuance}>
               <Field label="專案">
                 <select className={inputCls} value={rf.projectId} onChange={(e) => setRf({ ...rf, projectId: e.target.value })} required>
@@ -137,12 +137,12 @@ export default function EnterprisePage() {
       </div>
 
       <Card title="我的專案與核發申請">
-        {projects.length === 0 ? <p className="text-sm text-zinc-500">尚無專案。</p> : (
+        {projects.length === 0 ? <p className="text-sm text-ink-300">尚無專案。</p> : (
           <ul className="space-y-2 text-sm">
             {projects.map((p) => (
-              <li key={p.projectId} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
-                <div className="font-medium">#{p.projectId} {p.name} <span className="text-xs text-zinc-500">{p.methodology} · {p.location}{!p.active && " · 已停用"}</span></div>
-                <ul className="mt-1 space-y-1 text-xs text-zinc-600 dark:text-zinc-400">
+              <li key={p.projectId} className="rounded-lg border border-ink-500 p-3">
+                <div className="font-medium">#{p.projectId} {p.name} <span className="text-xs text-ink-300">{p.methodology} · {p.location}{!p.active && " · 已停用"}</span></div>
+                <ul className="mt-1 space-y-1 text-xs text-ink-300">
                   {issuances.filter((i) => i.projectId === p.projectId).map((i) => (
                     <li key={i.id} data-testid="issuance-row">
                       {i.monitoringStart} ~ {i.monitoringEnd} · {fmtKg(i.amountKg)} · <a className="underline" href={`/api/uploads/${i.reportFile}`} target="_blank">{i.reportName}</a> · <b>{statusLabel[i.status]}</b>
@@ -157,19 +157,19 @@ export default function EnterprisePage() {
       </Card>
 
       <Card title="我的額度批次：掛單或入池">
-        {holdings.length === 0 ? <p className="text-sm text-zinc-500">尚未持有額度。</p> : (
+        {holdings.length === 0 ? <p className="text-sm text-ink-300">尚未持有額度。</p> : (
           <ul className="space-y-3 text-sm">
             {holdings.map((h) => {
               const f = listForm[h.batchId] ?? { kg: String(h.kg), price: "800", minFill: "100" };
               return (
-                <li key={h.batchId} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800" data-testid="holding-row">
+                <li key={h.batchId} className="rounded-lg border border-ink-500 p-3" data-testid="holding-row">
                   <div className="mb-2 font-medium">批次 #{h.batchId} · {h.project} · {h.vintageYear} · 持有 {fmtKg(h.kg)}</div>
                   <div className="flex flex-wrap items-end gap-2">
                     <Field label="掛單 kg"><input className={`${inputCls} w-28`} type="number" value={f.kg} onChange={(e) => setListForm({ ...listForm, [h.batchId]: { ...f, kg: e.target.value } })} /></Field>
                     <Field label="mTWD / 噸"><input className={`${inputCls} w-28`} type="number" value={f.price} onChange={(e) => setListForm({ ...listForm, [h.batchId]: { ...f, price: e.target.value } })} /></Field>
                     <Field label="最小成交 kg"><input className={`${inputCls} w-28`} type="number" value={f.minFill} onChange={(e) => setListForm({ ...listForm, [h.batchId]: { ...f, minFill: e.target.value } })} /></Field>
                     <Button onClick={() => list(h)} disabled={!!busy}>掛單</Button>
-                    <span className="mx-2 text-zinc-400">|</span>
+                    <span className="mx-2 text-ink-300">|</span>
                     <Field label="入池 kg"><input className={`${inputCls} w-28`} type="number" value={depositKg[h.batchId] ?? String(h.kg)} onChange={(e) => setDepositKg({ ...depositKg, [h.batchId]: e.target.value })} /></Field>
                     <Button variant="secondary" onClick={() => deposit(h)} disabled={!!busy}>入池換 CCT</Button>
                   </div>
@@ -181,10 +181,10 @@ export default function EnterprisePage() {
       </Card>
 
       <Card title="我的掛單">
-        {orders.length === 0 ? <p className="text-sm text-zinc-500">沒有進行中的掛單。</p> : (
+        {orders.length === 0 ? <p className="text-sm text-ink-300">沒有進行中的掛單。</p> : (
           <ul className="space-y-2 text-sm">
             {orders.map((o) => (
-              <li key={o.orderId} className="flex items-center gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+              <li key={o.orderId} className="flex items-center gap-3 rounded-lg border border-ink-500 p-3">
                 <span className="flex-1">掛單 #{o.orderId} · 批次 #{o.batchId} · 剩餘 {fmtKg(o.remainingKg)} · {fmtTwd(o.pricePerTonne)} mTWD / 噸</span>
                 <Button variant="secondary" onClick={() => cancel(o)} disabled={!!busy}>取消</Button>
               </li>

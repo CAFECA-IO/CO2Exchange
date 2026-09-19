@@ -5,10 +5,11 @@ import { Delta } from "./ui";
 import type { Ticker } from "@/lib/server/ticker";
 
 const RANGES = [
-  { label: "6H", hours: 6 },
   { label: "24H", hours: 24 },
   { label: "7D", hours: 24 * 7 },
   { label: "30D", hours: 24 * 30 },
+  { label: "90D", hours: 24 * 90 },
+  { label: "1Y", hours: 24 * 365 },
 ] as const;
 
 const fmtPrice = (v: number | null) =>
