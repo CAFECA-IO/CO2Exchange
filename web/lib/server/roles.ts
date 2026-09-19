@@ -41,12 +41,36 @@ export function isChainUnreachable(e: unknown): boolean {
   return false;
 }
 
+/// eth_call 回 "0x" 代表那個地址上根本沒有合約 —— 幾乎都是部署檔與鏈對不上：
+/// 鏈重開了沒重新部署，或部署檔指向另一條鏈。分出來講清楚，不要丟 viem 的 stack trace。
+export function isDeploymentMismatch(e: unknown): boolean {
+  for (let cur: unknown = e, i = 0; cur && i < 8; i++) {
+    const m = cur instanceof Error ? cur.message : "";
+    if (/returned no data \("0x"\)|Cannot decode zero data/i.test(m)) return true;
+    cur = (cur as { cause?: unknown } | null)?.cause;
+  }
+  return false;
+}
+
 export function handle(e: unknown): Response {
   if (e instanceof HttpError) return Response.json({ error: e.message }, { status: e.status });
   if (isChainUnreachable(e)) {
     const rpc = process.env.RPC_URL ?? "http://127.0.0.1:8545";
     return Response.json(
       { error: `無法連線到區塊鏈節點（${rpc}）。請確認節點已啟動，且 web/.env.local 的 RPC_URL / CHAIN_ID 指向正確的鏈。`, code: "CHAIN_UNREACHABLE" },
+      { status: 503 },
+    );
+  }
+  if (isDeploymentMismatch(e)) {
+    const rpc = process.env.RPC_URL ?? "http://127.0.0.1:8545";
+    return Response.json(
+      {
+        error:
+          `部署檔與鏈對不上：合約地址上沒有程式碼（${rpc}）。` +
+          `通常是鏈重開後沒有重新部署。請重跑 forge script script/DeployV4.s.sol --rpc-url anvil --broadcast，` +
+          `並確認 CHAIN_ID 與 deployments/<chainId>.json 對應到同一條鏈。`,
+        code: "DEPLOYMENT_MISMATCH",
+      },
       { status: 503 },
     );
   }

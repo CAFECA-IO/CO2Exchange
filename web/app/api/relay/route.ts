@@ -1,6 +1,7 @@
 import { BaseError, ContractFunctionRevertedError, isHex, type Hex } from "viem";
 import { passkeyAccountAbi } from "@/lib/abis";
 import { isAddress, publicClient, relayerClient } from "@/lib/server/chain";
+import { handle, isChainUnreachable, isDeploymentMismatch } from "@/lib/server/roles";
 
 type Call = { target: string; value: string; data: string };
 
@@ -21,6 +22,8 @@ export async function POST(req: Request) {
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
     return Response.json({ txHash: hash, status: receipt.status, gasUsed: receipt.gasUsed.toString() });
   } catch (e) {
+    // 環境問題（節點連不上、部署檔對不上）先分流，不要被當成合約 revert
+    if (isChainUnreachable(e) || isDeploymentMismatch(e)) return handle(e);
     let reason = e instanceof Error ? e.message : String(e);
     if (e instanceof BaseError) {
       const r = e.walk((x) => x instanceof ContractFunctionRevertedError) as ContractFunctionRevertedError | null;

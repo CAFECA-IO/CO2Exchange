@@ -24,13 +24,27 @@ export const identityVerifier = privateKeyToAccount((process.env.IDENTITY_VERIFI
 export const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
 export const relayerClient = createWalletClient({ chain, account: relayer, transport: http(RPC_URL) });
 
-let cached: Deployment | undefined;
+/// 以檔案 mtime 當快取鍵：重新部署會改寫這個檔，下一次呼叫就自動重讀。
+///
+/// 原本只快取一次，結果重新部署之後伺服器還抓著舊地址，對著鏈上不存在的合約發
+/// eth_call，回 "0x"，錯誤訊息完全看不出是這個原因。每次多一個 statSync
+/// 換掉整類問題，划算。
+let cached: { mtimeMs: number; file: string; value: Deployment } | undefined;
+
+export function deploymentFile(): string {
+  return process.env.DEPLOYMENT_FILE ?? path.resolve(process.cwd(), "..", "deployments", `${CHAIN_ID}.json`);
+}
+
 export function deployment(): Deployment {
-  if (cached) return cached;
-  const file = process.env.DEPLOYMENT_FILE ?? path.resolve(process.cwd(), "..", "deployments", `${CHAIN_ID}.json`);
-  if (!fs.existsSync(file)) throw new Error(`找不到部署檔 ${file}，請先執行 forge script script/Deploy.s.sol --rpc-url anvil --broadcast`);
-  cached = JSON.parse(fs.readFileSync(file, "utf8")) as Deployment;
-  return cached;
+  const file = deploymentFile();
+  if (!fs.existsSync(file)) {
+    throw new Error(`找不到部署檔 ${file}，請先執行 forge script script/DeployV4.s.sol --rpc-url anvil --broadcast`);
+  }
+  const { mtimeMs } = fs.statSync(file);
+  if (cached && cached.file === file && cached.mtimeMs === mtimeMs) return cached.value;
+  const value = JSON.parse(fs.readFileSync(file, "utf8")) as Deployment;
+  cached = { mtimeMs, file, value };
+  return value;
 }
 
 export function isAddress(x: unknown): x is Address {

@@ -9,6 +9,7 @@ import { handle, requireRole } from "@/lib/server/roles";
 export async function GET(req: Request) {
   const account = new URL(req.url).searchParams.get("account");
   if (!isAddress(account)) return Response.json({ error: "account" }, { status: 400 });
+  try {
   const id = await publicClient.readContract({ address: deployment().kycRegistry, abi: kycRegistryAbi, functionName: "identityOf", args: [account] });
   const reqs = all<KycRequest>("kyc-requests").filter((r) => r.account.toLowerCase() === account.toLowerCase());
   const latest = reqs.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
@@ -16,6 +17,7 @@ export async function GET(req: Request) {
     tier: id.tier, expiry: Number(id.expiry), frozen: id.frozen, jurisdiction: id.jurisdiction, identityHash: id.identityHash,
     application: latest ? { id: latest.id, status: latest.status, tier: latest.tier, reason: latest.reason, createdAt: latest.createdAt } : null,
   });
+  } catch (e) { return handle(e); }
 }
 
 /// POST { account, tier, idNumber, name } → 建立申請。KYC_AUTO_APPROVE=1 時直接簽發（demo / e2e）。
