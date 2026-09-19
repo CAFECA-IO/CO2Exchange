@@ -39,6 +39,9 @@ mock               MockTWD                6 decimals 結算幣；正式由金融
 Safe / Timelock 並由部署者 `renounceRole` —— 部署結束時沒有任何 EOA 持有治理角色。保留的服務角色：身分驗證服務簽章、查驗機構簽章、
 MockTWD 鑄幣（demo faucet）。
 
+操作工具 `script/govern.sh`（cast 包裝）：`status` 檢查權限狀態、`build <preset>` 組 calldata、`timelock schedule|execute|cancel|state`、
+`safe national|operator hash|exec`、`sign`、Safe owner 管理。完整 SOP（緊急凍結、升級、簽章者管理、移轉驗收）見 project 文件「CO2Exchange 治理操作手冊」。
+
 環境變數：`NATIONAL_SAFE` / `OPERATOR_SAFE`（既有 Safe 地址）或 `NATIONAL_OWNERS`（逗號分隔）/ `NATIONAL_THRESHOLD`、
 `OPERATOR_OWNERS` / `OPERATOR_THRESHOLD`、`TIMELOCK_DELAY`（秒）。Phase 0 預設：國家 Safe = Anvil 帳戶 5,6,7（2-of-3），營運 Safe = 帳戶 8,9（1-of-2）。
 
