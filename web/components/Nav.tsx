@@ -3,6 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { useAccount } from "./AccountProvider";
+import { ThemeToggle } from "./ThemeToggle";
 
 const base = [["/", "首頁"], ["/kyc", "身分驗證"], ["/trade", "購買與註銷"], ["/certificates", "我的憑證"]] as const;
 
@@ -38,6 +39,7 @@ export function Nav() {
           ))}
         </nav>
         <div className="ml-auto flex items-center gap-3 text-xs text-ink-300">
+          <ThemeToggle />
           {credential && (
             <span className="tnum font-mono text-ink-200" title={credential.address}>
               {credential.address.slice(0, 6)}…{credential.address.slice(-4)}

@@ -2,20 +2,28 @@
 
 /* ──────────────────────────────────────────────────────────────────────
    TideBit-DeFi 設計語彙（取自 CAFECA-IO/TideBit-DeFi 的 tailwind.config.js
-   與 src/constants/display.ts）。深色優先的交易終端配色。
+   與 src/constants/display.ts）。深色是本體，淺色是另外挑過的一套。
+
+   淺色不是把深色反轉來的。深色的 #17BF88 放到白底上對比只有 2.37:1，
+   讀不出來，所以淺色的漲跌、主色、文字都是各自量過對比再選的：
+     漲 #0E9B6C / 跌 #D14343  → 對比 ≥3:1，彼此 ΔE 29（正常視覺）
+     主色 #0E7C94             → 白底 4.85:1（WCAG AA 文字）
+     弱化文字 #6B7178         → 白底 4.93:1
 
    注意 up / down 這組綠紅：在色盲（deuteranopia）下兩者的 ΔE 只有 4.2，
    遠低於可辨識門檻。所以本專案規定「漲跌永遠不能只靠顏色」——
    數字一律帶正負號、加上 ▲ / ▼，K 線則用實心（跌）對空心（漲）的傳統畫法，
    不看顏色也讀得出來。
+
+   分隔線在兩個模式各只有一個色（ink-500）。深色模式下絕不用亮白線。
    ────────────────────────────────────────────────────────────────────── */
 @theme {
-  /* 表面 */
+  /* 表面（深色為預設值） */
   --color-ink-900: #121214; /* 最深：頁面底 */
   --color-ink-800: #161719; /* 頁面背景 */
   --color-ink-700: #1e2329; /* 卡片 / 面板 */
   --color-ink-600: #242a31; /* 抬升 / hover */
-  --color-ink-500: #2a3139; /* 邊框／分隔線：深色模式下唯一該用的線色 */
+  --color-ink-500: #2a3139; /* 邊框／分隔線：唯一該用的線色 */
 
   /* 文字 */
   --color-ink-50: #f2f2f2; /* 主要文字 */
@@ -37,8 +45,54 @@
   --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
 }
 
-html {
+:root {
   color-scheme: dark;
+}
+
+/* 淺色的一整套值 —— 作業系統設為淺色、且使用者沒有手動指定深色時採用。 */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+
+    --color-ink-900: #ffffff;
+    --color-ink-800: #f4f5f7; /* 頁面背景：不用純白，減少眩光 */
+    --color-ink-700: #ffffff; /* 卡片 / 面板 */
+    --color-ink-600: #edeff2; /* 抬升 / hover */
+    --color-ink-500: #dde1e6; /* 邊框／分隔線 */
+
+    --color-ink-50: #161719;
+    --color-ink-200: #4a5159;
+    --color-ink-300: #6b7178;
+
+    --color-tide: #0e7c94;
+    --color-tide-dim: #12849e;
+    --color-up: #0e9b6c;
+    --color-up-soft: #17bf88;
+    --color-down: #d14343;
+    --color-warn: #a16207;
+  }
+}
+
+/* 使用者手動選淺色時，不管作業系統怎麼設都套用。 */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-ink-900: #ffffff;
+  --color-ink-800: #f4f5f7;
+  --color-ink-700: #ffffff;
+  --color-ink-600: #edeff2;
+  --color-ink-500: #dde1e6;
+
+  --color-ink-50: #161719;
+  --color-ink-200: #4a5159;
+  --color-ink-300: #6b7178;
+
+  --color-tide: #0e7c94;
+  --color-tide-dim: #12849e;
+  --color-up: #0e9b6c;
+  --color-up-soft: #17bf88;
+  --color-down: #d14343;
+  --color-warn: #a16207;
 }
 
 body {
@@ -51,20 +105,11 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* K 線 / 面積圖的漸層填色，對應 TideBit 的 greenLinear / redLinear */
-.fill-up-grad {
-  background: linear-gradient(180deg, #1ae2a0cc 0%, #1ae2a000 100%);
-}
-.fill-down-grad {
-  background: linear-gradient(180deg, #e86d6dcc 0%, #e86d6d00 100%);
-}
-
 ::selection {
   background: var(--color-tide);
-  color: #06232a;
+  color: var(--color-ink-900);
 }
 
-/* 捲軸配合深色 */
 * {
   scrollbar-color: var(--color-ink-500) transparent;
   scrollbar-width: thin;

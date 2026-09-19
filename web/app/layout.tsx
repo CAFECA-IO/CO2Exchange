@@ -24,6 +24,15 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           href="https://fonts.googleapis.com/css2?family=Barlow:wght@500;600;700&family=Inter:wght@400;500;600&display=swap"
           rel="stylesheet"
         />
+        {/*
+          在第一次繪製之前把 data-theme 補上，否則手動選了淺色的人會先看到
+          一閃的深色。沒存過選擇就什麼都不做，交給 prefers-color-scheme。
+        */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{var t=localStorage.getItem("co2x.theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}`,
+          }}
+        />
       </head>
       <body className="min-h-full bg-ink-800 font-sans text-ink-50">
         <AccountProvider>

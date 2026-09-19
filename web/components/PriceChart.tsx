@@ -8,11 +8,6 @@ import type { Candle } from "@/lib/server/ticker";
 /// 傳統日本 K 線畫法——**漲為空心、跌為實心**。不看顏色，只看實心與否也讀得出方向。
 /// 另外提供「明細」表格檢視，任何一根 K 棒的數值都不必靠 hover 才能取得。
 
-const UP = "#17BF88";
-const DOWN = "#E86D6D";
-const GRID = "#2A3139";
-const AXIS = "#8B8E91";
-
 type Props = {
   candles: Candle[];
   /** 參考線：政府碳費費率（每噸）。畫成一條水平線當經濟錨點。 */
@@ -167,8 +162,8 @@ export function PriceChart({ candles, referencePrice, referenceLabel = "碳費�
           {/* 格線：實線細髮絲，比表面亮一階 */}
           {g.ticks.map((p) => (
             <g key={p}>
-              <line x1={padL} x2={W - padR} y1={g.y(p)} y2={g.y(p)} stroke={GRID} strokeWidth={1} />
-              <text x={W - padR + 6} y={g.y(p) + 4} fill={AXIS} fontSize={11} className="tnum">
+              <line x1={padL} x2={W - padR} y1={g.y(p)} y2={g.y(p)} className="stroke-ink-500" strokeWidth={1} />
+              <text x={W - padR + 6} y={g.y(p) + 4} fontSize={11} className="tnum fill-ink-300">
                 {fmtPrice(p)}
               </text>
             </g>
@@ -177,8 +172,8 @@ export function PriceChart({ candles, referencePrice, referenceLabel = "碳費�
           {/* 碳費參考線：位置本身就是資訊，不靠顏色 */}
           {referencePrice != null && g.refInScale && (
             <g>
-              <line x1={padL} x2={W - padR} y1={g.y(referencePrice)} y2={g.y(referencePrice)} stroke="#F9C53D" strokeWidth={1} strokeOpacity={0.8} />
-              <text x={padL + 4} y={g.y(referencePrice) - 5} fill="#F9C53D" fontSize={11}>
+              <line x1={padL} x2={W - padR} y1={g.y(referencePrice)} y2={g.y(referencePrice)} className="stroke-warn" strokeWidth={1} strokeOpacity={0.8} />
+              <text x={padL + 4} y={g.y(referencePrice) - 5} fontSize={11} className="fill-warn">
                 {referenceLabel} {fmtPrice(referencePrice)}
               </text>
             </g>
@@ -187,20 +182,20 @@ export function PriceChart({ candles, referencePrice, referenceLabel = "碳費�
           {/* K 棒：漲=空心、跌=實心 */}
           {candles.map((c, i) => {
             const up = c.c >= c.o;
-            const color = up ? UP : DOWN;
+            const stroke = up ? "stroke-up" : "stroke-down";
+            const fill = up ? "fill-up" : "fill-down";
             const bodyTop = g.y(Math.max(c.o, c.c));
             const bodyBot = g.y(Math.min(c.o, c.c));
             const h = Math.max(1, bodyBot - bodyTop);
             return (
               <g key={c.t} opacity={hover == null || hover === i ? 1 : 0.55}>
-                <line x1={g.x(i)} x2={g.x(i)} y1={g.y(c.h)} y2={g.y(c.l)} stroke={color} strokeWidth={1} />
+                <line x1={g.x(i)} x2={g.x(i)} y1={g.y(c.h)} y2={g.y(c.l)} className={stroke} strokeWidth={1} />
                 <rect
                   x={g.x(i) - g.bodyW / 2}
                   y={bodyTop}
                   width={g.bodyW}
                   height={h}
-                  fill={up ? "none" : color}
-                  stroke={color}
+                  className={`${stroke} ${up ? "fill-none" : fill}`}
                   strokeWidth={1.5}
                 />
                 {/* 成交量副圖，共用 x 軸（不是雙 y 軸） */}
@@ -209,7 +204,7 @@ export function PriceChart({ candles, referencePrice, referenceLabel = "碳費�
                   y={height - padB - g.vy(c.v)}
                   width={g.bodyW}
                   height={g.vy(c.v)}
-                  fill={color}
+                  className={fill}
                   fillOpacity={up ? 0.35 : 0.55}
                 />
               </g>
@@ -218,7 +213,7 @@ export function PriceChart({ candles, referencePrice, referenceLabel = "碳費�
 
           {/* 十字準星：讀者瞄的是時間，不是 2px 的線 */}
           {hover != null && (
-            <line x1={g.x(hover)} x2={g.x(hover)} y1={padT} y2={height - padB} stroke={AXIS} strokeWidth={1} strokeOpacity={0.6} />
+            <line x1={g.x(hover)} x2={g.x(hover)} y1={padT} y2={height - padB} className="stroke-ink-300" strokeWidth={1} strokeOpacity={0.6} />
           )}
 
           {/* 時間軸：首、中、末三個標籤就夠，不需要每根都標 */}
@@ -231,7 +226,7 @@ export function PriceChart({ candles, referencePrice, referenceLabel = "碳費�
               const anchor = first ? "start" : last ? "end" : "middle";
               const x = first ? padL : last ? W - padR : g.x(i);
               return (
-                <text key={i} x={x} y={height - 8} fill={AXIS} fontSize={11} textAnchor={anchor}>
+                <text key={i} x={x} y={height - 8} fontSize={11} textAnchor={anchor} className="fill-ink-300">
                   {fmtTime(candles[i].t)}
                 </text>
               );
