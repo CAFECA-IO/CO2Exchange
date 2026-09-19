@@ -117,7 +117,7 @@ Apple / Google 登入：在 `.env.local` 設 `AUTH_GOOGLE_ID/SECRET`、`AUTH_APP
 `e2e/flow.mjs`（自然人：KYC 人工核准 → 購買 → 註銷 → 管理員產生 PDF 並回寫 → 下載）與
 `e2e/enterprise.mjs`（法人 KYC → 專案登錄 → 上傳報告 → 查驗核發 → 掛單 + 入池 → 另一自然人購買並註銷）。需 anvil + DemoFlow + `KYC_AUTO_APPROVE=0` 的伺服器。
 
-## 測試（68）
+## 測試（80）
 
 | 檔案 | 涵蓋 |
 |---|---|
@@ -130,6 +130,24 @@ Apple / Google 登入：在 `.env.local` 設 `AUTH_GOOGLE_ID/SECRET`、`AUTH_APP
 | `Registry.t.sol`（新增） | `DOCUMENT_ROLE`：只有文件服務金鑰能回寫 PDF hash，營運可更換該金鑰 |
 | `SafeGovernance.t.sol` | 真實 Safe v1.4.1 多簽簽章：移轉後 EOA 無角色；國家 Safe 2-of-3 即時凍結 / 暫停 / 撤換營運，單簽被拒；營運 Safe 不能凍結或給角色；升級與主權變更必須經 Timelock 48h，未到期執行失敗；只有國家 Safe 能提案 |
 | `PasskeyAccount.t.sol` | 以 `vm.signP256` 組出完整 WebAuthn 斷言：relayer 代送購買與註銷、重放、竄改、錯誤金鑰、內部 revert、ERC-1271、factory 決定性 |
+| `Fuzz.t.sol`（新增） | 隨機化屬性測試（`bound()`）：掛單成交金額/手續費/庫存正確、minFill 強制、池 backing 恆等、FIFO 先進先出順序、KYC 轉帳規則、註銷不可超過核發量、WebAuthn 邊界（篡改/重放）攻擊被拒 |
+| `Invariant.t.sol`（新增） | Handler-based invariant：256 runs × 500 calls（存入/贖回/指定贖回/贖回註銷隨機序列）驗證池子 1:1 backing、CCT 供給量、資產守恆、`ghostRetiredKg` 追蹤與鏈上註銷量一致，全程 0 revert |
+
+## 自我審查（Self-review / Audit Prep）
+
+正式第三方稽核前的內部檢查，供未來稽核方與國家單位承接時參考：
+
+- **靜態分析**：Slither 全跑過（Aderyn 需連外抓 solc binary，本開發環境網路受限未能執行，留給有網路的環境）。
+  6 項具體修正（`TrustedRouter` 重入/callback 完整性防護、多處零地址檢查、`CarbonPool` 單次贖回批次數上限、
+  event 補 indexed、區域變數顯式初始化、`KYCRegistry` 防止系統合約 tier 被覆寫），修正後 34 項殘留發現逐項附理由。
+  詳見 [`reports/static-analysis.md`](reports/static-analysis.md)（原始 Slither 輸出於 [`reports/slither.md`](reports/slither.md)）。
+- **Fuzz / Invariant 測試**：見上方測試表 `Fuzz.t.sol`、`Invariant.t.sol`。
+- **Gas 報告**：`forge test --gas-report` 全量輸出、按生命週期分組的關鍵操作耗用、部署成本，以及
+  `via_ir`/production profile 待補測的說明，見 [`reports/gas-report.md`](reports/gas-report.md)；
+  `.gas-snapshot`（`forge snapshot`）已提交，CI 或發版前可用 `forge snapshot --check` 偵測非預期的 gas 迴歸
+  （執行時排除 fuzz/invariant：`--no-match-contract "FuzzTest|PoolInvariantTest"`）。
+- **尚未涵蓋**：正式第三方合約稽核、形式驗證（如 Certora）、經濟/賽局面攻擊面分析、跨合約 MEV/夾單分析、
+  正式 bug bounty。這些屬 Phase 1/2 範疇，見下方「尚未包含」與 project 文件的分期規劃。
 
 ## 授權提醒
 
@@ -141,6 +159,5 @@ Phase 1 主市場為 `Listing`，不依賴 v4。
 
 - ERC-4337 EntryPoint + paymaster（目前為 relayer 代送）
 - 查驗機構自行簽章（目前簽章金鑰在本站 `CARBON_VERIFIER_PK`）
-- Safe + TimelockController 治理接線（Phase 0 以 EOA 代替）
 - 身分驗證服務：工商憑證 / 自然人憑證 / TW FidO 驗證後端（目前以簽章金鑰模擬）
 - Besu + QBFT 四節點測試網（需啟用 Cancun / EIP-1153）
