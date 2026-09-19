@@ -116,7 +116,7 @@ contract CarbonPool is
 
     // ───────────────────────── 存入 ─────────────────────────
 
-    function deposit(uint256 batchId, uint256 amountKg) external whenNotPaused nonReentrant {
+    function deposit(uint256 batchId, uint256 amountKg) external nonReentrant whenNotPaused {
         if (amountKg == 0) revert ZeroAmount();
         if (kyc.tierOf(msg.sender) != IKYCRegistry.Tier.Corporate || !kyc.isActive(msg.sender)) {
             revert NotCorporate(msg.sender);
@@ -138,8 +138,8 @@ contract CarbonPool is
     /// @notice FIFO 贖回，免費。回傳實際取得的批次與數量。
     function redeem(uint256 amountKg)
         external
-        whenNotPaused
         nonReentrant
+        whenNotPaused
         returns (uint256[] memory ids, uint256[] memory amounts)
     {
         if (amountKg == 0) revert ZeroAmount();
@@ -153,7 +153,7 @@ contract CarbonPool is
     }
 
     /// @notice 指定批次贖回，收取 selectiveRedeemFeeBps（以 CCT 計）。
-    function redeemSpecific(uint256 batchId, uint256 amountKg) external whenNotPaused nonReentrant {
+    function redeemSpecific(uint256 batchId, uint256 amountKg) external nonReentrant whenNotPaused {
         if (amountKg == 0) revert ZeroAmount();
         if (!kyc.isActive(msg.sender)) revert NotActiveAccount(msg.sender);
         if (pooledKg[batchId] < amountKg) revert InsufficientPooled(batchId);
@@ -174,7 +174,7 @@ contract CarbonPool is
         string calldata beneficiary,
         RetirementCertificate.Purpose purpose,
         string calldata memo
-    ) external whenNotPaused nonReentrant returns (uint256[] memory certIds) {
+    ) external nonReentrant whenNotPaused returns (uint256[] memory certIds) {
         if (amountKg == 0) revert ZeroAmount();
         kyc.checkRetire(msg.sender);
         (uint256[] memory ids, uint256[] memory amounts) = _takeFifo(amountKg);

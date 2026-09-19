@@ -146,7 +146,7 @@ contract SafeGovernanceTest is Fixture {
         // 未到期不能執行
         nationalSafe.executeExpectRevert(_nat2(), timelock, address(kyc), data, salt);
 
-        vm.warp(block.timestamp + 48 hours);
+        vm.warp(vm.getBlockTimestamp() + 48 hours);
         nationalSafe.execute(_nat2(), timelock, address(kyc), data, salt);
         assertEq(KYCRegistryV2(address(kyc)).version(), "2");
         assertTrue(kyc.isActive(companyA)); // 狀態保留
@@ -166,7 +166,7 @@ contract SafeGovernanceTest is Fixture {
         bytes memory data = abi.encodeCall(IAccessControl.grantRole, (SOV, operator));
         bytes32 salt = keccak256("sov");
         nationalSafe.schedule(_nat2(), timelock, address(kyc), data, salt);
-        vm.warp(block.timestamp + 48 hours);
+        vm.warp(vm.getBlockTimestamp() + 48 hours);
         nationalSafe.execute(_nat2(), timelock, address(kyc), data, salt);
         assertTrue(kyc.hasRole(SOV, operator));
     }

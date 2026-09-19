@@ -150,7 +150,7 @@ abstract contract Fixture is Test {
             jurisdiction: bytes2("TW"),
             identityHash: identityHash,
             nonce: kyc.nonces(account),
-            deadline: block.timestamp + 1 hours
+            deadline: vm.getBlockTimestamp() + 1 hours
         });
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(identityVerifierPk, kyc.hashAttestation(a));
         sig = abi.encodePacked(r, s, v);
@@ -158,7 +158,7 @@ abstract contract Fixture is Test {
 
     function _registerIdentity(address account, IKYCRegistry.Tier tier, bytes32 identityHash) internal {
         (KYCRegistry.IdentityAttestation memory a, bytes memory sig) =
-            _attest(account, tier, identityHash, uint64(block.timestamp + 365 days));
+            _attest(account, tier, identityHash, uint64(vm.getBlockTimestamp() + 365 days));
         kyc.register(a, sig);
     }
 
@@ -203,7 +203,7 @@ abstract contract Fixture is Test {
             serialHash: serial,
             reportHash: keccak256(abi.encodePacked("report", serial)),
             attestationId: uint256(serial),
-            deadline: block.timestamp + 1 days
+            deadline: vm.getBlockTimestamp() + 1 days
         });
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(carbonVerifierPk, registry.hashIssuance(a));
         sig = abi.encodePacked(r, s, v);

@@ -129,7 +129,7 @@ contract PoolTest is Fixture {
             serialHash: i.serial,
             reportHash: keccak256("r"),
             attestationId: uint256(i.serial),
-            deadline: block.timestamp + 1 days
+            deadline: vm.getBlockTimestamp() + 1 days
         });
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(carbonVerifierPk, registry.hashIssuance(a));
         return registry.issue(a, abi.encodePacked(r, s, v));

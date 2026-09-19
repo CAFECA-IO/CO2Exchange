@@ -47,7 +47,7 @@ contract V4Test is V4Fixture {
                 liquidityDelta: 1e15,
                 salt: 0
             }),
-            block.timestamp + 1
+            vm.getBlockTimestamp() + 1
         );
         vm.stopPrank();
 
@@ -90,7 +90,7 @@ contract V4Test is V4Fixture {
         router.modifyLiquidity(
             poolKey,
             IPoolManager.ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e12, salt: 0}),
-            block.timestamp + 1
+            vm.getBlockTimestamp() + 1
         );
     }
 
@@ -104,7 +104,7 @@ contract V4Test is V4Fixture {
                 liquidityDelta: -5e14,
                 salt: 0
             }),
-            block.timestamp + 1
+            vm.getBlockTimestamp() + 1
         );
     }
 
@@ -113,7 +113,7 @@ contract V4Test is V4Fixture {
     function test_swap_individualBuysCct() public {
         uint256 before = cct.balanceOf(alice);
         vm.prank(alice);
-        router.swap(poolKey, _buyCct(4_000e6), 4e18, block.timestamp + 1); // 4000 TWD，至少 4 噸
+        router.swap(poolKey, _buyCct(4_000e6), 4e18, vm.getBlockTimestamp() + 1); // 4000 TWD，至少 4 噸
         assertGt(cct.balanceOf(alice) - before, 4e18);
         assertLt(cct.balanceOf(alice) - before, 5.1e18);
     }
@@ -124,7 +124,7 @@ contract V4Test is V4Fixture {
         vm.startPrank(stranger);
         twd.approve(address(router), type(uint256).max);
         vm.expectRevert();
-        router.swap(poolKey, _buyCct(1_000e6), 0, block.timestamp + 1);
+        router.swap(poolKey, _buyCct(1_000e6), 0, vm.getBlockTimestamp() + 1);
         vm.stopPrank();
     }
 
@@ -139,11 +139,11 @@ contract V4Test is V4Fixture {
 
     function test_swap_individualCannotSell() public {
         vm.prank(alice);
-        router.swap(poolKey, _buyCct(4_000e6), 0, block.timestamp + 1);
+        router.swap(poolKey, _buyCct(4_000e6), 0, vm.getBlockTimestamp() + 1);
         // 賣回：CCT 從自然人轉出 → 代幣層擋下（主防線）
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(IKYCRegistry.IndividualTransferDisabled.selector, alice));
-        router.swap(poolKey, _sellCct(1e18), 0, block.timestamp + 1);
+        router.swap(poolKey, _sellCct(1e18), 0, vm.getBlockTimestamp() + 1);
     }
 
     function test_swap_dailyLimitEnforcedByActualDelta() public {
@@ -151,20 +151,20 @@ contract V4Test is V4Fixture {
         hook.setDailyLimit(IKYCRegistry.Tier.Individual, 5e18); // 每日 5 噸
 
         vm.prank(alice);
-        router.swap(poolKey, _buyCct(3_000e6), 0, block.timestamp + 1); // ≈3.7 噸
+        router.swap(poolKey, _buyCct(3_000e6), 0, vm.getBlockTimestamp() + 1); // ≈3.7 噸
 
         vm.prank(alice);
         vm.expectRevert();
-        router.swap(poolKey, _buyCct(3_000e6), 0, block.timestamp + 1); // 累計超過 5 噸
+        router.swap(poolKey, _buyCct(3_000e6), 0, vm.getBlockTimestamp() + 1); // 累計超過 5 噸
 
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(vm.getBlockTimestamp() + 1 days);
         vm.prank(alice);
-        router.swap(poolKey, _buyCct(3_000e6), 0, block.timestamp + 1); // 新的一天
+        router.swap(poolKey, _buyCct(3_000e6), 0, vm.getBlockTimestamp() + 1); // 新的一天
     }
 
     function test_endToEnd_buyThenRetire() public {
         vm.prank(alice);
-        router.swap(poolKey, _buyCct(2_000e6), 0, block.timestamp + 1);
+        router.swap(poolKey, _buyCct(2_000e6), 0, vm.getBlockTimestamp() + 1);
         uint256 kg = cct.balanceOf(alice) / 1e15;
         vm.prank(alice);
         uint256[] memory certs = pool.redeemAndRetire(

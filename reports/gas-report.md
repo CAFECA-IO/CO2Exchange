@@ -125,11 +125,10 @@ wrapper transaction itself.
 
 ## Observations / follow-ups
 
-- **`via_ir` not yet measured end-to-end.** The production profile
-  (`optimizer_runs = 44444444`, `via_ir = true`) should be re-run with
-  `FOUNDRY_PROFILE=production forge test --gas-report` before deployment;
-  expect meaningful reductions, especially in the larger contracts
-  (`KYCRegistry`, `CarbonPool`, `CarbonCredit1155`).
+- **`via_ir` / production profile — now measured (2026-09-19).** See the
+  dedicated section below. Short version: runtime calls get 3–8% cheaper,
+  deployment gets meaningfully more expensive, and the expectation that the
+  large contracts would shrink was **wrong** — they grow.
 - **`CarbonRegistry.issue` and `Listing.list`/`CarbonPool.deposit` are the
   three most expensive steady-state operations** (~280k–350k gas). These
   are enterprise/operator-invoked, low-frequency actions (per issuance
@@ -145,6 +144,92 @@ wrapper transaction itself.
 - No function in the suite approaches block gas limits; the largest single
   call observed (`PasskeyAccountFactory.createAccount` max, 1,514,142) is
   well within any mainnet or L2 block gas limit.
+
+
+## Production profile (`via_ir = true`, `optimizer_runs = 44444444`)
+
+Measured on 2026-09-19 with foundry 1.5.1, solc 0.8.26, `evm_version = cancun`.
+
+**How to reproduce.** Safe v1.4.1 does not compile under `via_ir`
+(`execTransaction`'s inline assembly is not annotated memory-safe — a known
+Safe issue), so the Safe-dependent files are skipped:
+
+```bash
+FOUNDRY_PROFILE=production forge test \
+  --no-match-contract "FuzzTest|PoolInvariantTest|SafeGovernanceTest" \
+  --skip "test/SafeGovernance.t.sol" --skip "script/**" --skip "src/governance/**"
+```
+
+57 of the 68 unit/integration tests run this way; the 11 `SafeGovernanceTest`
+cases cannot, for the reason above. Resolving it is the same single blocker
+already documented for the `shanghai` profile: deploy Safe from its canonical
+v1.4.1 creation bytecode instead of compiling it from source.
+
+### Runtime bytecode size
+
+| Contract | default | production | delta |
+| --- | ---: | ---: | ---: |
+| KYCRegistry | 11,862 | 15,574 | +3,712 |
+| CarbonPool | 11,227 | 14,880 | +3,653 |
+| CarbonCredit1155 | 10,329 | 13,699 | +3,370 |
+| RetirementCertificate | 9,119 | 11,842 | +2,723 |
+| CarbonRegistry | 8,948 | 10,875 | +1,927 |
+| Listing | 8,351 | 12,177 | +3,826 |
+| CarbonCreditToken | 6,299 | 10,081 | +3,782 |
+| CarbonKYCHook | 6,563 | 7,873 | +1,310 |
+| TrustedRouter | 4,480 | 4,980 | +500 |
+| PasskeyAccountFactory | 8,013 | 8,157 | +144 |
+| PasskeyAccount | 7,220 | 7,254 | +34 |
+
+Every contract stays well under the 24,576-byte limit — the largest,
+`KYCRegistry` at 15,574, uses 63% of it. `optimizer_runs = 44444444` buys
+runtime gas with code size, which is the correct trade for contracts that
+deploy once and then run for years, but it is worth knowing that the margin
+to the size limit shrinks by roughly a third.
+
+### Gas, 57 comparable tests
+
+| | default | production | delta |
+| --- | ---: | ---: | ---: |
+| Sum of all 57 test cases | 22,363,387 | 23,092,444 | +3.3% |
+
+The aggregate gets *worse*, and the reason is deployment: tests that deploy a
+contract pay for the larger bytecode.
+
+| Test | default | production | delta |
+| --- | ---: | ---: | ---: |
+| `test_upgrade_onlyAdmin` (deploys a new implementation) | 2,496,139 | 3,257,387 | +30.5% |
+| `test_swap_untrustedRouterRejected` (deploys `PoolSwapTest`) | 1,319,003 | 1,515,569 | +14.9% |
+
+Excluding deployment-dominated cases, ordinary calls improve:
+
+| Test | default | production | delta |
+| --- | ---: | ---: | ---: |
+| `test_register_rejectsUnknownSigner` | 39,633 | 36,325 | −8.3% |
+| `test_register_replayRejected` | 115,754 | 110,430 | −4.6% |
+| `test_swap_dailyLimitEnforcedByActualDelta` | 382,637 | 365,863 | −4.4% |
+| `test_execute_innerRevertBubbles` (passkey) | 382,307 | 366,259 | −4.2% |
+| `test_erc1271` | 577,786 | 554,357 | −4.1% |
+
+41 of the 57 cases get cheaper, 16 more expensive, and the expensive ones are
+almost all deployments.
+
+**Reading.** For this system the production profile is worth using: users pay
+the runtime cost repeatedly and the platform pays the deployment cost once.
+But the size headroom it consumes should be checked again whenever a contract
+grows — `KYCRegistry` is the one to watch.
+
+### A trap found while measuring this
+
+`test_swap_dailyLimitEnforcedByActualDelta` failed under `via_ir` with
+`Expired()` while passing under the default profile. It was not a contract
+bug: the IR optimizer treats `TIMESTAMP` as loop-invariant and common-subexpression-eliminates
+it across the `vm.warp` cheatcode call, so the test computed its deadline from
+the *pre-warp* timestamp. The tests now read the clock through
+`vm.getBlockTimestamp()`, which is an external call the optimizer cannot fold
+away. Real contracts are unaffected (the timestamp genuinely is constant
+within one transaction) — but any future test that warps time must use the
+cheatcode, or it will pass under one profile and fail under the other.
 
 ## Appendix: full raw `forge test --gas-report` output
 

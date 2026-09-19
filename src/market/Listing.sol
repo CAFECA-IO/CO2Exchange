@@ -135,8 +135,8 @@ contract Listing is
 
     function list(uint256 batchId, uint256 amountKg, uint256 pricePerTonne, uint256 minFillKg)
         external
-        whenNotPaused
         nonReentrant
+        whenNotPaused
         returns (uint256 orderId)
     {
         if (amountKg == 0) revert ZeroAmount();
@@ -156,7 +156,7 @@ contract Listing is
         emit Listed(orderId, msg.sender, batchId, amountKg, pricePerTonne, minFillKg);
     }
 
-    function buy(uint256 orderId, uint256 amountKg) external whenNotPaused nonReentrant {
+    function buy(uint256 orderId, uint256 amountKg) external nonReentrant whenNotPaused {
         Order storage o = _orders[orderId];
         if (!o.active) revert OrderInactive(orderId);
         if (!kyc.isActive(msg.sender)) revert NotActiveAccount(msg.sender);

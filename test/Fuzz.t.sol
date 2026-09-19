@@ -221,7 +221,7 @@ contract FuzzTest is Fixture {
     /// attestation nonce 綁定：同一份 attestation 不可重放（任意 tier / expiry）
     function testFuzz_kyc_attestationReplay(uint8 tier, uint64 expiry) public {
         tier = uint8(bound(tier, 1, 2));
-        expiry = uint64(bound(expiry, block.timestamp + 1, type(uint64).max));
+        expiry = uint64(bound(expiry, vm.getBlockTimestamp() + 1, type(uint64).max));
         address acct = makeAddr("acct");
         (KYCRegistry.IdentityAttestation memory a, bytes memory sig) = _attest(acct, IKYCRegistry.Tier(tier), keccak256("h"), expiry);
         kyc.register(a, sig);

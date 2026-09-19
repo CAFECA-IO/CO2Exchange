@@ -19,11 +19,11 @@ contract IdentityTest is Fixture {
         KYCRegistry.IdentityAttestation memory a = KYCRegistry.IdentityAttestation({
             account: stranger,
             tier: IKYCRegistry.Tier.Individual,
-            expiry: uint64(block.timestamp + 1 days),
+            expiry: uint64(vm.getBlockTimestamp() + 1 days),
             jurisdiction: bytes2("TW"),
             identityHash: keccak256("x"),
             nonce: 0,
-            deadline: block.timestamp + 1 hours
+            deadline: vm.getBlockTimestamp() + 1 hours
         });
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(0xDEAD, kyc.hashAttestation(a));
         vm.expectRevert(KYCRegistry.InvalidAttestation.selector);
@@ -32,7 +32,7 @@ contract IdentityTest is Fixture {
 
     function test_register_replayRejected() public {
         (KYCRegistry.IdentityAttestation memory a, bytes memory sig) =
-            _attest(stranger, IKYCRegistry.Tier.Individual, keccak256("s"), uint64(block.timestamp + 1 days));
+            _attest(stranger, IKYCRegistry.Tier.Individual, keccak256("s"), uint64(vm.getBlockTimestamp() + 1 days));
         kyc.register(a, sig);
         vm.expectRevert(KYCRegistry.InvalidAttestation.selector);
         kyc.register(a, sig);
@@ -42,7 +42,7 @@ contract IdentityTest is Fixture {
         uint256 pid = _registerProject(companyA);
         uint256 batch = _issue(pid, 5000, keccak256("S1"));
 
-        vm.warp(block.timestamp + 366 days); // companyA KYC 到期
+        vm.warp(vm.getBlockTimestamp() + 366 days); // companyA KYC 到期
         assertFalse(kyc.isActive(companyA));
 
         vm.prank(companyA);
@@ -98,7 +98,7 @@ contract IdentityTest is Fixture {
 
         address companyANew = makeAddr("companyA-new");
         (KYCRegistry.IdentityAttestation memory a, bytes memory sig) = _attest(
-            companyANew, IKYCRegistry.Tier.Corporate, keccak256("TW-12345678"), uint64(block.timestamp + 365 days)
+            companyANew, IKYCRegistry.Tier.Corporate, keccak256("TW-12345678"), uint64(vm.getBlockTimestamp() + 365 days)
         );
 
         // 只有 OPERATOR 可執行
@@ -119,7 +119,7 @@ contract IdentityTest is Fixture {
     function test_recover_rejectsDifferentIdentityHash() public {
         address other = makeAddr("other");
         (KYCRegistry.IdentityAttestation memory a, bytes memory sig) =
-            _attest(other, IKYCRegistry.Tier.Corporate, keccak256("someone-else"), uint64(block.timestamp + 365 days));
+            _attest(other, IKYCRegistry.Tier.Corporate, keccak256("someone-else"), uint64(vm.getBlockTimestamp() + 365 days));
         vm.prank(operator);
         vm.expectRevert(KYCRegistry.IdentityMismatch.selector);
         kyc.recover(companyA, a, sig);
