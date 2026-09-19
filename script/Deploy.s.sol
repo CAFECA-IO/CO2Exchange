@@ -33,6 +33,11 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 ///   anvil &
 ///   forge script script/Deploy.s.sol --rpc-url anvil --broadcast
 contract Deploy is Script {
+    /// @dev Anvil 的預設帳戶 0，只在沒有指定 DEPLOYER_PK 時使用。
+    uint256 internal constant ANVIL_PK0 = 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
+
+    error DeployerHasNoFunds(address deployer, uint256 chainId);
+
     struct Config {
         uint256 pk;
         address deployer;
@@ -95,7 +100,7 @@ contract Deploy is Script {
     }
 
     function _loadConfig() internal {
-        cfg.pk = vm.envOr("DEPLOYER_PK", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80));
+        cfg.pk = vm.envOr("DEPLOYER_PK", ANVIL_PK0);
         cfg.deployer = vm.addr(cfg.pk);
         cfg.sovereign = vm.envOr("SOVEREIGN", cfg.deployer);
         cfg.operator = vm.envOr("OPERATOR", cfg.deployer);
@@ -120,6 +125,32 @@ contract Deploy is Script {
         cfg.operatorOwners = vm.envOr("OPERATOR_OWNERS", ",", op);
         cfg.operatorThreshold = vm.envOr("OPERATOR_THRESHOLD", uint256(1));
         cfg.timelockDelay = vm.envOr("TIMELOCK_DELAY", uint256(48 hours));
+
+        _requireFundedDeployer();
+    }
+
+    /// @dev 部署者沒錢時立刻擋下來，而不是讓 forge 先跑完整個模擬、印完所有地址，
+    ///      最後才在廣播階段丟出 "Insufficient funds for gas * price + value"。
+    ///
+    ///      最常見的成因：`.env` 裡留著為另一條鏈設定的 DEPLOYER_PK。forge 會自動載入
+    ///      專案根目錄的 `.env`，所以那把金鑰會無聲地蓋掉 Anvil 預設帳戶。
+    function _requireFundedDeployer() internal view {
+        if (cfg.deployer.balance > 0) return;
+        console2.log("");
+        console2.log(unicode"部署者餘額為 0，交易送不出去。");
+        console2.log(unicode"  部署者地址 ", cfg.deployer);
+        console2.log(unicode"  這條鏈 chainId", block.chainid);
+        console2.log("");
+        if (cfg.deployer != vm.addr(ANVIL_PK0)) {
+            console2.log(unicode"這不是 Anvil 的預設帳戶，代表 DEPLOYER_PK 被環境變數或專案根目錄的 .env 指定了。");
+            console2.log(unicode"  要用 Anvil 預設帳戶：把 .env 裡的 DEPLOYER_PK 註解掉（或 unset DEPLOYER_PK）");
+            console2.log(unicode"  要繼續用這把金鑰：先撥款給它，例如");
+            console2.log(unicode"    cast rpc anvil_setBalance <上面的地址> 0x3635c9adc5dea00000 --rpc-url anvil");
+        } else {
+            console2.log(unicode"Anvil 預設帳戶也沒錢 —— 這條鏈大概不是 Anvil，請設定一把有餘額的 DEPLOYER_PK。");
+        }
+        console2.log("");
+        revert DeployerHasNoFunds(cfg.deployer, block.chainid);
     }
 
     /// @dev 治理基礎設施：Safe v1.4.1 + 兩個多簽 + 國家單位 Timelock。
