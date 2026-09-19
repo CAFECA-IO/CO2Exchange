@@ -75,6 +75,9 @@ contract KYCRegistry is Initializable, UUPSUpgradeable, AccessControlUpgradeable
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(SOVEREIGN_ROLE, sovereign);
         _grantRole(OPERATOR_ROLE, operator);
+        // 角色階層：主權（Safe，即時）可撤換營運與身分驗證服務；主權本身只能由 DEFAULT_ADMIN（Timelock，延遲）變更
+        _setRoleAdmin(OPERATOR_ROLE, SOVEREIGN_ROLE);
+        _setRoleAdmin(IDENTITY_VERIFIER_ROLE, SOVEREIGN_ROLE);
     }
 
     // ───────────────────────── 註冊 ─────────────────────────

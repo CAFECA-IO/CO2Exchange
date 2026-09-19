@@ -75,7 +75,7 @@ abstract contract Fixture is Test {
         kyc.grantRole(verifierRole, identityVerifier);
 
         // ── 登錄層（不可升級）──
-        cert = new RetirementCertificate(sovereign, operator);
+        cert = new RetirementCertificate(sovereign, sovereign, operator);
         credit = new CarbonCredit1155(sovereign, sovereign, kyc, cert, "https://registry.example/credit/{id}");
         registry = new CarbonRegistry(sovereign, sovereign, kyc, credit);
         vm.startPrank(sovereign);
@@ -92,7 +92,9 @@ abstract contract Fixture is Test {
             address(
                 new ERC1967Proxy(
                     address(listingImpl),
-                    abi.encodeCall(Listing.initialize, (sovereign, operator, kyc, credit, twd, treasury, 100))
+                    abi.encodeCall(
+                        Listing.initialize, (sovereign, sovereign, operator, kyc, credit, twd, treasury, 100)
+                    )
                 )
             )
         );
@@ -113,7 +115,8 @@ abstract contract Fixture is Test {
                 new ERC1967Proxy(
                     address(poolImpl),
                     abi.encodeCall(
-                        CarbonPool.initialize, (sovereign, operator, kyc, credit, cct, VINTAGE, 500, treasury)
+                        CarbonPool.initialize,
+                        (sovereign, sovereign, operator, kyc, credit, cct, VINTAGE, 500, treasury)
                     )
                 )
             )
@@ -132,7 +135,9 @@ abstract contract Fixture is Test {
                 | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
         );
         address hookAddr = address(flags ^ (0x4444 << 144));
-        deployCodeTo("CarbonKYCHook.sol:CarbonKYCHook", abi.encode(poolManager, kyc, sovereign, operator), hookAddr);
+        deployCodeTo(
+            "CarbonKYCHook.sol:CarbonKYCHook", abi.encode(poolManager, kyc, sovereign, sovereign, operator), hookAddr
+        );
         hook = CarbonKYCHook(hookAddr);
         router = new TrustedRouter(poolManager);
         vm.startPrank(operator);

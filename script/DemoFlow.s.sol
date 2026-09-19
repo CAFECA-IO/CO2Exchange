@@ -25,14 +25,7 @@ contract DemoFlow is Deploy {
     uint256 constant PK_ALICE = 0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6;
 
     function demo() external {
-        _loadConfig();
-        _deployCore();
-        _deployV4();
-        _wireAsSovereign();
-        _wireAsOperator();
-        _initPool();
-        _print();
-        _writeDeployment();
+        deployAll();
         address companyA = vm.addr(PK_A);
         address companyB = vm.addr(PK_B);
         address alice = vm.addr(PK_ALICE);

@@ -28,6 +28,7 @@ import {IKYCRegistry} from "../interfaces/IKYCRegistry.sol";
 contract CarbonKYCHook is IHooks, AccessControl {
     using PoolIdLibrary for PoolKey;
 
+    bytes32 public constant SOVEREIGN_ROLE = keccak256("SOVEREIGN_ROLE");
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
 
     IPoolManager public immutable poolManager;
@@ -55,11 +56,13 @@ contract CarbonKYCHook is IHooks, AccessControl {
     error NotCorporate(address account);
     error DailyLimitExceeded(address account, uint256 attempted, uint256 limit);
 
-    constructor(IPoolManager poolManager_, IKYCRegistry kyc_, address admin, address operator) {
+    constructor(IPoolManager poolManager_, IKYCRegistry kyc_, address admin, address sovereign, address operator) {
         poolManager = poolManager_;
         kyc = kyc_;
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(SOVEREIGN_ROLE, sovereign);
         _grantRole(OPERATOR_ROLE, operator);
+        _setRoleAdmin(OPERATOR_ROLE, SOVEREIGN_ROLE);
         Hooks.validateHookPermissions(this, getHookPermissions());
     }
 

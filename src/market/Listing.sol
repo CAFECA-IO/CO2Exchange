@@ -30,6 +30,7 @@ contract Listing is
 {
     using SafeERC20 for IERC20;
 
+    bytes32 public constant SOVEREIGN_ROLE = keccak256("SOVEREIGN_ROLE");
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
     uint256 public constant MAX_FEE_BPS = 500; // 5%
     uint256 public constant KG_PER_TONNE = 1000;
@@ -80,6 +81,7 @@ contract Listing is
 
     function initialize(
         address admin,
+        address sovereign,
         address operator,
         IKYCRegistry kyc_,
         CarbonCredit1155 credit_,
@@ -93,7 +95,9 @@ contract Listing is
         __ReentrancyGuard_init();
         __ERC1155Holder_init();
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(SOVEREIGN_ROLE, sovereign);
         _grantRole(OPERATOR_ROLE, operator);
+        _setRoleAdmin(OPERATOR_ROLE, SOVEREIGN_ROLE);
         kyc = kyc_;
         credit = credit_;
         settlementToken = settlementToken_;
@@ -112,7 +116,11 @@ contract Listing is
         emit FeeUpdated(feeBps_, treasury_);
     }
 
-    function pause() external onlyRole(OPERATOR_ROLE) {
+    /// @dev 暫停是緊急權：營運與主權都可以；恢復只有營運（避免主權誤觸後無人能停）。
+    function pause() external {
+        if (!hasRole(OPERATOR_ROLE, msg.sender) && !hasRole(SOVEREIGN_ROLE, msg.sender)) {
+            revert AccessControlUnauthorizedAccount(msg.sender, OPERATOR_ROLE);
+        }
         _pause();
     }
 

@@ -11,6 +11,7 @@ import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
 ///         每次註銷產生一張憑證，對應到特定額度批次與序號段，供碳費扣抵或其他申報附件使用。
 ///         正式 PDF 由營運方離線產生，其 hash 由 OPERATOR 寫回鏈上。
 contract RetirementCertificate is ERC721, AccessControl {
+    bytes32 public constant SOVEREIGN_ROLE = keccak256("SOVEREIGN_ROLE");
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE"); // CarbonCredit1155
 
@@ -49,9 +50,13 @@ contract RetirementCertificate is ERC721, AccessControl {
 
     error Soulbound();
 
-    constructor(address admin, address operator) ERC721("CO2Exchange Retirement Certificate", "CO2-RET") {
+    constructor(address admin, address sovereign, address operator)
+        ERC721("CO2Exchange Retirement Certificate", "CO2-RET")
+    {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(SOVEREIGN_ROLE, sovereign);
         _grantRole(OPERATOR_ROLE, operator);
+        _setRoleAdmin(OPERATOR_ROLE, SOVEREIGN_ROLE);
     }
 
     function mint(address to, Certificate memory c) external onlyRole(MINTER_ROLE) returns (uint256 certId) {

@@ -76,6 +76,7 @@ contract CarbonRegistry is AccessControl, EIP712 {
         credit = credit_;
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(SOVEREIGN_ROLE, sovereign);
+        _setRoleAdmin(VERIFIER_ROLE, SOVEREIGN_ROLE);
     }
 
     // ───────────────────────── 查驗機構 ─────────────────────────

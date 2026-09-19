@@ -23,8 +23,24 @@ mock               MockTWD                6 decimals 結算幣；正式由金融
 
 白名單規則：持有與註銷永遠允許；轉帳需雙方有效且未凍結；自然人預設不可轉出（政策開關）；KYC 到期只擋交易不鎖資產。
 
-角色：`DEFAULT_ADMIN`（升級、角色管理）與 `SOVEREIGN_ROLE`（認可查驗機構 / 身分驗證服務、凍結、系統合約登錄）屬國家單位；
-`OPERATOR_ROLE`（暫停、手續費、recover、hook 設定）屬 CAFECA，可被國家單位單方面撤銷。移轉當天只是 `grantRole` / `renounceRole`。
+## 治理（Safe + Timelock）
+
+```
+國家單位 Safe（2-of-3）──提案/執行──▶ TimelockController（48h）──DEFAULT_ADMIN──▶ 所有合約（升級、角色結構）
+        │                                                  └── owner ──▶ PoolManager
+        └──── SOVEREIGN_ROLE（即時）──▶ 凍結地址/批次、暫停、認可/撤銷查驗機構與身分驗證服務、撤換營運
+營運 Safe（CAFECA）── OPERATOR_ROLE ──▶ 暫停/恢復、手續費、recover、hook 設定
+```
+
+角色階層：`OPERATOR_ROLE` 的 admin 是 `SOVEREIGN_ROLE`（國家 Safe 可即時撤換營運方，不用等 48 小時）；
+`SOVEREIGN_ROLE` 的 admin 是 `DEFAULT_ADMIN_ROLE`（只有 Timelock 能變更主權歸屬）。緊急權即時、結構權延遲。
+
+`Deploy.s.sol` 會部署 Safe v1.4.1（singleton / factory / fallback handler）、兩個 Safe、Timelock，佈線完成後把所有治理角色交給
+Safe / Timelock 並由部署者 `renounceRole` —— 部署結束時沒有任何 EOA 持有治理角色。保留的服務角色：身分驗證服務簽章、查驗機構簽章、
+MockTWD 鑄幣（demo faucet）。
+
+環境變數：`NATIONAL_SAFE` / `OPERATOR_SAFE`（既有 Safe 地址）或 `NATIONAL_OWNERS`（逗號分隔）/ `NATIONAL_THRESHOLD`、
+`OPERATOR_OWNERS` / `OPERATOR_THRESHOLD`、`TIMELOCK_DELAY`（秒）。Phase 0 預設：國家 Safe = Anvil 帳戶 5,6,7（2-of-3），營運 Safe = 帳戶 8,9（1-of-2）。
 
 ## 安裝
 
@@ -49,6 +65,7 @@ forge test
 | openzeppelin-contracts | v5.1.0 |
 | openzeppelin-contracts-upgradeable | v5.1.0 |
 | forge-std | v1.16.2 |
+| safe-smart-account | v1.4.1 |
 
 ## 本地展示（Anvil）
 
@@ -85,7 +102,7 @@ Apple / Google 登入：在 `.env.local` 設 `AUTH_GOOGLE_ID/SECRET`、`AUTH_APP
 
 端到端測試（Chromium 虛擬 passkey，需 `npx playwright install chromium`）：`npm run e2e`（需 anvil + DemoFlow + `npm run dev` 或 `AUTH_DEV_LOGIN=1 npm start`）。
 
-## 測試（56）
+## 測試（67）
 
 | 檔案 | 涵蓋 |
 |---|---|
@@ -95,6 +112,7 @@ Apple / Google 登入：在 `.env.local` 設 `AUTH_GOOGLE_ID/SECRET`、`AUTH_APP
 | `Pool.t.sol` | 存入鑄幣、年份不符、自然人不可存、FIFO 跨批次贖回、指定贖回費與 1:1 backing、redeemAndRetire |
 | `V4.t.sol` | 建池限 OPERATOR 與合法配對、LP 限法人、自然人買入、未驗證與非信任 Router 被擋、自然人不可賣出、每日限額、買入後註銷 |
 | `Governance.t.sol` | 主權角色移轉、單方面撤銷營運角色、只有 admin 可升級、登錄層無升級路徑、registry 只能設一次 |
+| `SafeGovernance.t.sol` | 真實 Safe v1.4.1 多簽簽章：移轉後 EOA 無角色；國家 Safe 2-of-3 即時凍結 / 暫停 / 撤換營運，單簽被拒；營運 Safe 不能凍結或給角色；升級與主權變更必須經 Timelock 48h，未到期執行失敗；只有國家 Safe 能提案 |
 | `PasskeyAccount.t.sol` | 以 `vm.signP256` 組出完整 WebAuthn 斷言：relayer 代送購買與註銷、重放、竄改、錯誤金鑰、內部 revert、ERC-1271、factory 決定性 |
 
 ## 授權提醒

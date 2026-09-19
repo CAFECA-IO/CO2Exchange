@@ -23,6 +23,10 @@ import {TrustedRouter} from "../src/v4/TrustedRouter.sol";
 import {MockTWD} from "../src/mocks/MockTWD.sol";
 import {PasskeyAccountFactory} from "../src/account/PasskeyAccountFactory.sol";
 import {HookMiner} from "./utils/HookMiner.sol";
+import {GovernanceLib} from "../src/governance/GovernanceLib.sol";
+import {Safe} from "safe-smart-account/Safe.sol";
+import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 /// @notice Phase 0 一鍵部署（Anvil）。
 ///
@@ -50,6 +54,14 @@ contract Deploy is Script {
         address identityVerifier;
         address carbonVerifier;
         uint16 vintage;
+        // 治理
+        address nationalSafe; // 既有 Safe 地址；為 0 則以 nationalOwners/threshold 建立
+        address operatorSafe;
+        address[] nationalOwners;
+        uint256 nationalThreshold;
+        address[] operatorOwners;
+        uint256 operatorThreshold;
+        uint256 timelockDelay;
     }
 
     Config internal cfg;
@@ -67,14 +79,25 @@ contract Deploy is Script {
     CarbonKYCHook public hook;
     TrustedRouter public router;
     PasskeyAccountFactory public accountFactory;
+    Safe public nationalSafe;
+    Safe public operatorSafe;
+    TimelockController public timelock;
+    GovernanceLib.SafeInfra internal safeInfra;
 
     function run() external {
+        deployAll();
+    }
+
+    /// @dev 完整部署 + 佈線 + 移轉。DemoFlow 也走這條路。
+    function deployAll() internal {
         _loadConfig();
+        _deployGovernance();
         _deployCore();
         _deployV4();
         _wireAsSovereign();
         _wireAsOperator();
         _initPool();
+        _handover();
         _print();
         _writeDeployment();
     }
@@ -88,6 +111,38 @@ contract Deploy is Script {
         cfg.identityVerifier = vm.envOr("IDENTITY_VERIFIER", cfg.deployer);
         cfg.carbonVerifier = vm.envOr("CARBON_VERIFIER", cfg.deployer);
         cfg.vintage = uint16(vm.envOr("VINTAGE_YEAR", uint256(2025)));
+
+        // Phase 0 預設：國家 Safe = Anvil 帳戶 5,6,7（2-of-3）；營運 Safe = 帳戶 8,9（1-of-2）；Timelock 48h
+        address[] memory nat = new address[](3);
+        nat[0] = 0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc;
+        nat[1] = 0x976EA74026E726554dB657fA54763abd0C3a0aa9;
+        nat[2] = 0x14dC79964da2C08b23698B3D3cc7Ca32193d9955;
+        address[] memory op = new address[](2);
+        op[0] = 0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f;
+        op[1] = 0xa0Ee7A142d267C1f36714E4a8F75612F20a79720;
+        cfg.nationalSafe = vm.envOr("NATIONAL_SAFE", address(0));
+        cfg.operatorSafe = vm.envOr("OPERATOR_SAFE", address(0));
+        cfg.nationalOwners = vm.envOr("NATIONAL_OWNERS", ",", nat);
+        cfg.nationalThreshold = vm.envOr("NATIONAL_THRESHOLD", uint256(2));
+        cfg.operatorOwners = vm.envOr("OPERATOR_OWNERS", ",", op);
+        cfg.operatorThreshold = vm.envOr("OPERATOR_THRESHOLD", uint256(1));
+        cfg.timelockDelay = vm.envOr("TIMELOCK_DELAY", uint256(48 hours));
+    }
+
+    /// @dev 治理基礎設施：Safe v1.4.1 + 兩個多簽 + 國家單位 Timelock。
+    function _deployGovernance() internal {
+        vm.startBroadcast(cfg.pk);
+        if (cfg.nationalSafe == address(0) || cfg.operatorSafe == address(0)) {
+            safeInfra = GovernanceLib.deploySafeInfra();
+        }
+        nationalSafe = cfg.nationalSafe != address(0)
+            ? Safe(payable(cfg.nationalSafe))
+            : GovernanceLib.createSafe(safeInfra, cfg.nationalOwners, cfg.nationalThreshold, 1);
+        operatorSafe = cfg.operatorSafe != address(0)
+            ? Safe(payable(cfg.operatorSafe))
+            : GovernanceLib.createSafe(safeInfra, cfg.operatorOwners, cfg.operatorThreshold, 2);
+        timelock = GovernanceLib.deployTimelock(cfg.timelockDelay, address(nationalSafe));
+        vm.stopBroadcast();
     }
 
     function _deployCore() internal {
@@ -104,7 +159,7 @@ contract Deploy is Script {
         );
 
         // ── 登錄層（不可升級）──
-        cert = new RetirementCertificate(cfg.sovereign, cfg.operator);
+        cert = new RetirementCertificate(cfg.sovereign, cfg.sovereign, cfg.operator);
         credit =
             new CarbonCredit1155(cfg.sovereign, cfg.sovereign, kyc, cert, "https://co2exchange.example/credit/{id}");
         registry = new CarbonRegistry(cfg.sovereign, cfg.sovereign, kyc, credit);
@@ -116,7 +171,8 @@ contract Deploy is Script {
                 new ERC1967Proxy(
                     address(new Listing()),
                     abi.encodeCall(
-                        Listing.initialize, (cfg.sovereign, cfg.operator, kyc, credit, twd, cfg.treasury, 100)
+                        Listing.initialize,
+                        (cfg.sovereign, cfg.sovereign, cfg.operator, kyc, credit, twd, cfg.treasury, 100)
                     )
                 )
             )
@@ -144,7 +200,7 @@ contract Deploy is Script {
                     address(new CarbonPool()),
                     abi.encodeCall(
                         CarbonPool.initialize,
-                        (cfg.sovereign, cfg.operator, kyc, credit, cct, cfg.vintage, 500, cfg.treasury)
+                        (cfg.sovereign, cfg.sovereign, cfg.operator, kyc, credit, cct, cfg.vintage, 500, cfg.treasury)
                     )
                 )
             )
@@ -155,15 +211,15 @@ contract Deploy is Script {
     function _deployV4() internal {
         vm.startBroadcast(cfg.pk);
         // 非生產展示：PoolManager.sol 為 BUSL-1.1
-        poolManager = new PoolManager(cfg.sovereign);
+        poolManager = new PoolManager(address(timelock)); // 協議費控制權在國家單位 Timelock
         uint160 flags = uint160(
             Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
                 | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
         );
-        bytes memory hookArgs = abi.encode(poolManager, kyc, cfg.sovereign, cfg.operator);
+        bytes memory hookArgs = abi.encode(poolManager, kyc, cfg.sovereign, cfg.sovereign, cfg.operator);
         (address hookAddr, bytes32 salt) =
             HookMiner.find(CREATE2_DEPLOYER, flags, type(CarbonKYCHook).creationCode, hookArgs);
-        hook = new CarbonKYCHook{salt: salt}(poolManager, kyc, cfg.sovereign, cfg.operator);
+        hook = new CarbonKYCHook{salt: salt}(poolManager, kyc, cfg.sovereign, cfg.sovereign, cfg.operator);
         require(address(hook) == hookAddr, "hook address mismatch");
         router = new TrustedRouter(poolManager);
         accountFactory = new PasskeyAccountFactory();
@@ -203,6 +259,43 @@ contract Deploy is Script {
         vm.stopBroadcast();
     }
 
+    /// @dev 移轉：DEFAULT_ADMIN（升級、角色結構）→ Timelock；SOVEREIGN（緊急權）→ 國家 Safe；OPERATOR → 營運 Safe；
+    ///      部署者 renounce 全部治理角色。保留的服務角色：身分驗證服務簽章、查驗機構簽章、MockTWD 鑄幣（demo faucet）。
+    function _handover() internal {
+        bytes32 ADMIN = 0x00;
+        bytes32 SOV = keccak256("SOVEREIGN_ROLE");
+        bytes32 OP = keccak256("OPERATOR_ROLE");
+        address[7] memory withOperator =
+            [address(kyc), address(cert), address(listing), address(pool), address(hook), address(0), address(0)];
+        address[2] memory sovereignOnly = [address(credit), address(registry)];
+
+        vm.startBroadcast(cfg.pk);
+        for (uint256 i = 0; i < withOperator.length; i++) {
+            address c = withOperator[i];
+            if (c == address(0)) continue;
+            IAccessControl(c).grantRole(SOV, address(nationalSafe));
+            IAccessControl(c).grantRole(OP, address(operatorSafe));
+            IAccessControl(c).grantRole(ADMIN, address(timelock));
+            IAccessControl(c).renounceRole(OP, cfg.deployer);
+            IAccessControl(c).renounceRole(SOV, cfg.deployer);
+            IAccessControl(c).renounceRole(ADMIN, cfg.deployer);
+        }
+        for (uint256 i = 0; i < sovereignOnly.length; i++) {
+            address c = sovereignOnly[i];
+            IAccessControl(c).grantRole(SOV, address(nationalSafe));
+            IAccessControl(c).grantRole(ADMIN, address(timelock));
+            IAccessControl(c).renounceRole(SOV, cfg.deployer);
+            IAccessControl(c).renounceRole(ADMIN, cfg.deployer);
+        }
+        // CCT：只有 DEFAULT_ADMIN（升級）
+        cct.grantRole(ADMIN, address(timelock));
+        cct.renounceRole(ADMIN, cfg.deployer);
+        // MockTWD：管理權給營運 Safe，鑄幣權保留給 deployer 供 demo faucet
+        twd.grantRole(ADMIN, address(operatorSafe));
+        twd.renounceRole(ADMIN, cfg.deployer);
+        vm.stopBroadcast();
+    }
+
     function poolKey() public view returns (PoolKey memory) {
         address c = address(cct);
         address t = address(twd);
@@ -230,6 +323,9 @@ contract Deploy is Script {
         console2.log("CarbonKYCHook        ", address(hook));
         console2.log("TrustedRouter        ", address(router));
         console2.log("PasskeyAccountFactory", address(accountFactory));
+        console2.log("NationalSafe         ", address(nationalSafe));
+        console2.log("OperatorSafe         ", address(operatorSafe));
+        console2.log("Timelock             ", address(timelock));
     }
 
     /// @dev 前端讀 deployments/<chainId>.json
@@ -249,7 +345,11 @@ contract Deploy is Script {
         vm.serializeAddress(j, "router", address(router));
         vm.serializeUint(j, "poolFee", 3000);
         vm.serializeUint(j, "tickSpacing", 60);
-        string memory out = vm.serializeAddress(j, "accountFactory", address(accountFactory));
+        vm.serializeAddress(j, "accountFactory", address(accountFactory));
+        vm.serializeAddress(j, "nationalSafe", address(nationalSafe));
+        vm.serializeAddress(j, "operatorSafe", address(operatorSafe));
+        vm.serializeUint(j, "timelockDelay", cfg.timelockDelay);
+        string memory out = vm.serializeAddress(j, "timelock", address(timelock));
         vm.writeJson(out, string.concat("deployments/", vm.toString(block.chainid), ".json"));
     }
 }

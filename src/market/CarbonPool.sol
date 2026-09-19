@@ -26,6 +26,7 @@ contract CarbonPool is
     ReentrancyGuardUpgradeable,
     ERC1155HolderUpgradeable
 {
+    bytes32 public constant SOVEREIGN_ROLE = keccak256("SOVEREIGN_ROLE");
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
     uint256 public constant CCT_PER_KG = 1e15; // 1e18 / 1000
     uint256 public constant MAX_FEE_BPS = 2000;
@@ -62,6 +63,7 @@ contract CarbonPool is
 
     function initialize(
         address admin,
+        address sovereign,
         address operator,
         IKYCRegistry kyc_,
         CarbonCredit1155 credit_,
@@ -76,7 +78,9 @@ contract CarbonPool is
         __ReentrancyGuard_init();
         __ERC1155Holder_init();
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(SOVEREIGN_ROLE, sovereign);
         _grantRole(OPERATOR_ROLE, operator);
+        _setRoleAdmin(OPERATOR_ROLE, SOVEREIGN_ROLE);
         kyc = kyc_;
         credit = credit_;
         cct = cct_;
@@ -93,7 +97,10 @@ contract CarbonPool is
         emit FeeUpdated(feeBps_, treasury_);
     }
 
-    function pause() external onlyRole(OPERATOR_ROLE) {
+    function pause() external {
+        if (!hasRole(OPERATOR_ROLE, msg.sender) && !hasRole(SOVEREIGN_ROLE, msg.sender)) {
+            revert AccessControlUnauthorizedAccount(msg.sender, OPERATOR_ROLE);
+        }
         _pause();
     }
 
