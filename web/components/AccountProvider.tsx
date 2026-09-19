@@ -2,7 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { SessionProvider, useSession } from "next-auth/react";
 import type { Deployment } from "@/lib/deployment";
-import { clearCredential, discoverPasskey, loadCredential, registerPasskey, saveCredential, type StoredCredential } from "@/lib/client/passkey";
+import { clearCredential, discoverPasskey, hasCode, loadCredential, registerPasskey, saveCredential, type StoredCredential } from "@/lib/client/passkey";
 
 type Config = { deployment: Deployment; rpcUrl: string; providers: string[] };
 export type Me = { email: string | null; isAdmin: boolean; isVerifier: boolean };
@@ -37,8 +37,6 @@ function Inner({ children }: { children: React.ReactNode }) {
     if (r.ok) { const j = await r.json(); setTier(j.frozen || j.expiry * 1000 < Date.now() ? 0 : j.tier); }
   }, [credential]);
   useEffect(() => { refreshTier(); }, [refreshTier]);
-  useEffect(() => { setCredential(userId ? loadCredential(userId) : null); }, [userId]);
-
   const bind = useCallback(async (id: string, publicKey: `0x${string}`) => {
     const res = await fetch("/api/account", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ credentialId: id, publicKey }) });
     const j = await res.json();
@@ -46,6 +44,34 @@ function Inner({ children }: { children: React.ReactNode }) {
     const c: StoredCredential = { id, publicKey, address: j.address, userId: userId! };
     saveCredential(c); setCredential(c);
   }, [userId]);
+
+  useEffect(() => { setCredential(userId ? loadCredential(userId) : null); }, [userId]);
+
+  // 合約重新部署後，factory 位址會變，同一把 passkey 推出來的帳戶地址也跟著變，
+  // 但這個裝置記住的還是舊地址 —— 那個地址上沒有合約，任何操作都會失敗。
+  // passkey 才是真正的身分，地址只是推導結果，所以這裡直接拿同一把公鑰
+  // 對現在的 factory 重新綁定，使用者不需要知道發生過什麼事。
+  useEffect(() => {
+    if (!credential || !config || !userId) return;
+    let live = true;
+    (async () => {
+      if (await hasCode(config.rpcUrl, credential.address)) return;
+      if (!live) return;
+      setBusy("合約已更新，重新綁定帳戶…");
+      try {
+        await bind(credential.id, credential.publicKey);
+      } catch {
+        // 重綁失敗（例如這把 passkey 沒對應紀錄）就清掉，讓使用者重新建立，
+        // 而不是留著一個永遠失敗的地址。
+        if (live) { clearCredential(); setCredential(null); }
+      } finally {
+        if (live) setBusy(null);
+      }
+    })();
+    return () => { live = false; };
+    // bind 會隨 userId 變動；credential.address 是實際要檢查的東西
+  }, [credential, config, userId, bind]);
+
 
   const createAccount = useCallback(async () => {
     if (!userId) return;
