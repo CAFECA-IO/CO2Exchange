@@ -21,6 +21,7 @@ import {CarbonPool} from "../src/market/CarbonPool.sol";
 import {CarbonKYCHook} from "../src/v4/CarbonKYCHook.sol";
 import {TrustedRouter} from "../src/v4/TrustedRouter.sol";
 import {MockTWD} from "../src/mocks/MockTWD.sol";
+import {PasskeyAccountFactory} from "../src/account/PasskeyAccountFactory.sol";
 import {HookMiner} from "./utils/HookMiner.sol";
 
 /// @notice Phase 0 一鍵部署（Anvil）。
@@ -65,6 +66,7 @@ contract Deploy is Script {
     PoolManager public poolManager;
     CarbonKYCHook public hook;
     TrustedRouter public router;
+    PasskeyAccountFactory public accountFactory;
 
     function run() external {
         _loadConfig();
@@ -74,6 +76,7 @@ contract Deploy is Script {
         _wireAsOperator();
         _initPool();
         _print();
+        _writeDeployment();
     }
 
     function _loadConfig() internal {
@@ -163,6 +166,7 @@ contract Deploy is Script {
         hook = new CarbonKYCHook{salt: salt}(poolManager, kyc, cfg.sovereign, cfg.operator);
         require(address(hook) == hookAddr, "hook address mismatch");
         router = new TrustedRouter(poolManager);
+        accountFactory = new PasskeyAccountFactory();
         vm.stopBroadcast();
     }
 
@@ -225,5 +229,27 @@ contract Deploy is Script {
         console2.log("PoolManager          ", address(poolManager));
         console2.log("CarbonKYCHook        ", address(hook));
         console2.log("TrustedRouter        ", address(router));
+        console2.log("PasskeyAccountFactory", address(accountFactory));
+    }
+
+    /// @dev 前端讀 deployments/<chainId>.json
+    function _writeDeployment() internal {
+        string memory j = "d";
+        vm.serializeUint(j, "chainId", block.chainid);
+        vm.serializeAddress(j, "kycRegistry", address(kyc));
+        vm.serializeAddress(j, "retirementCertificate", address(cert));
+        vm.serializeAddress(j, "carbonCredit1155", address(credit));
+        vm.serializeAddress(j, "carbonRegistry", address(registry));
+        vm.serializeAddress(j, "settlementToken", address(twd));
+        vm.serializeAddress(j, "listing", address(listing));
+        vm.serializeAddress(j, "cct", address(cct));
+        vm.serializeAddress(j, "carbonPool", address(pool));
+        vm.serializeAddress(j, "poolManager", address(poolManager));
+        vm.serializeAddress(j, "hook", address(hook));
+        vm.serializeAddress(j, "router", address(router));
+        vm.serializeUint(j, "poolFee", 3000);
+        vm.serializeUint(j, "tickSpacing", 60);
+        string memory out = vm.serializeAddress(j, "accountFactory", address(accountFactory));
+        vm.writeJson(out, string.concat("deployments/", vm.toString(block.chainid), ".json"));
     }
 }

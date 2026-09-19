@@ -9,6 +9,7 @@
 ## 分層
 
 ```
+帳戶層             PasskeyAccount / Factory  P-256 passkey 擁有的智能帳戶，CREATE2 決定地址，WebAuthn 驗簽（OZ P256）
 身分層（UUPS）     KYCRegistry            政府憑證 attestation → tier / expiry / frozen / recover
 登錄層（不可升級） CarbonRegistry         查驗機構 EIP-712 簽章核發、序號唯一、專案登錄
                    CarbonCredit1155       額度本體，白名單主防線在 _update；retire → 憑證
@@ -62,7 +63,29 @@ forge script script/DemoFlow.s.sol --rpc-url anvil --broadcast --sig "demo()" # 
 account1 = 減量企業，account2 = 做市商，account3 = 自然人。流程：憑證 attestation 註冊 → 專案登錄 →
 查驗簽章核發 100 噸 → 30 噸掛單、60 噸入池、做市商提供 v4 流動性 → 自然人從掛單與 v4 各買一次 → 兩邊註銷取得憑證。
 
-## 測試（49）
+## 前端（web/，Next.js 16 + React 19）
+
+登入（Apple / Google / 開發用）→ passkey 建立鏈上帳戶 → 政府憑證身分驗證（Phase 0 模擬）→ 購買（企業掛單或 v4 池）→ 註銷 → 憑證。
+
+```bash
+# 終端 1
+anvil
+# 終端 2：部署 + 種子資料
+forge script script/DemoFlow.s.sol --rpc-url anvil --broadcast --sig "demo()"
+# 終端 3
+cd web && cp .env.example .env.local && npm install && npm run dev
+# 開 http://localhost:3000
+```
+
+錢包架構：`PasskeyAccount`（P-256 passkey 是唯一擁有者，地址由公鑰經 CREATE2 決定，換裝置不變）。
+Phase 0 交易由平台 relayer 代送 `execute`（`/api/relay`，gas 由平台付），授權來自使用者的 WebAuthn 簽章，relayer 無法竄改內容；
+Phase 1 換成 ERC-4337 EntryPoint + paymaster，帳戶簽章格式與 nonce 語意不變。
+
+Apple / Google 登入：在 `.env.local` 設 `AUTH_GOOGLE_ID/SECRET`、`AUTH_APPLE_ID/SECRET` 後自動出現；登入只建立 session，不是身分根。
+
+端到端測試（Chromium 虛擬 passkey，需 `npx playwright install chromium`）：`npm run e2e`（需 anvil + DemoFlow + `npm run dev` 或 `AUTH_DEV_LOGIN=1 npm start`）。
+
+## 測試（56）
 
 | 檔案 | 涵蓋 |
 |---|---|
@@ -72,6 +95,7 @@ account1 = 減量企業，account2 = 做市商，account3 = 自然人。流程�
 | `Pool.t.sol` | 存入鑄幣、年份不符、自然人不可存、FIFO 跨批次贖回、指定贖回費與 1:1 backing、redeemAndRetire |
 | `V4.t.sol` | 建池限 OPERATOR 與合法配對、LP 限法人、自然人買入、未驗證與非信任 Router 被擋、自然人不可賣出、每日限額、買入後註銷 |
 | `Governance.t.sol` | 主權角色移轉、單方面撤銷營運角色、只有 admin 可升級、登錄層無升級路徑、registry 只能設一次 |
+| `PasskeyAccount.t.sol` | 以 `vm.signP256` 組出完整 WebAuthn 斷言：relayer 代送購買與註銷、重放、竄改、錯誤金鑰、內部 revert、ERC-1271、factory 決定性 |
 
 ## 授權提醒
 
@@ -81,7 +105,7 @@ Phase 1 主市場為 `Listing`，不依賴 v4。
 
 ## 尚未包含（Phase 0 後續）
 
-- Passkey smart account + ERC-4337 paymaster、Next.js 前端（登入 / KYC / 購買並註銷 / 我的憑證）
+- ERC-4337 EntryPoint + paymaster（目前為 relayer 代送）
 - Safe + TimelockController 治理接線（Phase 0 以 EOA 代替）
 - 身分驗證服務：工商憑證 / 自然人憑證 / TW FidO 驗證後端（目前以簽章金鑰模擬）
 - Besu + QBFT 四節點測試網（需啟用 Cancun / EIP-1153）

@@ -32,6 +32,7 @@ contract DemoFlow is Deploy {
         _wireAsOperator();
         _initPool();
         _print();
+        _writeDeployment();
         address companyA = vm.addr(PK_A);
         address companyB = vm.addr(PK_B);
         address alice = vm.addr(PK_ALICE);
