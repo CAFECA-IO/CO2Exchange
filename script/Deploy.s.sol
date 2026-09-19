@@ -323,9 +323,16 @@ contract Deploy is Script {
     }
 
     /// @dev 前端讀 deployments/<chainId>.json
+    ///
+    /// deployedAt 是「這一次部署」的識別碼（主機時鐘毫秒，非鏈上時間）。
+    /// 少了它，Anvil 重開再部署會產生**一模一樣的地址**（同一個部署者、同樣的 nonce 順序），
+    /// 前端就分不出「還是同一條鏈」與「鏈重開了、鏈上狀態全沒了」——
+    /// web/data/ 裡那些寫著「已核准」的紀錄會繼續被當成有效，但鏈上查無此身分。
     function _writeDeployment() internal {
         string memory j = "d";
         vm.serializeUint(j, "chainId", block.chainid);
+        vm.serializeUint(j, "deployedAt", vm.unixTime());
+        vm.serializeUint(j, "deployedAtBlock", block.number);
         vm.serializeAddress(j, "kycRegistry", address(kyc));
         vm.serializeAddress(j, "retirementCertificate", address(cert));
         vm.serializeAddress(j, "carbonCredit1155", address(credit));

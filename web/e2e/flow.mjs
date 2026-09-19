@@ -1,6 +1,6 @@
 // 自然人流程：登入 → passkey 建帳戶 → KYC 申請 → 管理員核准 → faucet → 掛單買 → v4 買 → 註銷 → 憑證 → 管理員產生 PDF 並回寫
 // 前置：anvil 已跑 DemoFlow、next 在 :3000（KYC_AUTO_APPROVE=0）。執行：node e2e/flow.mjs
-import { BASE, adminApproveAllKyc, applyKyc, createPasskeyAccount, launch, login, newUser, waitKycActive, waitOk } from "./lib.mjs";
+import { BASE, adminApproveAllKyc, applyKyc, buyFromBook, createPasskeyAccount, launch, login, newUser, waitKycActive, waitOk } from "./lib.mjs";
 
 const browser = await launch();
 const alice = await newUser(browser, "alice");
@@ -23,8 +23,7 @@ const page = alice.page;
 await page.goto(`${BASE}/trade`);
 await page.getByRole("button", { name: "領取測試用 mTWD" }).click();
 await page.locator('[data-testid="twd"]', { hasText: "100,000" }).waitFor({ timeout: 30_000 });
-await page.getByRole("button", { name: "購買", exact: true }).first().click();
-await waitOk(page, "掛單購買 1 噸完成");
+await buyFromBook(page, { kg: 1000 });
 await page.getByRole("button", { name: "以 passkey 簽章購買" }).click();
 await waitOk(page, "流動性池購買（2000 mTWD）完成");
 console.log("✔ 掛單 + v4 購買");

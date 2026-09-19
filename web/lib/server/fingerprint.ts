@@ -27,23 +27,34 @@ const KEYS = [
   "listing",
 ] as const;
 
-export type Stamp = { chainId: number; fingerprint: string; addresses: Record<string, string>; stampedAt: string };
+export type Stamp = {
+  chainId: number;
+  fingerprint: string;
+  addresses: Record<string, string>;
+  deployedAt?: number;
+  stampedAt: string;
+};
 
 export function deploymentFingerprint(): Stamp {
-  const d = deployment() as unknown as Record<string, string>;
+  const d = deployment();
+  const raw = d as unknown as Record<string, string>;
   const addresses: Record<string, string> = {};
-  for (const k of KEYS) addresses[k] = String(d[k] ?? "").toLowerCase();
-  const material = `${CHAIN_ID}|` + KEYS.map((k) => `${k}=${addresses[k]}`).join("|");
+  for (const k of KEYS) addresses[k] = String(raw[k] ?? "").toLowerCase();
+  // deployedAt 不可省：Anvil 重開後重新部署會得到一模一樣的地址（同部署者、同 nonce 順序），
+  // 只看地址的話分不出「鏈重開、鏈上狀態全沒了」，本機那些寫著「已核准」的紀錄就會繼續被當成有效。
+  // 實測過：重開 anvil 再跑一次 DemoFlowV4，七個地址全部相同。
+  const material = `${CHAIN_ID}|deployedAt=${d.deployedAt ?? ""}|` + KEYS.map((k) => `${k}=${addresses[k]}`).join("|");
   const fingerprint = crypto.createHash("sha256").update(material).digest("hex").slice(0, 16);
-  return { chainId: CHAIN_ID, fingerprint, addresses, stampedAt: new Date().toISOString() };
+  return { chainId: CHAIN_ID, fingerprint, addresses, deployedAt: d.deployedAt, stampedAt: new Date().toISOString() };
 }
 
 export class StaleDataError extends Error {
   readonly code = "DATA_STALE";
   constructor(readonly stamp: Stamp, readonly current: Stamp) {
     super(
-      `web/data/ 裡的紀錄屬於另一個部署（資料 ${stamp.fingerprint} / chain ${stamp.chainId}，` +
+      `web/data/ 裡的紀錄屬於另一次部署（資料 ${stamp.fingerprint} / chain ${stamp.chainId}，` +
         `目前 ${current.fingerprint} / chain ${current.chainId}）。` +
+        `鏈重開後重新部署也算——地址可能一模一樣，但鏈上狀態已經全部歸零。` +
         `這些紀錄是用舊合約產生的帳戶地址當鍵的，在現在這條鏈上對不到任何帳戶。` +
         `確認舊資料不用了就執行 npm run data:reset（會先搬到 data.bak-<時間> 再重來），` +
         `或把 DATA_DIR 指到另一個資料夾分開存放。`,

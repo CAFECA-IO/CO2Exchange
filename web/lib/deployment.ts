@@ -2,6 +2,10 @@ import type { Address } from "viem";
 
 export type Deployment = {
   chainId: number;
+  /// 這一次部署的識別碼（主機時鐘毫秒）。Anvil 重開後重新部署會得到相同地址，
+  /// 只有這個欄位分得出「鏈重開了」。舊的部署檔沒有這個欄位，視為未知。
+  deployedAt?: number;
+  deployedAtBlock?: number;
   kycRegistry: Address; retirementCertificate: Address; carbonCredit1155: Address; carbonRegistry: Address;
   settlementToken: Address; listing: Address; cct: Address; carbonPool: Address;
   poolManager: Address; hook: Address; router: Address; accountFactory: Address;

@@ -41,5 +41,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 data/
+# data:reset 會把資料夾搬成 data.bak-<時間戳>，裡面有上傳的身分文件，絕不能進版控
+data.bak-*/
 .env.local
 e2e/*.png
