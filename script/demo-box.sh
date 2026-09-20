@@ -60,9 +60,18 @@ rebuild)
   # 回填只能把鏈的時間往前推，不能倒退，所以鏈要從 DAYS 天前開始。
   TS=$(( $(date +%s) - DAYS * 86400 ))
   echo ">> 開 anvil（起始時間 $(days_ago "$DAYS")，--prune-history）"
+  # setsid 讓 anvil 脫離這個 shell 的 process group。只用 nohup 不夠：
+  # 終端機關掉、或排程工具收掉整個 process group 的時候，anvil 會跟著被帶走。
+  # 展示機要活過「跑完腳本就登出」，這一行是必要的。
   # shellcheck disable=SC2086
-  nohup anvil --timestamp "$TS" --prune-history ${STATE:+--state "$STATE"} --silent \
-    > "$LOG/anvil.log" 2>&1 &
+  RUN="anvil --timestamp $TS --prune-history ${STATE:+--state $STATE} --silent"
+  if command -v setsid >/dev/null 2>&1; then
+    setsid $RUN > "$LOG/anvil.log" 2>&1 < /dev/null &
+  else
+    # macOS 沒有 setsid；nohup + disown 是能做到的最好程度
+    nohup $RUN > "$LOG/anvil.log" 2>&1 < /dev/null &
+    disown 2>/dev/null || true
+  fi
   for _ in $(seq 30); do rpc_up && break; sleep 1; done
   rpc_up || { echo "!! anvil 沒起來，看 $LOG/anvil.log"; exit 1; }
 

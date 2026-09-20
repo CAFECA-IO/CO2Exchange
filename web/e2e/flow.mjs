@@ -19,8 +19,33 @@ console.log("✔ KYC 申請（審核中）");
 
 await login(admin.page, "admin@example.com");
 await adminApproveAllKyc(admin.page);
-await waitKycActive(alice.page);
-console.log("✔ 管理員核准 KYC");
+
+// 走**使用者真正的路徑**：不重新載入頁面。停在 /kyc、按「重新整理」，
+// 再點連結過去（client-side navigation）。
+//
+// 這件事測起來很囉嗦但非做不可：`page.goto()` 會整頁重載，把 AccountProvider
+// 連同它的身分狀態一起重建，於是任何「兩份狀態不同步」的 bug 都測不到。
+// 實際發生過：核准之後 /kyc 顯示「法人・有效」，同一時間 /trade 說「尚未完成身分驗證」、
+// /enterprise 說「需要法人身分」，因為那兩頁讀的是 provider 裡另一份沒被刷新的資料。
+// 不要按「重新整理」、也不要 F5——這正是使用者的處境：核准是**別人**在別的地方做的，
+// 他這個分頁什麼都不知道。切走再切回來（visibilitychange）應該就要更新。
+await alice.page.evaluate(() => {
+  Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+  document.dispatchEvent(new Event("visibilitychange"));
+  Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+  document.dispatchEvent(new Event("visibilitychange"));
+});
+await alice.page.getByRole("link", { name: "前往交易" }).waitFor({ timeout: 30_000 });
+console.log("✔ 管理員核准 KYC（回到分頁就看得到，不必重新載入）");
+
+await alice.page.getByRole("link", { name: "前往交易" }).click();
+await alice.page.waitForURL("**/trade");
+await alice.page.getByRole("button", { name: "賣出" }).click();
+await alice.page.waitForTimeout(400);
+if (/尚未完成身分驗證/.test(await alice.page.locator("body").innerText())) {
+  throw new Error("換頁之後 /trade 仍然認為沒有身分——兩份身分狀態又不同步了");
+}
+console.log("✔ 不重新載入、直接換頁，交易頁也認得身分");
 
 const page = alice.page;
 await page.goto(`${BASE}/trade`);

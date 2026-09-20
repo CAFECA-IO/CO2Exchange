@@ -1,42 +1,30 @@
 "use client";
-import { useEffect, useState } from "react";
-import { useReload } from "@/lib/client/useReload";
+import { useState } from "react";
 import { useAccount } from "@/components/AccountProvider";
 import { AccountGate } from "@/components/AccountGate";
 import { Button, Card, Field, Notice, inputCls } from "@/components/ui";
 import { TIER, TIER_LABEL } from "@/lib/deployment";
 import Link from "next/link";
 
-type Identity = { tier: number; expiry: number; frozen: boolean; jurisdiction: string; identityHash: string; application: { id: string; status: string; tier: number; reason?: string; createdAt: string } | null };
-
 export default function KycPage() {
-  const { credential, userId, refreshTier } = useAccount();
-  const [identity, setIdentity] = useState<Identity | null>(null);
+  // 身分從 AccountProvider 拿，不要自己再 fetch 一份。
+  // 以前這頁自己存一份、provider 存另一份，兩邊各自決定何時刷新——
+  // 管理員核准之後只有這頁重抓，於是這頁顯示「法人・有效」，
+  // 同一時間 /trade 說「尚未完成身分驗證」、/enterprise 說「需要法人身分」。
+  // 而那顆能同步兩邊的「重新整理」按鈕只在審核中才出現，核准後就不見了，
+  // 使用者除了整頁重新載入之外沒有任何辦法。
+  const { credential, userId, identity, identityAt, refreshTier } = useAccount();
   const [tier, setTier] = useState<number>(TIER.Individual);
   const [idNumber, setIdNumber] = useState("");
   const [name, setName] = useState("");
   const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // 效期是否過了，在「拿到資料的當下」判定並記下來；render 期間不呼叫 Date.now()
-  // （那是不純的讀取，會讓同一份資料在不同 render 得到不同結果）。
-  const [checkedAt, setCheckedAt] = useState(0);
-  const [reloadKey, reload] = useReload();
-  useEffect(() => {
-    if (!credential) return;
-    let ignore = false;
-    (async () => {
-      const r = await fetch(`/api/kyc?account=${credential.address}`);
-      if (ignore || !r.ok) return;
-      setIdentity(await r.json());
-      setCheckedAt(Date.now());
-    })();
-    return () => { ignore = true; };
-  }, [credential, reloadKey]);
-
   if (!userId || !credential) return <AccountGate />;
 
-  const active = !!identity && identity.tier !== TIER.None && !identity.frozen && identity.expiry * 1000 > checkedAt;
+  // 效期在「拿到資料的當下」判定（identityAt），render 期間不呼叫 Date.now()——
+  // 那是不純的讀取，同一份資料在不同 render 會得到不同結果。
+  const active = !!identity && identity.tier !== TIER.None && !identity.frozen && identity.expiry * 1000 > identityAt;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -48,7 +36,7 @@ export default function KycPage() {
       setMsg(j.status === "approved"
         ? { kind: "ok", text: `身分已綁定帳戶。交易 ${j.txHash.slice(0, 10)}…` }
         : { kind: "ok", text: "申請已送出，待身分驗證服務審核。" });
-      reload(); await refreshTier();
+      await refreshTier();
     } catch (e) { setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) }); }
     finally { setBusy(false); }
   }
@@ -70,7 +58,9 @@ export default function KycPage() {
           </dl>
         ) : <p className="text-sm text-ink-300">讀取中…</p>}
         {active && <div className="mt-4 flex gap-2"><Link href="/trade"><Button>前往交易</Button></Link>{identity?.tier === TIER.Corporate && <Link href="/enterprise"><Button variant="secondary">企業功能</Button></Link>}</div>}
-        {identity?.application?.status === "pending" && <div className="mt-3"><Button variant="secondary" onClick={() => { reload(); refreshTier(); }}>重新整理</Button></div>}
+        {/* 核准是管理員在別的地方做的，這一頁不會自己知道，所以重新整理一直要能按，
+            不是只在「審核中」才出現——核准之後那顆按鈕消失，才是真的沒辦法。 */}
+        <div className="mt-3"><Button variant="secondary" onClick={refreshTier}>重新整理</Button></div>
       </Card>
 
       <Card title="以政府憑證驗證身分">

@@ -7,11 +7,23 @@ import { clearCredential, credentialServerSnapshot, credentialSnapshot, discover
 
 type Config = { deployment: Deployment; rpcUrl: string; providers: string[] };
 export type Me = { email: string | null; isAdmin: boolean; isVerifier: boolean };
+/// 鏈上身分 + 本機的申請紀錄。`/api/kyc` 回的就是這個形狀。
+export type Identity = {
+  tier: number; expiry: number; frozen: boolean; jurisdiction: string; identityHash: string;
+  application: { id: string; status: string; tier: number; reason?: string; createdAt: string } | null;
+};
 type Ctx = {
   config: Config | null;
   credential: StoredCredential | null;
   userId: string | null;
   me: Me;
+  /// 身分只有這一份。**任何頁面都不要自己再 fetch 一次 `/api/kyc`**——
+  /// 以前 /kyc 自己存一份、AccountProvider 存另一份，兩邊各自決定什麼時候刷新，
+  /// 於是「/kyc 顯示法人有效，同一時間 /trade 說你沒驗證」。
+  /// 那不是同步沒做好，是同一份資料放了兩份。
+  identity: Identity | null;
+  /// 拿到 identity 的時間。效期要在取得資料的當下比，render 期間不呼叫 Date.now()。
+  identityAt: number;
   tier: number; // 鏈上身分等級（0 未驗證 / 1 自然人 / 2 法人）
   refreshTier: () => void;
   busy: string | null;
@@ -30,9 +42,9 @@ function Inner({ children }: { children: React.ReactNode }) {
   const [config, setConfig] = useState<Config | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [me, setMe] = useState<Me>({ email: null, isAdmin: false, isVerifier: false });
-  // tier 連同它屬於哪個地址一起存。這樣換帳戶時不必先 setTier(0)「清乾淨」
-  // （那是在 effect 裡同步改狀態），對不上就直接當 0。
-  const [tierFor, setTierFor] = useState<{ address: string; tier: number } | null>(null);
+  // 身分連同它屬於哪個地址一起存。這樣換帳戶時不必先清空
+  //（那是在 effect 裡同步改狀態），對不上就直接當未驗證。
+  const [idFor, setIdFor] = useState<{ address: string; identity: Identity; at: number } | null>(null);
   const [unbound, setUnbound] = useState(false);
 
   // 憑證的真實來源是 localStorage，不是 React state：訂閱它，不要複製一份再想辦法同步。
@@ -50,12 +62,29 @@ function Inner({ children }: { children: React.ReactNode }) {
     (async () => {
       const r = await fetch(`/api/kyc?account=${address}`);
       if (ignore || !r.ok) return;
-      const j = await r.json();
-      setTierFor({ address, tier: j.frozen || j.expiry * 1000 < Date.now() ? 0 : j.tier });
+      setIdFor({ address, identity: (await r.json()) as Identity, at: Date.now() });
     })();
     return () => { ignore = true; };
   }, [credential, tierKey]);
-  const tier = tierFor && credential && tierFor.address === credential.address ? tierFor.tier : 0;
+
+  // 身分是**別人**會改的東西：管理員在後台核准、查驗機構核發、主權角色凍結。
+  // 這個分頁不會自己知道，所以回到分頁時重抓一次。
+  // 沒有這一段，使用者得整頁重新載入才看得到核准結果——而畫面上不會有任何提示
+  // 告訴他要這麼做，他只會覺得「我明明已經核准了，為什麼還說我沒驗證」。
+  useEffect(() => {
+    const onFocus = () => { if (document.visibilityState === "visible") refreshTier(); };
+    document.addEventListener("visibilitychange", onFocus);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onFocus);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [refreshTier]);
+
+  const mine = idFor && credential && idFor.address === credential.address ? idFor : null;
+  const identity = mine?.identity ?? null;
+  const identityAt = mine?.at ?? 0;
+  const tier = !identity || identity.frozen || identity.expiry * 1000 < identityAt ? 0 : identity.tier;
   const bind = useCallback(async (id: string, publicKey: `0x${string}`) => {
     const res = await fetch("/api/account", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ credentialId: id, publicKey }) });
     const j = await res.json();
@@ -115,7 +144,10 @@ function Inner({ children }: { children: React.ReactNode }) {
 
   const forget = useCallback(() => { clearCredential(); setUnbound(false); }, []);
 
-  const value = useMemo(() => ({ config, credential, userId, me, tier, refreshTier, busy, unbound, createAccount, useExistingPasskey, forget }), [config, credential, userId, me, tier, refreshTier, busy, unbound, createAccount, useExistingPasskey, forget]);
+  const value = useMemo(
+    () => ({ config, credential, userId, me, identity, identityAt, tier, refreshTier, busy, unbound, createAccount, useExistingPasskey, forget }),
+    [config, credential, userId, me, identity, identityAt, tier, refreshTier, busy, unbound, createAccount, useExistingPasskey, forget],
+  );
   return <AccountCtx.Provider value={value}>{children}</AccountCtx.Provider>;
 }
 
