@@ -94,7 +94,7 @@ function Inner({ children }: { children: React.ReactNode }) {
     if (!userId) return;
     setBusy("建立 passkey…");
     try {
-      const { id, publicKey } = await registerPasskey(`CO2Exchange · ${session?.user?.email ?? userId}`);
+      const { id, publicKey } = await registerPasskey(`TideBit-DeFi 碳權交易所 · ${session?.user?.email ?? userId}`);
       setBusy("部署帳戶（平台代付 gas）…");
       await bind(id, publicKey);
     } finally { setBusy(null); }

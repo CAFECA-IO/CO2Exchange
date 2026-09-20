@@ -1,11 +1,31 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { AccountProvider } from "@/components/AccountProvider";
 import { Nav } from "@/components/Nav";
 
 export const metadata: Metadata = {
-  title: "CO2Exchange",
-  description: "碳權交易所（Phase 0）",
+  title: { default: "TideBit-DeFi 碳權交易所", template: "%s｜TideBit-DeFi 碳權交易所" },
+  description: "跨轄區碳權交易平台：核發、交易、註銷與託管揭露全程上鏈（Phase 0）",
+  applicationName: "TideBit-DeFi 碳權交易所",
+  // 圖示來自 TideBit-DeFi（CAFECA-IO/TideBit-DeFi），維持同一套品牌識別。
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/favicon-32x32.png", type: "image/png", sizes: "32x32" },
+      { url: "/favicon-16x16.png", type: "image/png", sizes: "16x16" },
+    ],
+    apple: "/apple-touch-icon.png",
+    other: [{ rel: "mask-icon", url: "/safari-pinned-tab.svg", color: "#29c1e1" }],
+  },
+  manifest: "/site.webmanifest",
+};
+
+/// 手機瀏覽器的網址列會用這個顏色。兩種佈景各給一個，不然淺色模式的網址列會是一塊黑。
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: dark)", color: "#161719" },
+    { media: "(prefers-color-scheme: light)", color: "#f4f5f7" },
+  ],
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

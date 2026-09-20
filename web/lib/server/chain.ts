@@ -13,7 +13,7 @@ export const CHAIN_ID = Number(process.env.CHAIN_ID ?? 31337);
 
 export const chain = defineChain({
   id: CHAIN_ID,
-  name: process.env.CHAIN_NAME ?? "CO2Exchange Local",
+  name: process.env.CHAIN_NAME ?? "TideBit-DeFi Carbon Local",
   nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
   rpcUrls: { default: { http: [RPC_URL] } },
 });

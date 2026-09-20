@@ -1,0 +1,14 @@
+{
+  "name": "TideBit-DeFi 碳權交易所",
+  "short_name": "TideBit 碳權",
+  "description": "跨轄區碳權交易平台：核發、交易、註銷與託管揭露全程上鏈",
+  "lang": "zh-TW",
+  "icons": [
+    { "src": "/android-chrome-192x192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/android-chrome-512x512.png", "sizes": "512x512", "type": "image/png" }
+  ],
+  "theme_color": "#161719",
+  "background_color": "#161719",
+  "display": "standalone",
+  "start_url": "/"
+}

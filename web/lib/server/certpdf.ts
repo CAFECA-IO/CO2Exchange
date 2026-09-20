@@ -27,6 +27,9 @@ export function existingPdf(certId: number) {
 
 const d = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10);
 
+const PLATFORM = "TideBit-DeFi 碳權交易所";
+const OPERATOR = "卡菲卡金融科技股份有限公司";
+
 export async function generateCertificatePdf(c: CertData) {
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
@@ -47,7 +50,11 @@ export async function generateCertificatePdf(c: CertData) {
   text("減量額度註銷憑證", 56, 22, cjk, green); y -= 16;
   text("Carbon Credit Retirement Certificate", 56, 11, cjk, rgb(0.35, 0.35, 0.35)); y -= 14;
   text(`No. ${c.certId}`, width - 56 - mono.widthOfTextAtSize(`No. ${c.certId}`, 12), 12, mono, green);
-  y -= 30;
+  y -= 15;
+  // 這張憑證會被夾進申報文件送到主管機關手上，所以它必須自己說得出「誰開的」。
+  // 平台名與營運公司分開寫：出事的時候要找的是公司，不是品牌。
+  text(`${PLATFORM}　營運方：${OPERATOR}`, 56, 9, cjk, rgb(0.45, 0.45, 0.45));
+  y -= 15;
 
   line("受益人", c.beneficiary || "（未填）");
   line("註銷數量", `${(c.amountKg / 1000).toLocaleString("zh-TW", { maximumFractionDigits: 3 })} 公噸 CO2e（${c.amountKg.toLocaleString()} kg）`);
@@ -77,7 +84,7 @@ export async function generateCertificatePdf(c: CertData) {
   y -= 8;
   const note = "本文件內容以鏈上紀錄為準。文件檔案之 SHA-256 雜湊由營運方回寫至憑證合約 documentHash 欄位，任何人可重新計算雜湊並與鏈上比對以驗證本文件未經竄改。";
   for (const chunk of note.match(/.{1,40}/g) ?? []) { text(chunk, 56, 9.5, cjk, rgb(0.35, 0.35, 0.35)); y -= 14; }
-  text(`產生時間 ${new Date().toISOString()}`, 56, 8.5, cjk, rgb(0.5, 0.5, 0.5));
+  text(`產生時間 ${new Date().toISOString()}　由 ${PLATFORM} 產生`, 56, 8.5, cjk, rgb(0.5, 0.5, 0.5));
 
   const bytes = await doc.save();
   fs.mkdirSync(DIR, { recursive: true });

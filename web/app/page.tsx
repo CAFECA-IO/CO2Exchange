@@ -6,6 +6,7 @@ import { Button, Card, Field, Notice, inputCls } from "@/components/ui";
 import { MarketPanel } from "@/components/MarketPanel";
 import { MarketOverview } from "@/components/MarketOverview";
 import Link from "next/link";
+import { LogoMark } from "@/components/Logo";
 
 /// 這頁的說明文字刻意寫得像講給人聽，而不是抄法條：
 /// 每一個抽象名詞後面都跟一個具體例子，並且從頭到尾用同一家金屬扣件廠當主角，
@@ -70,7 +71,12 @@ export default function Home() {
       {/* ── Hero + 登入 ────────────────────────────────────────────── */}
       <div className="grid gap-6 md:grid-cols-[1.2fr_1fr]">
         <div className="space-y-4">
-          <h1 className="font-display text-3xl font-bold tracking-tight text-ink-50">碳權交易所</h1>
+          <div className="flex items-center gap-3 text-ink-50">
+            <LogoMark className="h-9 w-auto shrink-0" />
+            <h1 className="font-display text-3xl font-bold tracking-tight">
+              TideBit<span className="text-tide">-DeFi</span> 碳權交易所
+            </h1>
+          </div>
           <p className="text-sm leading-7 text-ink-200">
             一家工廠少排了一公噸二氧化碳，怎麼證明？證明完了之後，這一公噸要怎麼變成別人可以買的東西？
             買走的人用掉之後，又怎麼確定同一公噸不會被第二個人再用一次？

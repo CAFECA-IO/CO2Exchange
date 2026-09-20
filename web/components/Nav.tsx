@@ -3,6 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { useAccount } from "./AccountProvider";
+import { LogoMark } from "./Logo";
 import { ThemeToggle } from "./ThemeToggle";
 
 const base = [
@@ -29,8 +30,18 @@ export function Nav() {
   return (
     <header className="sticky top-0 z-50 border-b border-ink-500 bg-ink-900/80 backdrop-blur">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
-        <Link href="/" className="font-display text-base font-bold tracking-tight">
-          <span className="text-tide">CO2</span>Exchange
+        {/*
+          品牌：TideBit-DeFi 碳權交易所。標記用 currentColor 畫外框，所以它跟著
+          文字色走，淺色模式不會變成一塊看不見的白。中文全名在窄螢幕收起來——
+          那時候標記與英文字樣已經夠認人了。
+        */}
+        <Link href="/" className="flex items-center gap-2.5 text-ink-50" aria-label="TideBit-DeFi 碳權交易所">
+          <LogoMark className="h-7 w-auto shrink-0" />
+          <span className="font-display text-base font-bold leading-none tracking-tight">
+            TideBit<span className="text-tide">-DeFi</span>
+          </span>
+          <span className="hidden h-4 w-px bg-ink-500 sm:block" aria-hidden />
+          <span className="hidden text-sm text-ink-300 sm:block">碳權交易所</span>
         </Link>
         <nav className="flex flex-wrap gap-4 text-sm">
           {links.map(([href, label]) => (

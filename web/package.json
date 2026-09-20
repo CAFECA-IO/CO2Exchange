@@ -9,7 +9,8 @@
     "lint": "eslint",
     "e2e": "node e2e/flow.mjs && node e2e/enterprise.mjs",
     "seed:market": "node scripts/seed-market.mjs",
-    "data:reset": "node scripts/data-reset.mjs"
+    "data:reset": "node scripts/data-reset.mjs",
+    "simulate": "node scripts/simulate.mjs"
   },
   "dependencies": {
     "@pdf-lib/fontkit": "^1.1.1",
