@@ -22,4 +22,5 @@ export function hasV4(d: Pick<Deployment, "poolManager" | "hook" | "router">): b
 
 export const TIER = { None: 0, Individual: 1, Corporate: 2, SystemContract: 3 } as const;
 export const TIER_LABEL = ["未驗證", "自然人", "法人", "系統合約"] as const;
-export const PURPOSE_LABEL = ["自願抵銷", "碳費扣抵", "CBAM 申報", "其他"] as const;
+/// 註銷用途：對齊環境部 TCER 登錄系統四種註銷申請書的分類，順序與合約 enum 一致。
+export const PURPOSE_LABEL = ["扣除碳費排放量", "自願性碳中和或碳抵換", "溫室氣體增量抵換", "環評承諾事項"] as const;

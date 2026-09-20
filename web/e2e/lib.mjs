@@ -74,17 +74,27 @@ export async function waitKycActive(page) {
   await page.locator("text=前往購買與註銷").waitFor({ timeout: 30_000 });
 }
 
+/// 勾選畫面上所有待簽的定型化契約。條文改版後會再次出現，所以每次操作前都跑一次。
+export async function agreeAll(page) {
+  const boxes = page.locator('[data-testid^="agree-"]');
+  for (let i = 0; i < (await boxes.count()); i++) {
+    const b = boxes.nth(i);
+    if (await b.isVisible().catch(() => false) && !(await b.isChecked())) await b.check();
+  }
+}
+
 /// 交易所式掛單簿：先在左側點一筆掛單，再到右側「買進」面板下單。
-/// （舊版是每列一顆「購買」按鈕，2026-09 改版後不再存在。）
-export async function buyFromBook(page, { match, kg = 1000 } = {}) {
+/// （舊版是每列一顆「購買」按鈕，2026-09 改版後不再存在；數量單位 2026-09-20 起改為噸。）
+export async function buyFromBook(page, { match, tonnes = 1 } = {}) {
   const row = match
     ? page.locator("li button", { hasText: match }).first()
     : page.locator('li button[aria-pressed]').first();
   await row.waitFor({ timeout: 30_000 });
   await row.click();
-  const qty = page.getByLabel(/數量（kg/);
+  const qty = page.getByLabel(/數量（噸/);
   await qty.waitFor({ timeout: 10_000 });
-  await qty.fill(String(kg));
+  await qty.fill(String(tonnes));
+  await agreeAll(page);
   await page.getByRole("button", { name: "以 passkey 簽章買進" }).click();
-  await waitOk(page, `購買 ${(kg / 1000).toLocaleString("zh-TW", { maximumFractionDigits: 3 })} 噸完成`);
+  await waitOk(page, `購買 ${tonnes.toLocaleString("zh-TW", { maximumFractionDigits: 3 })} 噸完成`);
 }

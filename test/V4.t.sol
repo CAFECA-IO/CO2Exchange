@@ -168,7 +168,7 @@ contract V4Test is V4Fixture {
         uint256 kg = cct.balanceOf(alice) / 1e15;
         vm.prank(alice);
         uint256[] memory certs = pool.redeemAndRetire(
-            kg, keccak256("A123456789"), "Alice Chen", RetirementCertificate.Purpose.Voluntary, "2026 flights"
+            kg, keccak256("A123456789"), "Alice Chen", RetirementCertificate.Purpose.VoluntaryNeutrality, "2026 flights"
         );
         assertEq(cert.ownerOf(certs[0]), alice);
         assertEq(cert.certificateOf(certs[0]).amountKg, kg);

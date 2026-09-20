@@ -57,6 +57,30 @@ contract RegistryTest is Fixture {
         registry.issue(a, sig);
     }
 
+    /// 官方註銷是鏈下才發生的第二段：本站額度由代辦方持有於環境部額度帳戶，
+    /// 鏈上先註銷並發憑證，官方編號與公開日之後回填。沒回填之前，憑證必須看得出來還沒完成。
+    function test_officialRetirement_backfilledByDocumentRole() public {
+        uint256 pid = _registerProject(companyA);
+        uint256 batch = _issue(pid, 5000, keccak256("OFF"));
+        vm.prank(companyA);
+        uint256 certId = credit.retire(_retireReq(companyA, batch, 1000, companyA));
+
+        RetirementCertificate.Certificate memory before = cert.certificateOf(certId);
+        assertEq(bytes(before.officialNo).length, 0, unicode"剛註銷時還沒有官方編號");
+        assertEq(before.officialAnnouncedAt, 0);
+
+        // 只有 DOCUMENT_ROLE 能回填
+        vm.prank(companyA);
+        vm.expectRevert();
+        cert.setOfficialRetirement(certId, "TCER-C-2026-000123", 1_800_100_000);
+
+        vm.prank(operator);
+        cert.setOfficialRetirement(certId, "TCER-C-2026-000123", 1_800_100_000);
+        RetirementCertificate.Certificate memory after_ = cert.certificateOf(certId);
+        assertEq(after_.officialNo, "TCER-C-2026-000123");
+        assertEq(after_.officialAnnouncedAt, 1_800_100_000);
+    }
+
     function test_retire_burnsAndMintsSoulboundCertificate() public {
         uint256 pid = _registerProject(companyA);
         uint256 batch = _issue(pid, 5000, keccak256("S1"));
@@ -70,7 +94,7 @@ contract RegistryTest is Fixture {
         RetirementCertificate.Certificate memory c = cert.certificateOf(certId);
         assertEq(c.batchId, batch);
         assertEq(c.amountKg, 1500);
-        assertEq(uint8(c.purpose), uint8(RetirementCertificate.Purpose.CarbonFeeOffset));
+        assertEq(uint8(c.purpose), uint8(RetirementCertificate.Purpose.CarbonFee));
         assertEq(c.retiredBy, companyA);
 
         // soulbound

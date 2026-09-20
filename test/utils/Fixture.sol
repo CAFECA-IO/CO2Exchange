@@ -174,7 +174,7 @@ abstract contract Fixture is Test {
             certificateTo: certificateTo,
             beneficiaryHash: keccak256("beneficiary"),
             beneficiary: "Test Beneficiary Co.",
-            purpose: RetirementCertificate.Purpose.CarbonFeeOffset,
+            purpose: RetirementCertificate.Purpose.CarbonFee,
             memo: "FY2025 carbon fee offset"
         });
     }

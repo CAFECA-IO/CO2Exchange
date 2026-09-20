@@ -2,6 +2,7 @@ import { parseAbiItem, type Address } from "viem";
 import { certificateAbi } from "@/lib/abis";
 import { deployment, isAddress, publicClient } from "@/lib/server/chain";
 import { handle } from "@/lib/server/roles";
+import { addWorkingDays } from "@/lib/server/bulletin";
 
 export async function GET(req: Request) {
   const account = new URL(req.url).searchParams.get("account");
@@ -20,6 +21,9 @@ export async function GET(req: Request) {
       certId: Number(l.args.certId), batchId: Number(c.batchId), amountKg: Number(c.amountKg), beneficiary: c.beneficiary,
       purpose: c.purpose, memo: c.memo, retiredBy: c.retiredBy, retiredAt: Number(c.retiredAt), documentHash: c.documentHash,
       txHash: l.transactionHash, beneficiaryHash: c.beneficiaryHash,
+      // 官方註銷：未回填時兩個欄位都是空的，介面必須照實說「尚未完成」
+      officialNo: c.officialNo, officialAnnouncedAt: Number(c.officialAnnouncedAt),
+      claimableFrom: Number(c.officialAnnouncedAt) > 0 ? addWorkingDays(Number(c.officialAnnouncedAt), 5) : null,
     };
   }));
   return Response.json({ certificates: certs.sort((a, b) => b.certId - a.certId) });

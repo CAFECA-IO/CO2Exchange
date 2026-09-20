@@ -1,7 +1,7 @@
 // 企業流程：法人 KYC → 登錄專案 → 上傳查驗報告申請核發 → 查驗機構簽章核發 → 掛單 + 入池 → 自然人從新掛單購買
 // 執行：node e2e/enterprise.mjs（需先跑過 flow.mjs 或至少有 admin 可核准）
 import fs from "node:fs";
-import { BASE, adminApproveAllKyc, applyKyc, buyFromBook, createPasskeyAccount, launch, login, newUser, waitKycActive, waitOk } from "./lib.mjs";
+import { BASE, adminApproveAllKyc, agreeAll, applyKyc, buyFromBook, createPasskeyAccount, launch, login, newUser, waitKycActive, waitOk } from "./lib.mjs";
 
 const browser = await launch();
 const corp = await newUser(browser, "corp");
@@ -48,7 +48,9 @@ console.log("✔ 查驗機構核發");
 await corp.page.goto(`${BASE}/enterprise`);
 await corp.page.locator('[data-testid="holding-row"]', { hasText: "50 噸" }).waitFor({ timeout: 30_000 });
 const row = corp.page.locator('[data-testid="holding-row"]').first();
-await row.getByLabel("掛單 kg").fill("20000");
+await row.getByLabel("掛單（噸）").fill("20");
+await row.getByLabel("使用期限").fill("2027-12-31");
+await agreeAll(corp.page); // 上架前要簽代辦費用與減免約定書
 await row.getByRole("button", { name: "掛單" }).click();
 await waitOk(corp.page, "掛單批次 #");
 await corp.page.locator('[data-testid="holding-row"]', { hasText: "30 噸" }).waitFor({ timeout: 30_000 });
@@ -67,8 +69,9 @@ await waitKycActive(bob.page);
 await bob.page.goto(`${BASE}/trade`);
 await bob.page.getByRole("button", { name: "領取測試用 mTWD" }).click();
 await bob.page.locator('[data-testid="twd"]', { hasText: "100,000" }).waitFor({ timeout: 30_000 });
-await buyFromBook(bob.page, { match: "廠區鍋爐燃料轉換", kg: 1000 });
+await buyFromBook(bob.page, { match: "廠區鍋爐燃料轉換", tonnes: 1 });
 await bob.page.getByPlaceholder("某某股份有限公司").fill("Bob Lin");
+await agreeAll(bob.page);
 await bob.page.getByRole("button", { name: "註銷", exact: true }).first().click();
 await waitOk(bob.page, "註銷批次 #");
 console.log("✔ 自然人購買企業新掛單並註銷");

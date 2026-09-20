@@ -133,7 +133,9 @@ export const certificateAbi = [
     outputs: [{ type: "tuple", components: [
       { name: "batchId", type: "uint256" }, { name: "amountKg", type: "uint256" }, { name: "beneficiaryHash", type: "bytes32" },
       { name: "beneficiary", type: "string" }, { name: "purpose", type: "uint8" }, { name: "memo", type: "string" },
-      { name: "retiredBy", type: "address" }, { name: "retiredAt", type: "uint64" }, { name: "documentHash", type: "bytes32" } ] }],
+      { name: "retiredBy", type: "address" }, { name: "retiredAt", type: "uint64" }, { name: "documentHash", type: "bytes32" },
+      // 官方註銷回填：編號與主管機關公開日
+      { name: "officialNo", type: "string" }, { name: "officialAnnouncedAt", type: "uint64" } ] }],
   },
   {
     type: "event", name: "Retired",
@@ -181,6 +183,8 @@ export const erc1155ApprovalAbi = [
 ] as const;
 
 export const certificateWriteAbi = [
+  { type: "function", name: "setOfficialRetirement", stateMutability: "nonpayable",
+    inputs: [{ type: "uint256" }, { type: "string" }, { type: "uint64" }], outputs: [] },
   { type: "function", name: "setDocumentHash", stateMutability: "nonpayable", inputs: [{ type: "uint256" }, { type: "bytes32" }], outputs: [] },
 ] as const;
 

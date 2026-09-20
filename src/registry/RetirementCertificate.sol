@@ -17,11 +17,13 @@ contract RetirementCertificate is ERC721, AccessControl {
     /// @dev 憑證文件服務的金鑰：只能回寫 PDF hash。由 OPERATOR（營運 Safe）授予 / 撤銷。
     bytes32 public constant DOCUMENT_ROLE = keccak256("DOCUMENT_ROLE");
 
+    /// @notice 註銷用途。對齊環境部「溫室氣體減量額度管理系統」（TCER Registry）四種註銷申請書的分類。
+    ///         不自行發明類別：申請書分幾類，鏈上就是幾類，回填官方註銷編號時才對得起來。
     enum Purpose {
-        Voluntary, // 自願抵銷
-        CarbonFeeOffset, // 碳費扣抵
-        CBAM, // CBAM 申報（目前僅記錄用途，效力視法規）
-        Other
+        CarbonFee, // 扣除碳費排放量
+        VoluntaryNeutrality, // 自願性碳中和或碳抵換
+        IncrementOffset, // 溫室氣體增量抵換
+        EiaCommitment // 環評承諾事項
     }
 
     struct Certificate {
@@ -34,6 +36,11 @@ contract RetirementCertificate is ERC721, AccessControl {
         address retiredBy;
         uint64 retiredAt;
         bytes32 documentHash; // 正式憑證 PDF hash，由 OPERATOR 事後寫入
+        /// @dev 官方註銷回填。本站額度由代辦方（CAFECA）持有於環境部額度帳戶，
+        ///      鏈上註銷先行完成、官方註銷隨後辦理，完成後把編號與公開日寫回來。
+        ///      兩者都空 = 尚未完成官方程序，憑證上必須照實標示。
+        string officialNo; // 環境部註銷編號
+        uint64 officialAnnouncedAt; // 主管機關公開日（unix 秒）
     }
 
     uint256 public nextId = 1;
@@ -49,6 +56,7 @@ contract RetirementCertificate is ERC721, AccessControl {
         Purpose purpose
     );
     event DocumentHashSet(uint256 indexed certId, bytes32 documentHash);
+    event OfficialRetirementSet(uint256 indexed certId, string officialNo, uint64 announcedAt);
 
     error Soulbound();
 
@@ -73,6 +81,19 @@ contract RetirementCertificate is ERC721, AccessControl {
         _requireOwned(certId);
         _certs[certId].documentHash = documentHash;
         emit DocumentHashSet(certId, documentHash);
+    }
+
+    /// @notice 回填官方註銷結果。
+    /// @dev 依交易拍賣及移轉管理辦法第 27 條，主管機關於註銷次日起五個工作日內公開；
+    ///      公開之後事業才可以對外做環境聲明。前端據 announcedAt 算出可宣告日。
+    function setOfficialRetirement(uint256 certId, string calldata officialNo, uint64 announcedAt)
+        external
+        onlyRole(DOCUMENT_ROLE)
+    {
+        _requireOwned(certId);
+        _certs[certId].officialNo = officialNo;
+        _certs[certId].officialAnnouncedAt = announcedAt;
+        emit OfficialRetirementSet(certId, officialNo, announcedAt);
     }
 
     function certificateOf(uint256 certId) external view returns (Certificate memory) {

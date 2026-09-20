@@ -80,7 +80,7 @@ contract DemoFlow is Deploy {
             kg,
             keccak256("TW-ID-A123456789"),
             "Alice Chen",
-            RetirementCertificate.Purpose.Voluntary,
+            RetirementCertificate.Purpose.VoluntaryNeutrality,
             unicode"2026 差旅"
         );
         credit.retire(
@@ -91,7 +91,7 @@ contract DemoFlow is Deploy {
                 certificateTo: alice,
                 beneficiaryHash: keccak256("TW-ID-A123456789"),
                 beneficiary: "Alice Chen",
-                purpose: RetirementCertificate.Purpose.CarbonFeeOffset,
+                purpose: RetirementCertificate.Purpose.CarbonFee,
                 memo: "FY2025"
             })
         );

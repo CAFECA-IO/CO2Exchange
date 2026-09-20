@@ -60,7 +60,7 @@ contract PoolHandler is Test {
         if (max == 0) return;
         kg = bound(kg, 1, max);
         vm.prank(actor);
-        try pool.redeemAndRetire(kg, keccak256("b"), "B", RetirementCertificate.Purpose.Voluntary, "") {
+        try pool.redeemAndRetire(kg, keccak256("b"), "B", RetirementCertificate.Purpose.VoluntaryNeutrality, "") {
             ghostRetiredKg += kg;
         } catch {}
     }

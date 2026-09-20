@@ -94,7 +94,7 @@ contract PoolTest is Fixture {
 
         vm.prank(alice);
         uint256[] memory certs =
-            pool.redeemAndRetire(1_500, keccak256("alice"), "Alice", RetirementCertificate.Purpose.Voluntary, "");
+            pool.redeemAndRetire(1_500, keccak256("alice"), "Alice", RetirementCertificate.Purpose.VoluntaryNeutrality, "");
         assertEq(certs.length, 1);
         assertEq(cert.ownerOf(certs[0]), alice);
         assertEq(cert.certificateOf(certs[0]).amountKg, 1_500);

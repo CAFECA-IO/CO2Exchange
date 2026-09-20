@@ -4,6 +4,7 @@ import { useReload } from "@/lib/client/useReload";
 import { encodeFunctionData, keccak256, toBytes, type Address, type Hex } from "viem";
 import { useAccount } from "@/components/AccountProvider";
 import { AccountGate } from "@/components/AccountGate";
+import { AgreementCheck, useAgreementGate } from "@/components/AgreementGate";
 import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/components/ui";
 import { creditAbi, erc20Abi, listingAbi, poolAbi, routerAbi } from "@/lib/abis";
 import { PURPOSE_LABEL } from "@/lib/deployment";
@@ -33,6 +34,9 @@ export default function TradePage() {
   const [retireKg, setRetireKg] = useState<Record<string, string>>({});
 
   const [reloadKey, reload] = useReload();
+  // 買進與註銷各自需要的定型化契約。條文改版會自動再問一次。
+  const buyGate = useAgreementGate(credential?.address, ["platform-terms", "trade-agreement"]);
+  const retireGate = useAgreementGate(credential?.address, ["retirement-mandate"]);
   useEffect(() => {
     let ignore = false;
     (async () => {
@@ -209,26 +213,34 @@ export default function TradePage() {
                 </div>
               </div>
 
-              <Field label={`數量（kg，最少 ${selected.minFillKg || 1}）`}>
+              {/* 使用者想的是「幾噸」，不是「幾公斤」。輸入改以噸為單位，kg 只在送鏈時換算。 */}
+              <Field label={`數量（噸，最少 ${((selected.minFillKg || 1) / 1000).toLocaleString("zh-TW", { maximumFractionDigits: 3 })}）`}>
                 <input
                   className={inputCls}
                   type="number"
-                  min={selected.minFillKg || 1}
-                  max={selected.remainingKg}
-                  value={qtyKg}
-                  onChange={(e) => setQtyKg(e.target.value)}
+                  step="0.001"
+                  min={(selected.minFillKg || 1) / 1000}
+                  max={selected.remainingKg / 1000}
+                  value={Number(qtyKg) / 1000}
+                  onChange={(e) => setQtyKg(String(Math.round(Number(e.target.value) * 1000)))}
                 />
               </Field>
               <div className="flex gap-1">
-                {[25, 50, 75, 100].map((pct) => (
+                {[1, 5, 10].map((t) => (
                   <button
-                    key={pct}
-                    onClick={() => setQtyKg(String(Math.max(1, Math.round((selected.remainingKg * pct) / 100))))}
+                    key={t}
+                    onClick={() => setQtyKg(String(Math.min(selected.remainingKg, t * 1000)))}
                     className="flex-1 rounded border border-ink-500 py-1 text-xs text-ink-300 transition hover:border-tide/60 hover:text-ink-50"
                   >
-                    {pct}%
+                    {t} 噸
                   </button>
                 ))}
+                <button
+                  onClick={() => setQtyKg(String(selected.remainingKg))}
+                  className="flex-1 rounded border border-ink-500 py-1 text-xs text-ink-300 transition hover:border-tide/60 hover:text-ink-50"
+                >
+                  全部
+                </button>
               </div>
 
               <dl className="space-y-1 border-t border-ink-500 pt-3 text-sm">
@@ -244,9 +256,14 @@ export default function TradePage() {
                 </div>
               </dl>
 
+              <AgreementCheck gate={buyGate} />
+
               <Button
-                onClick={() => buyListing(selected, Number(qtyKg))}
-                disabled={!!busy || !qtyKg || Number(qtyKg) < (selected.minFillKg || 1)}
+                onClick={async () => {
+                  await buyGate.accept(`order:${selected.orderId}`);
+                  buyListing(selected, Number(qtyKg));
+                }}
+                disabled={!!busy || !qtyKg || Number(qtyKg) < (selected.minFillKg || 1) || !buyGate.ok}
                 className="w-full"
               >
                 {busy?.startsWith("購買") ? "簽章中…" : "以 passkey 簽章買進"}
@@ -257,6 +274,16 @@ export default function TradePage() {
       </div>
 
       <Card title="註銷並取得憑證">
+        <div className="mb-4 space-y-3">
+          <p className="text-xs leading-6 text-ink-300">
+            註銷代表這批額度永久退出流通。本站額度由卡菲卡持有於環境部額度帳戶，
+            鏈上註銷後由本站代為向中央主管機關申請官方移轉與註銷；
+            依規定主管機關於註銷次日起五個工作日內公開，
+            <b className="text-ink-200">公開後您才可以對外做碳中和之類的宣告</b>。
+            憑證上會標示可對外宣告日。
+          </p>
+          <AgreementCheck gate={retireGate} />
+        </div>
         <div className="mb-4 grid gap-3 md:grid-cols-3">
           <Field label="受益人名稱（憑證上顯示）"><input className={inputCls} value={beneficiary} onChange={(e) => setBeneficiary(e.target.value)} placeholder="某某股份有限公司" /></Field>
           <Field label="用途">
@@ -272,14 +299,20 @@ export default function TradePage() {
               <li key={b.batchId} className="flex flex-wrap items-center gap-3 rounded-lg border border-ink-500 p-3">
                 <span className="flex-1">批次 #{b.batchId} · {b.project} · {b.vintageYear} · 持有 {fmtKg(b.kg)}</span>
                 <input className={`${inputCls} w-28`} type="number" min="1" max={b.kg} value={retireKg[`b${b.batchId}`] ?? String(b.kg)} onChange={(e) => setRetireKg({ ...retireKg, [`b${b.batchId}`]: e.target.value })} />
-                <Button onClick={() => retireBatch(b.batchId, b.kg)} disabled={!!busy}>註銷</Button>
+                <Button
+                  onClick={async () => { await retireGate.accept(`batch:${b.batchId}`); retireBatch(b.batchId, b.kg); }}
+                  disabled={!!busy || !retireGate.ok}
+                >註銷</Button>
               </li>
             ))}
             {cctKg > 0 && (
               <li className="flex flex-wrap items-center gap-3 rounded-lg border border-ink-500 p-3">
                 <span className="flex-1">池化額度 CCT · 持有 {fmtKg(cctKg)}（註銷時依 FIFO 對應到具體批次）</span>
                 <input className={`${inputCls} w-28`} type="number" min="1" max={cctKg} value={retireKg.cct ?? String(cctKg)} onChange={(e) => setRetireKg({ ...retireKg, cct: e.target.value })} />
-                <Button onClick={() => retireCct(cctKg)} disabled={!!busy}>註銷</Button>
+                <Button
+                  onClick={async () => { await retireGate.accept("cct"); retireCct(cctKg); }}
+                  disabled={!!busy || !retireGate.ok}
+                >註銷</Button>
               </li>
             )}
             {h.batches.length === 0 && cctKg === 0 && <li className="text-ink-300">尚未持有額度。</li>}
