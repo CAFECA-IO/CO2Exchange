@@ -137,13 +137,24 @@ contract V4Test is V4Fixture {
         vm.stopPrank();
     }
 
-    function test_swap_individualCannotSell() public {
+    /// 自然人買得到也賣得掉——他持有的是請求權，轉手不影響官方登錄簿。
+    /// （能不能註銷是另一回事，見 test_endToEnd_corporateBuysThenRetires。）
+    function test_swap_individualCanSellBack() public {
         vm.prank(alice);
         router.swap(poolKey, _buyCct(4_000e6), 0, vm.getBlockTimestamp() + 1);
-        // 賣回：CCT 從自然人轉出 → 代幣層擋下（主防線）
+        uint256 before = cct.balanceOf(alice);
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(IKYCRegistry.IndividualTransferDisabled.selector, alice));
         router.swap(poolKey, _sellCct(1e18), 0, vm.getBlockTimestamp() + 1);
+        assertEq(before - cct.balanceOf(alice), 1e18);
+    }
+
+    function test_swap_individualCannotRetire() public {
+        vm.prank(alice);
+        router.swap(poolKey, _buyCct(2_000e6), 0, vm.getBlockTimestamp() + 1);
+        uint256 kg = cct.balanceOf(alice) / 1e15;
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(IKYCRegistry.IndividualRetireDisabled.selector, alice));
+        pool.redeemAndRetire(kg, keccak256("A123456789"), "Alice Chen", RetirementCertificate.Purpose.VoluntaryNeutrality, "");
     }
 
     function test_swap_dailyLimitEnforcedByActualDelta() public {
@@ -162,15 +173,21 @@ contract V4Test is V4Fixture {
         router.swap(poolKey, _buyCct(3_000e6), 0, vm.getBlockTimestamp() + 1); // 新的一天
     }
 
-    function test_endToEnd_buyThenRetire() public {
+    /// 完整路徑：自然人買入 → 轉售給法人 → 法人註銷取得憑證。
+    /// 這就是自然人參與市場的實際樣子：他可以持有與獲利了結，最後由有官方額度帳戶的事業用掉。
+    function test_endToEnd_individualBuysCorporateRetires() public {
         vm.prank(alice);
         router.swap(poolKey, _buyCct(2_000e6), 0, vm.getBlockTimestamp() + 1);
-        uint256 kg = cct.balanceOf(alice) / 1e15;
+        uint256 amount = cct.balanceOf(alice);
         vm.prank(alice);
+        cct.transfer(companyB, amount);
+
+        uint256 kg = amount / 1e15;
+        vm.prank(companyB);
         uint256[] memory certs = pool.redeemAndRetire(
-            kg, keccak256("A123456789"), "Alice Chen", RetirementCertificate.Purpose.VoluntaryNeutrality, "2026 flights"
+            kg, keccak256("TW-12345678"), unicode"某某股份有限公司", RetirementCertificate.Purpose.CarbonFee, "FY2026"
         );
-        assertEq(cert.ownerOf(certs[0]), alice);
+        assertEq(cert.ownerOf(certs[0]), companyB);
         assertEq(cert.certificateOf(certs[0]).amountKg, kg);
         assertEq(credit.batchOf(batch).retiredKg, kg);
     }

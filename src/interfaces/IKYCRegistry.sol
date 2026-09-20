@@ -25,6 +25,7 @@ interface IKYCRegistry {
     error NotActive(address account);
     error Frozen(address account);
     error IndividualTransferDisabled(address account);
+    error IndividualRetireDisabled(address account);
 
     function identityOf(address account) external view returns (Identity memory);
     function tierOf(address account) external view returns (Tier);

@@ -53,11 +53,31 @@ contract ListingTest is Fixture {
         vm.stopPrank();
     }
 
-    function test_individualCannotList() public {
+    /// 自然人可以轉售：他無法註銷，轉售是唯一的出場方式。
+    /// 掛單不再檢查法人身分，能不能轉出由身分層（checkTransfer）決定。
+    function test_individualCanList() public {
         vm.prank(companyA);
         credit.safeTransferFrom(companyA, alice, batch, 1000, "");
+        vm.startPrank(alice);
+        credit.setApprovalForAll(address(listing), true);
+        uint256 orderId = listing.list(batch, 1000, 900e6, 0);
+        vm.stopPrank();
+        assertEq(listing.orderOf(orderId).seller, alice);
+        assertEq(credit.balanceOf(address(listing), batch), 1000);
+
+        // 主權角色關掉自然人轉出之後，掛單也跟著擋下——規則只有一處
+        vm.prank(sovereign);
+        kyc.setIndividualTransferEnabled(false);
+        vm.prank(companyA);
+        credit.safeTransferFrom(companyA, alice, batch, 500, "");
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(Listing.NotCorporate.selector, alice));
+        vm.expectRevert(abi.encodeWithSelector(IKYCRegistry.IndividualTransferDisabled.selector, alice));
+        listing.list(batch, 500, 900e6, 0);
+    }
+
+    function test_unverifiedCannotList() public {
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(Listing.NotActiveAccount.selector, stranger));
         listing.list(batch, 1000, 800e6, 0);
     }
 

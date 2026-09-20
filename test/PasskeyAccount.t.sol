@@ -37,7 +37,9 @@ contract PasskeyAccountTest is Fixture {
         assertEq(address(account), predicted);
 
         // 身分綁在帳戶地址
-        _registerIdentity(address(account), IKYCRegistry.Tier.Individual, keccak256("TW-ID-B222"));
+        // 這個測試要走到註銷，所以帳戶給法人身分——自然人不能註銷（見 Identity.t.sol）。
+        // passkey 帳戶本身與身分等級無關，兩者是正交的。
+        _registerIdentity(address(account), IKYCRegistry.Tier.Corporate, keccak256("TW-ID-B222"));
         vm.prank(operator);
         twd.mint(address(account), 100_000e6);
 

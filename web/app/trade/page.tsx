@@ -38,6 +38,8 @@ export default function TradePage() {
   const [retireKg, setRetireKg] = useState<Record<string, string>>({});
   // 賣出（掛單）：數量與最小成交都以噸為單位，使用期限依第 12 條申報
   const [sellForm, setSellForm] = useState<Record<number, { tonnes: string; price: string; minFill: string; usageDeadline: string }>>({});
+  // 買賣契約第五條（五）：自然人買方須於介面確認「不得申請註銷」，未確認不受理下單
+  const [naturalAck, setNaturalAck] = useState(false);
 
   const [reloadKey, reload] = useReload();
   // 買進與註銷各自需要的定型化契約。條文改版會自動再問一次。
@@ -288,12 +290,28 @@ export default function TradePage() {
 
               <AgreementCheck gate={buyGate} />
 
+              {tier === 1 && (
+                <label className="flex items-start gap-2 rounded-[--radius-ctl] border border-warn/40 bg-warn/5 p-3 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-1 accent-[--color-tide]"
+                    checked={naturalAck}
+                    onChange={(e) => setNaturalAck(e.target.checked)}
+                    data-testid="natural-ack"
+                  />
+                  <span className="text-ink-200">
+                    我明瞭<b>自然人無法在官方登錄簿註銷額度</b>，我買到的可以持有、也可以再賣出，
+                    但不能用於碳費扣抵、環評抵換等法定申報，也不能據以對外宣稱碳中和。
+                  </span>
+                </label>
+              )}
+
               <Button
                 onClick={async () => {
                   await buyGate.accept(`order:${selected.orderId}`);
                   buyListing(selected, Number(qtyKg));
                 }}
-                disabled={!!busy || !qtyKg || Number(qtyKg) < (selected.minFillKg || 1) || !buyGate.ok}
+                disabled={!!busy || !qtyKg || Number(qtyKg) < (selected.minFillKg || 1) || !buyGate.ok || (tier === 1 && !naturalAck)}
                 className="w-full"
               >
                 {busy?.startsWith("購買") ? "簽章中…" : "以 passkey 簽章買進"}
@@ -305,17 +323,9 @@ export default function TradePage() {
 
       {/* 賣出：買得到也要賣得掉，否則不叫交易所 */}
       <Card title="賣出（上架掛單）">
-        {tier !== 2 ? (
+        {tier === 0 ? (
           <div className="space-y-2 text-sm leading-7 text-ink-200">
-            <p>
-              目前您的身分是<b>{tier === 1 ? "自然人" : "未完成身分驗證"}</b>，不能轉售額度。
-              自然人可以買、可以註銷，但額度不能再轉出——這是代幣合約層的規則，不是介面擋的，
-              目的是避免個人之間的轉手炒作。
-            </p>
-            <p className="text-ink-300">
-              需要賣出請以法人身分驗證（工商憑證），到
-              <Link className="text-tide underline" href="/kyc">身分驗證</Link>辦理。
-            </p>
+            <p>尚未完成身分驗證，不能買賣。請先到<Link className="text-tide underline" href="/kyc">身分驗證</Link>辦理。</p>
           </div>
         ) : !h || h.batches.length === 0 ? (
           <p className="text-sm text-ink-300">尚未持有可上架的額度批次。</p>
@@ -376,14 +386,24 @@ export default function TradePage() {
 
       <Card title="註銷並取得憑證">
         <div className="mb-4 space-y-3">
-          <p className="text-xs leading-6 text-ink-300">
-            註銷代表這批額度永久退出流通。本站額度由卡菲卡持有於環境部額度帳戶，
-            鏈上註銷後由本站代為向中央主管機關申請官方移轉與註銷；
-            依規定主管機關於註銷次日起五個工作日內公開，
-            <b className="text-ink-200">公開後您才可以對外做碳中和之類的宣告</b>。
-            憑證上會標示可對外宣告日。
-          </p>
-          <AgreementCheck gate={retireGate} />
+          {tier === 1 ? (
+            <Notice kind="info">
+              <b>自然人無法註銷額度。</b>環境部的額度帳戶只開給事業（公司、行號、工廠、民間機構、行政機關與各級政府），
+              自然人開不了帳戶，也就無法在官方登錄簿完成註銷；若只在鏈上註銷，會產生一張官方端查無紀錄的憑證，
+              反而不能拿來申報。您可以持有、也可以隨時<b>賣出</b>給需要使用的事業。
+              若貴單位有統一編號，可到<Link className="text-tide underline" href="/kyc">身分驗證</Link>改以法人身分驗證。
+            </Notice>
+          ) : (
+            <>
+              <p className="text-xs leading-6 text-ink-300">
+                註銷代表這批額度永久退出流通。額度登錄在專案方於環境部開立的額度帳戶內，
+                您按下註銷後，由本站代辦那唯一一次官方移轉（專案方 → 您的額度帳戶），再由您完成註銷；
+                依規定主管機關於註銷次日起五個工作日內公開，
+                <b className="text-ink-200">公開後才可以對外做碳中和之類的宣告</b>。憑證上會標示可對外宣告日。
+              </p>
+              <AgreementCheck gate={retireGate} />
+            </>
+          )}
         </div>
         <div className="mb-4 grid gap-3 md:grid-cols-3">
           <Field label="受益人名稱（憑證上顯示）"><input className={inputCls} value={beneficiary} onChange={(e) => setBeneficiary(e.target.value)} placeholder="某某股份有限公司" /></Field>
@@ -402,7 +422,7 @@ export default function TradePage() {
                 <input className={`${inputCls} w-28`} type="number" min="1" max={b.kg} value={retireKg[`b${b.batchId}`] ?? String(b.kg)} onChange={(e) => setRetireKg({ ...retireKg, [`b${b.batchId}`]: e.target.value })} />
                 <Button
                   onClick={async () => { await retireGate.accept(`batch:${b.batchId}`); retireBatch(b.batchId, b.kg); }}
-                  disabled={!!busy || !retireGate.ok}
+                  disabled={!!busy || !retireGate.ok || tier === 1}
                 >註銷</Button>
               </li>
             ))}
@@ -412,7 +432,7 @@ export default function TradePage() {
                 <input className={`${inputCls} w-28`} type="number" min="1" max={cctKg} value={retireKg.cct ?? String(cctKg)} onChange={(e) => setRetireKg({ ...retireKg, cct: e.target.value })} />
                 <Button
                   onClick={async () => { await retireGate.accept("cct"); retireCct(cctKg); }}
-                  disabled={!!busy || !retireGate.ok}
+                  disabled={!!busy || !retireGate.ok || tier === 1}
                 >註銷</Button>
               </li>
             )}

@@ -43,8 +43,17 @@ contract KYCRegistry is Initializable, UUPSUpgradeable, AccessControlUpgradeable
 
     mapping(address => Identity) private _identities;
     mapping(address => uint256) public nonces;
-    /// @notice 由主權角色設定：是否允許自然人轉出額度（預設 false，對齊碳交所國內額度規則）
+    /// @notice 由主權角色設定：是否允許自然人轉出額度（initialize 時設為 true）。
+    ///         自然人在官方制度裡開不了額度帳戶，額度不可能登記在他名下，
+    ///         所以他手上的本來就是「請求權」——請求權可以再轉給別人，沒有理由鎖住。
     bool public individualTransferEnabled;
+    /// @notice 由主權角色設定：是否允許自然人註銷（預設 false）。
+    ///         依交易拍賣及移轉管理辦法第 2 條第 1 款，「事業」限公司、行號、工廠、民間機構、
+    ///         行政機關與各級政府，不含自然人；第 7 條開立額度帳戶須檢附設立登記證明。
+    ///         自然人既無額度帳戶，就無從受領官方移轉、也無從在官方登錄簿註銷。
+    ///         鏈上若讓他註銷，會產生一張官方端對不到任何紀錄的憑證——那比擋下來更糟。
+    ///         將來主管機關若開放自然人帳戶，主權角色打開這個開關即可。
+    bool public individualRetireEnabled;
     /// @notice 復原時要搬移餘額的代幣合約清單
     address[] public recoverableTokens;
 
@@ -55,6 +64,7 @@ contract KYCRegistry is Initializable, UUPSUpgradeable, AccessControlUpgradeable
     event FrozenSet(address indexed account, bool frozen);
     event Recovered(address indexed oldAccount, address indexed newAccount, bytes32 identityHash);
     event IndividualTransferPolicy(bool enabled);
+    event IndividualRetirePolicy(bool enabled);
     event RecoverableTokenAdded(address indexed token);
 
     error InvalidAttestation();
@@ -72,6 +82,8 @@ contract KYCRegistry is Initializable, UUPSUpgradeable, AccessControlUpgradeable
         __AccessControl_init();
         __UUPSUpgradeable_init();
         __EIP712_init("CO2Exchange KYCRegistry", "1");
+        // 自然人可以轉售（他持有的本來就是請求權），但不能註銷（官方端沒有他的額度帳戶）。
+        individualTransferEnabled = true;
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(SOVEREIGN_ROLE, sovereign);
         _grantRole(OPERATOR_ROLE, operator);
@@ -123,6 +135,11 @@ contract KYCRegistry is Initializable, UUPSUpgradeable, AccessControlUpgradeable
     function setIndividualTransferEnabled(bool enabled) external onlyRole(SOVEREIGN_ROLE) {
         individualTransferEnabled = enabled;
         emit IndividualTransferPolicy(enabled);
+    }
+
+    function setIndividualRetireEnabled(bool enabled) external onlyRole(SOVEREIGN_ROLE) {
+        individualRetireEnabled = enabled;
+        emit IndividualRetirePolicy(enabled);
     }
 
     function addRecoverableToken(address token) external onlyRole(SOVEREIGN_ROLE) {
@@ -196,6 +213,9 @@ contract KYCRegistry is Initializable, UUPSUpgradeable, AccessControlUpgradeable
         Identity memory id = _identities[account];
         if (id.frozen) revert Frozen(account);
         if (id.tier == Tier.None || id.tier == Tier.SystemContract) revert NotActive(account);
+        // 自然人不能註銷：官方登錄簿沒有他的額度帳戶，鏈上註銷會生出一張官方端對不到的憑證。
+        // 自然人要處分手上的額度，走轉售（checkTransfer 允許）。
+        if (id.tier == Tier.Individual && !individualRetireEnabled) revert IndividualRetireDisabled(account);
         // 到期不擋：註銷對任何人無害，且憑證仍可對應到 identityHash
     }
 

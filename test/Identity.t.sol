@@ -70,21 +70,45 @@ contract IdentityTest is Fixture {
         credit.retire(_retireReq(companyA, batch, 1000, companyA));
     }
 
-    function test_individualCannotTransferByDefault() public {
+    /// 自然人可以轉售、但不能註銷。
+    ///
+    /// 理由在官方制度那一端：自然人開不了額度帳戶（交易拍賣及移轉管理辦法第 2 條第 1 款的
+    /// 「事業」不含自然人，第 7 條開戶要檢附設立登記證明），所以他不可能受領官方移轉、
+    /// 也不可能在官方登錄簿註銷。他手上的本來就是請求權——請求權轉給別人沒問題，
+    /// 但讓他在鏈上註銷，會生出一張官方端對不到任何紀錄的憑證。
+    function test_individual_canTransfer_cannotRetire() public {
         uint256 pid = _registerProject(companyA);
         uint256 batch = _issue(pid, 5000, keccak256("S1"));
         vm.prank(companyA);
         credit.safeTransferFrom(companyA, alice, batch, 1000, "");
 
-        vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(IKYCRegistry.IndividualTransferDisabled.selector, alice));
-        credit.safeTransferFrom(alice, companyB, batch, 500, "");
-
-        vm.prank(sovereign);
-        kyc.setIndividualTransferEnabled(true);
+        // 轉售：預設允許
         vm.prank(alice);
         credit.safeTransferFrom(alice, companyB, batch, 500, "");
         assertEq(credit.balanceOf(companyB, batch), 500);
+
+        // 註銷：擋下
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(IKYCRegistry.IndividualRetireDisabled.selector, alice));
+        credit.retire(_retireReq(alice, batch, 100, alice));
+
+        // 法人註銷沒問題
+        vm.prank(companyB);
+        credit.retire(_retireReq(companyB, batch, 100, companyB));
+
+        // 主管機關若開放自然人帳戶，主權角色打開開關即可
+        vm.prank(sovereign);
+        kyc.setIndividualRetireEnabled(true);
+        vm.prank(alice);
+        credit.retire(_retireReq(alice, batch, 100, alice));
+        assertEq(cert.balanceOf(alice), 1);
+
+        // 反向：主權角色也可以關掉自然人轉售
+        vm.prank(sovereign);
+        kyc.setIndividualTransferEnabled(false);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(IKYCRegistry.IndividualTransferDisabled.selector, alice));
+        credit.safeTransferFrom(alice, companyB, batch, 100, "");
     }
 
     function test_recover_movesBalancesAndIdentity() public {

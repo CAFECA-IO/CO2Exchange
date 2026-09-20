@@ -82,23 +82,45 @@ contract PoolTest is Fixture {
         assertEq(cct.totalSupply(), (pool.pooledKg(batch1) + pool.pooledKg(batch2)) * 1e15);
     }
 
-    function test_redeemAndRetire_individualPath() public {
+    /// 自然人可以持有與轉售 CCT，但 redeemAndRetire 的最後一步是註銷，會被身分層擋下。
+    function test_redeemAndRetire_individualBlocked() public {
         vm.startPrank(companyA);
         pool.deposit(batch1, 3_000);
         vm.stopPrank();
-        // 模擬 alice 從市場買到 CCT（系統合約 → 自然人）
         vm.prank(sovereign);
-        kyc.setSystemContract(companyA, true); // 測試便利：讓 companyA 可轉給自然人
+        kyc.setSystemContract(companyA, true);
         vm.prank(companyA);
         cct.transfer(alice, 1.5e18);
 
         vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(IKYCRegistry.IndividualRetireDisabled.selector, alice));
+        pool.redeemAndRetire(1_500, keccak256("alice"), "Alice", RetirementCertificate.Purpose.VoluntaryNeutrality, "");
+
+        // 轉售給法人則沒問題，由法人完成註銷
+        vm.prank(alice);
+        cct.transfer(companyB, 1.5e18);
+        vm.prank(companyB);
         uint256[] memory certs =
-            pool.redeemAndRetire(1_500, keccak256("alice"), "Alice", RetirementCertificate.Purpose.VoluntaryNeutrality, "");
+            pool.redeemAndRetire(1_500, keccak256("companyB"), "B", RetirementCertificate.Purpose.VoluntaryNeutrality, "");
+        assertEq(cert.ownerOf(certs[0]), companyB);
+        assertEq(credit.batchOf(batch1).retiredKg, 1_500);
+    }
+
+    function test_redeemAndRetire_corporatePath() public {
+        vm.startPrank(companyA);
+        pool.deposit(batch1, 3_000);
+        vm.stopPrank();
+        // 模擬 companyB 從市場買到 CCT
+        vm.prank(companyA);
+        cct.transfer(companyB, 1.5e18);
+
+        vm.prank(companyB);
+        uint256[] memory certs =
+            pool.redeemAndRetire(1_500, keccak256("companyB"), "B", RetirementCertificate.Purpose.VoluntaryNeutrality, "");
         assertEq(certs.length, 1);
-        assertEq(cert.ownerOf(certs[0]), alice);
+        assertEq(cert.ownerOf(certs[0]), companyB);
         assertEq(cert.certificateOf(certs[0]).amountKg, 1_500);
-        assertEq(cct.balanceOf(alice), 0);
+        assertEq(cct.balanceOf(companyB), 0);
         assertEq(credit.batchOf(batch1).retiredKg, 1_500);
         assertEq(pool.pooledKg(batch1), 1_500);
     }

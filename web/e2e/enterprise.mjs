@@ -73,21 +73,21 @@ await waitOk(corp.page, "入池批次 #");
 await corp.page.locator("text=掛單 #").first().waitFor();
 console.log("✔ 掛單 + 入池");
 
-// 自然人 bob 從新掛單購買並註銷
+// 法人 bob 從新掛單購買並註銷（自然人不能註銷，那條路徑在 flow.mjs 驗）
 await login(bob.page, "bob@example.com");
 await createPasskeyAccount(bob.page);
-await applyKyc(bob.page, "individual", "B123456789", "Bob Lin");
+await applyKyc(bob.page, "corporate", "87654321", "林氏股份有限公司");
 await adminApproveAllKyc(admin.page);
 await waitKycActive(bob.page);
 await bob.page.goto(`${BASE}/trade`);
 await bob.page.getByRole("button", { name: "領取測試用 mTWD" }).click();
 await bob.page.locator('[data-testid="twd"]', { hasText: "100,000" }).waitFor({ timeout: 30_000 });
 await buyFromBook(bob.page, { match: "廠區鍋爐燃料轉換", tonnes: 1 });
-await bob.page.getByPlaceholder("某某股份有限公司").fill("Bob Lin");
+await bob.page.getByPlaceholder("某某股份有限公司").fill("林氏股份有限公司");
 await agreeAll(bob.page);
 await bob.page.getByRole("button", { name: "註銷", exact: true }).first().click();
 await waitOk(bob.page, "註銷批次 #");
-console.log("✔ 自然人購買企業新掛單並註銷");
+console.log("✔ 法人購買企業新掛單並註銷");
 
 await browser.close();
 console.log("ENTERPRISE E2E OK");

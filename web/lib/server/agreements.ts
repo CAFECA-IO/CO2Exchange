@@ -28,11 +28,12 @@ export type Agreement = AgreementMeta & { body: string };
 /// 四份契約的角色。順序就是使用者會遇到的順序。
 const ROLES: Record<string, string> = {
   "platform-terms": "所有使用者（建立帳戶時）",
+  "service-flow": "所有使用者（平台使用約定書之附件，不另行簽署）",
   "service-fee": "專案開發者 / 賣方（委託代辦時）",
   "trade-agreement": "買方與賣方（每筆交易）",
-  "retirement-mandate": "註銷人（每次註銷）",
+  "retirement-mandate": "註銷人（每次註銷，限具額度帳戶之事業）",
 };
-export const AGREEMENT_ORDER = ["platform-terms", "service-fee", "trade-agreement", "retirement-mandate"] as const;
+export const AGREEMENT_ORDER = ["platform-terms", "service-flow", "service-fee", "trade-agreement", "retirement-mandate"] as const;
 
 /// 極簡 frontmatter 解析。條文檔是我們自己寫的，格式固定，不值得為它拉一個 YAML 相依。
 function parse(file: string): Agreement {

@@ -70,27 +70,37 @@ contract DemoFlow is Deploy {
         }
         vm.stopBroadcast();
 
-        // 6. alice：掛單買 2 噸；v4 買 4000 元；兩邊都註銷
+        // 6. alice（自然人）：掛單買 2 噸、v4 買 4000 元，然後把手上的額度轉售給 companyB。
+        //    自然人不能註銷——官方登錄簿沒有他的額度帳戶——所以他的出場方式是轉售。
         vm.startBroadcast(PK_ALICE);
         twd.approve(address(listing), type(uint256).max);
         listing.buy(1, 2_000);
         _demoSwap();
-        uint256 kg = cct.balanceOf(alice) / 1e15;
-        pool.redeemAndRetire(
-            kg,
-            keccak256("TW-ID-A123456789"),
-            "Alice Chen",
-            RetirementCertificate.Purpose.VoluntaryNeutrality,
-            unicode"2026 差旅"
-        );
+        uint256 aliceCct = cct.balanceOf(alice);
+        if (aliceCct > 0) cct.transfer(companyB, aliceCct);
+        credit.safeTransferFrom(alice, companyB, batch, 2_000, "");
+        vm.stopBroadcast();
+
+        // 7. companyB（法人）：用掉買來的額度，兩條註銷路徑各走一次
+        vm.startBroadcast(PK_B);
+        uint256 kg = cct.balanceOf(companyB) / 1e15;
+        if (kg > 0) {
+            pool.redeemAndRetire(
+                kg,
+                keccak256("TW-UBN-87654321"),
+                unicode"某某股份有限公司",
+                RetirementCertificate.Purpose.VoluntaryNeutrality,
+                unicode"2026 產品碳中和"
+            );
+        }
         credit.retire(
             CarbonCredit1155.RetireRequest({
-                holder: alice,
+                holder: companyB,
                 batchId: batch,
                 amountKg: 2_000,
-                certificateTo: alice,
-                beneficiaryHash: keccak256("TW-ID-A123456789"),
-                beneficiary: "Alice Chen",
+                certificateTo: companyB,
+                beneficiaryHash: keccak256("TW-UBN-87654321"),
+                beneficiary: unicode"某某股份有限公司",
                 purpose: RetirementCertificate.Purpose.CarbonFee,
                 memo: "FY2025"
             })
@@ -99,8 +109,9 @@ contract DemoFlow is Deploy {
 
         console2.log("--- demo state ---");
         console2.log("batch retiredKg      ", credit.batchOf(batch).retiredKg);
-        console2.log("alice certificates   ", cert.balanceOf(alice));
+        console2.log("companyB certificates", cert.balanceOf(companyB));
         console2.log("alice CCT            ", cct.balanceOf(alice));
+        console2.log("companyB CCT         ", cct.balanceOf(companyB));
         console2.log("companyA mTWD        ", twd.balanceOf(companyA));
         console2.log("listing remainingKg  ", listing.orderOf(1).remainingKg);
         console2.log("pool pooledKg        ", pool.pooledKg(batch));

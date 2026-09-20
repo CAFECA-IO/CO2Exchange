@@ -140,9 +140,10 @@ contract Listing is
         returns (uint256 orderId)
     {
         if (amountKg == 0) revert ZeroAmount();
-        if (kyc.tierOf(msg.sender) != IKYCRegistry.Tier.Corporate || !kyc.isActive(msg.sender)) {
-            revert NotCorporate(msg.sender);
-        }
+        // 掛單不限法人：自然人買到之後要能再賣出（他無法註銷，轉售是他唯一的出場方式）。
+        // 「誰可以把額度轉出去」是身分層的政策，由 CarbonCredit1155._update → checkTransfer 決定，
+        // 不在這裡重複一套規則——兩個地方各寫一次，遲早會不一致。
+        if (!kyc.isActive(msg.sender)) revert NotActiveAccount(msg.sender);
         orderId = nextOrderId++;
         _orders[orderId] = Order({
             seller: msg.sender,

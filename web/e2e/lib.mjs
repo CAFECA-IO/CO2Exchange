@@ -95,6 +95,9 @@ export async function buyFromBook(page, { match, tonnes = 1 } = {}) {
   await qty.waitFor({ timeout: 10_000 });
   await qty.fill(String(tonnes));
   await agreeAll(page);
+  // 自然人買方要額外確認「不得申請註銷」（買賣契約第五條（五））
+  const ack = page.locator('[data-testid="natural-ack"]');
+  if (await ack.isVisible().catch(() => false)) await ack.check();
   await page.getByRole("button", { name: "以 passkey 簽章買進" }).click();
   await waitOk(page, `購買 ${tonnes.toLocaleString("zh-TW", { maximumFractionDigits: 3 })} 噸完成`);
 }

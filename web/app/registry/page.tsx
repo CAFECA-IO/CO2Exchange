@@ -163,8 +163,8 @@ export default function RegistryPage() {
           {tab === "移轉紀錄" && (
             <Card title={`移轉紀錄（${rows("transfer").length}）`}>
               <p className="mb-3 text-xs leading-6 text-ink-300">
-                此處的移轉為本站鏈上權利移轉。依溫室氣體減量額度交易拍賣及移轉管理辦法第 26 條，
-                每一額度單位在官方登錄簿的移轉以一次為限，該次移轉由代辦方於最終持有人申請註銷時辦理。
+                此處的移轉為本站鏈上請求權的移轉，不動官方登錄簿。依溫室氣體減量額度交易拍賣及移轉管理辦法第 26 條，
+                每一額度單位在官方登錄簿的移轉以一次為限；該次移轉於最終買方申請註銷時，自專案方帳戶直接移轉至買方帳戶。
               </p>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -265,7 +265,8 @@ export default function RegistryPage() {
       )}
 
       <p className="text-xs leading-6 text-ink-300">
-        本站額度由卡菲卡股份有限公司協助向環境部申辦並登錄於其額度帳戶；鏈上持有的是請求代為辦理官方移轉與註銷的權利。
+        本站額度全程登錄在專案方自己於環境部開立的額度帳戶內，平台不持有任何額度；鏈上移轉的是對該批額度的請求權，
+        不觸發也不消耗官方移轉次數。那唯一一次官方移轉發生在最終買方（具額度帳戶之事業）申請註銷時。
         官方登錄簿的紀錄以
         <a className="text-tide underline" href="https://tcerregistry.moenv.gov.tw/" target="_blank" rel="noreferrer">環境部系統</a>
         為準。契約條款見<Link className="text-tide underline" href="/agreements">定型化契約</Link>。
