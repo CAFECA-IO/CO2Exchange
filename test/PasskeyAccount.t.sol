@@ -132,7 +132,7 @@ contract PasskeyAccountTest is Fixture {
         string memory clientDataJSON = string.concat(
             '{"type":"webauthn.get","challenge":"',
             Base64.encodeURL(abi.encodePacked(digest)),
-            '","origin":"http://localhost:3000","crossOrigin":false}'
+            '","origin":"http://localhost:10010","crossOrigin":false}'
         );
         bytes32 messageHash = sha256(abi.encodePacked(authenticatorData, sha256(bytes(clientDataJSON))));
         (bytes32 r, bytes32 s) = vm.signP256(pk, messageHash);

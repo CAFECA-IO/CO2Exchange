@@ -195,7 +195,7 @@ contract FuzzTest is Fixture {
     function _assert(uint256 pk, bytes32 digest) internal view returns (WebAuthn.WebAuthnAuth memory) {
         bytes memory authData = abi.encodePacked(sha256("localhost"), bytes1(0x05), uint32(7));
         string memory cdj = string.concat(
-            '{"type":"webauthn.get","challenge":"', Base64.encodeURL(abi.encodePacked(digest)), '","origin":"http://localhost:3000"}'
+            '{"type":"webauthn.get","challenge":"', Base64.encodeURL(abi.encodePacked(digest)), '","origin":"http://localhost:10010"}'
         );
         (bytes32 r, bytes32 s) = vm.signP256(pk, sha256(abi.encodePacked(authData, sha256(bytes(cdj)))));
         uint256 sN = uint256(s);

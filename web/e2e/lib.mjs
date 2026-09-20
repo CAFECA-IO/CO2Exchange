@@ -1,7 +1,7 @@
 // 共用：瀏覽器、虛擬 passkey、登入、建帳戶、KYC（含管理員核准）
 import { chromium } from "playwright";
 
-export const BASE = process.env.BASE_URL ?? "http://localhost:3000";
+export const BASE = process.env.BASE_URL ?? "http://localhost:10010";
 
 export async function launch() {
   return chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });

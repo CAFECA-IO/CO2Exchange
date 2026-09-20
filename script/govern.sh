@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CO2Exchange 治理操作工具（cast 包裝）。所有命令只讀鏈上狀態或送出「已簽好的」Safe 交易；私鑰只在簽章步驟用到。
 #
-#   RPC_URL      預設 http://127.0.0.1:8545
+#   RPC_URL      預設 http://127.0.0.1:28545
 #   DEPLOYMENT   預設 deployments/<chainId>.json
 #   SENDER_PK    送出 execTransaction 的付 gas 帳戶（任何有餘額的帳戶皆可，不需是 owner）
 #
@@ -20,7 +20,7 @@
 #   govern.sh safe national exec $T $D 0xOwner1:$S1 0xOwner2:$S2
 set -euo pipefail
 
-RPC_URL=${RPC_URL:-http://127.0.0.1:8545}
+RPC_URL=${RPC_URL:-http://127.0.0.1:28545}
 CHAIN_ID=$(cast chain-id --rpc-url "$RPC_URL")
 DEPLOYMENT=${DEPLOYMENT:-"$(dirname "$0")/../deployments/${CHAIN_ID}.json"}
 [ -f "$DEPLOYMENT" ] || { echo "找不到部署檔 $DEPLOYMENT" >&2; exit 1; }

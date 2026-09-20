@@ -16,7 +16,7 @@
  *   --per-day N   每天幾筆（預設 48）
  *   --trades N    直接指定總筆數（會覆寫 per-day）
  *   --first N     起始 orderId（預設由 nextOrderId 往回推）
- *   --rpc URL     預設 $RPC_URL 或 http://127.0.0.1:8545
+ *   --rpc URL     預設 $RPC_URL 或 http://127.0.0.1:28545
  *
  * ⚠️ 區塊時間只能往前走，不能倒退。要讓「一年份」結束在今天而不是明年，
  *    anvil 必須從一年前起算：
@@ -33,7 +33,7 @@ const arg = (name, dflt) => {
   return i > -1 && process.argv[i + 1] ? process.argv[i + 1] : dflt;
 };
 
-const RPC = arg("rpc", process.env.RPC_URL ?? "http://127.0.0.1:8545");
+const RPC = arg("rpc", process.env.RPC_URL ?? "http://127.0.0.1:28545");
 const DAYS = Number(arg("days", 1.5));
 const PER_DAY = Number(arg("per-day", 48));
 const TRADES = Number(arg("trades", Math.max(1, Math.round(DAYS * PER_DAY))));

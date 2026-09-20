@@ -114,10 +114,18 @@ bash script/demo-box.sh rebuild
 cd web && npm run dev
 ```
 
-開 <http://localhost:3000>，首頁的地球上應該有六個轄區亮著、旁邊清單有數字。
+開 <http://localhost:10010>，首頁的地球上應該有六個轄區亮著、旁邊清單有數字。
+
+| | 埠 | 覆蓋方式 |
+|---|---|---|
+| 前端 | **10010** | `PORT=xxxx npm run dev`（e2e 則是 `BASE_URL`） |
+| anvil | **28545** | `RPC=http://127.0.0.1:xxxx bash script/demo-box.sh rebuild`；`demo-box.sh` 會從這個位址推出 anvil 要開在哪個埠 |
+
+前端與鏈都刻意避開預設埠（3000／8545）：那兩個埠上什麼都可能在跑，
+連到別人的服務上而不自知，比連不上更難查。
 
 > 只想把流程跑一次、不需要一年份的資料，第 3 步可以換成手動兩行：
-> `anvil --prune-history`，另一個終端
+> `anvil --port 28545 --prune-history`，另一個終端
 > `forge script script/DemoFlowV4.s.sol --rpc-url anvil --broadcast --sig "demo()"`。
 > 差別是行情圖上只有一兩根 K 棒、地球上只有臺灣有柱子。
 
@@ -138,7 +146,7 @@ cd web && npm run dev
 
 > Anvil 一關就忘光，所以預設是重鋪。想留住昨天的鏈，給 `demo-box.sh` 一個
 > `STATE=~/anvil-state.json`，或自己開
-> `anvil --state ~/anvil-state.json --prune-history`（`--state` 是 `--load-state`
+> `anvil --port 28545 --state ~/anvil-state.json --prune-history`（`--state` 是 `--load-state`
 > 與 `--dump-state` 的別名：檔案在就載入、關掉時寫回，第一次跑檔案不存在也不會失敗）。
 > 這樣就不必每天重跑部署，前端 `web/data/` 的申請紀錄也還對得上——
 > 那些紀錄是用**帳戶地址**當鍵的，鏈重開又重新部署就會對不上，
@@ -148,8 +156,8 @@ cd web && npm run dev
 
 ```bash
 ./script/govern.sh status                                  # 治理角色是不是都在該在的地方
-curl -s localhost:3000/api/market/ticker?hours=24 | head -c 200   # 行情讀得到鏈
-curl -s localhost:3000/api/market/by-country | head -c 200        # 各轄區統計讀得到鏈
+curl -s localhost:10010/api/market/ticker?hours=24 | head -c 200   # 行情讀得到鏈
+curl -s localhost:10010/api/market/by-country | head -c 200        # 各轄區統計讀得到鏈
 ```
 
 `govern.sh status` 印出來的那張表，每一格都該是 `true`，而且 `admin` 那一欄要指向 Timelock、
@@ -199,7 +207,7 @@ cd web && npm run seed:market -- --days 365 --per-day 3            # 逐筆買�
 
 ```bash
 # 1. 鏈要從一年前開始。回填只能把時間往前推，不能倒退
-anvil --timestamp $(( $(date +%s) - 365*86400 )) --prune-history
+anvil --port 28545 --timestamp $(( $(date +%s) - 365*86400 )) --prune-history
 
 # 2. 部署
 forge script script/DemoFlowV4.s.sol --rpc-url anvil --broadcast --sig "demo()"
@@ -254,7 +262,7 @@ npm run simulate                                      # 持續模式：依真實
 
 ```bash
 forge build && forge test
-anvil --prune-history                                              # 重開鏈
+anvil --port 28545 --prune-history                                 # 重開鏈
 forge script script/DemoFlowV4.s.sol --rpc-url anvil --broadcast --sig "demo()"
 cd web && npm run data:reset                                       # 搬到 data.bak-<時間戳>，不是刪除
 npm run build && npm run e2e                                       # 收工前跑一次

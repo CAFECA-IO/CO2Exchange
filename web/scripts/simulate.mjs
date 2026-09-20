@@ -14,7 +14,7 @@
  *   --interval SEC   持續模式的實際間隔秒數（預設 60）
  *   --seed S         人物種子（預設 co2x）；同一個種子一定產生同一批人
  *   --mnemonic M     推導帳戶的助記詞（預設 anvil 的測試助記詞）
- *   --rpc URL        預設 $RPC_URL 或 http://127.0.0.1:8545
+ *   --rpc URL        預設 $RPC_URL 或 http://127.0.0.1:28545
  *   --quiet          只印每一輪的摘要
  *
  * ⚠️ 回填會把鏈的時間往前推（anvil_setTime）。**區塊時間只能往前，不能倒退**，
@@ -48,7 +48,7 @@ const arg = (n, d) => {
 };
 const flag = (n) => process.argv.includes(`--${n}`);
 
-const RPC = arg("rpc", process.env.RPC_URL ?? "http://127.0.0.1:8545");
+const RPC = arg("rpc", process.env.RPC_URL ?? "http://127.0.0.1:28545");
 const USERS = Number(arg("users", 100));
 const SEED = arg("seed", "co2x");
 const FROM = arg("from", null);

@@ -14,7 +14,8 @@
 # 環境變數：
 #   DAYS=365        回填幾天
 #   TICK=8h         回填時每輪代表多久
-#   RPC=http://127.0.0.1:8545
+#   RPC=http://127.0.0.1:28545   （anvil 的埠由這個位址決定，不必另外設）
+#   WEB=http://localhost:10010
 #   STATE=          給 anvil --state 的檔案；設了就能跨重開保留鏈（rebuild 會先刪掉它）
 set -euo pipefail
 
@@ -26,7 +27,11 @@ cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 DAYS=${DAYS:-365}
 TICK=${TICK:-8h}
-RPC=${RPC:-http://127.0.0.1:8545}
+RPC=${RPC:-http://127.0.0.1:28545}
+WEB=${WEB:-http://localhost:10010}
+# anvil 要開在哪個埠，從 RPC 位址推出來——兩個地方各寫一次遲早會不一致
+ANVIL_PORT=$(printf '%s' "$RPC" | sed 's|.*:||; s|/.*||')
+case "$ANVIL_PORT" in ''|*[!0-9]*) ANVIL_PORT=28545;; esac
 LOG=${LOG:-$ROOT/.demo-box}
 mkdir -p "$LOG"
 
@@ -45,9 +50,14 @@ case "${1:-}" in
 
 rebuild)
   echo ">> 停掉現有的 anvil"
-  # -x 比對執行檔名。用 -f "^anvil" 比對整條命令列會漏掉——
-  # 實際的命令列是絕對路徑（/…/bin/anvil），開頭不是 anvil。
-  pkill -x anvil 2>/dev/null || true
+  # 只停**這個埠**上的那一個。用 pkill -x anvil 會把機器上其他專案的 anvil
+  # 一起殺掉——換了非預設埠之後，同時開好幾條鏈是很正常的事。
+  if command -v lsof >/dev/null 2>&1; then
+    PIDS=$(lsof -ti tcp:"$ANVIL_PORT" 2>/dev/null || true)
+    [ -n "$PIDS" ] && kill $PIDS 2>/dev/null || true
+  else
+    pkill -f "anvil .*--port $ANVIL_PORT" 2>/dev/null || true
+  fi
   sleep 1
 
   # anvil 預設把每個區塊的歷史狀態寫到這裡，每重開一次留一份，幾 GB 起跳。
@@ -59,12 +69,12 @@ rebuild)
 
   # 回填只能把鏈的時間往前推，不能倒退，所以鏈要從 DAYS 天前開始。
   TS=$(( $(date +%s) - DAYS * 86400 ))
-  echo ">> 開 anvil（起始時間 $(days_ago "$DAYS")，--prune-history）"
+  echo ">> 開 anvil（起始時間 $(days_ago "$DAYS")，--prune-history，:${ANVIL_PORT}）"
   # setsid 讓 anvil 脫離這個 shell 的 process group。只用 nohup 不夠：
   # 終端機關掉、或排程工具收掉整個 process group 的時候，anvil 會跟著被帶走。
   # 展示機要活過「跑完腳本就登出」，這一行是必要的。
   # shellcheck disable=SC2086
-  RUN="anvil --timestamp $TS --prune-history ${STATE:+--state $STATE} --silent"
+  RUN="anvil --port $ANVIL_PORT --timestamp $TS --prune-history ${STATE:+--state $STATE} --silent"
   if command -v setsid >/dev/null 2>&1; then
     setsid $RUN > "$LOG/anvil.log" 2>&1 < /dev/null &
   else
@@ -107,8 +117,11 @@ status)
   else
     echo "anvil      沒在跑"
   fi
-  curl -fs localhost:3000/api/market/by-country >/dev/null 2>&1 \
-    && echo "前端       在跑（localhost:3000）" || echo "前端       沒在跑"
+  # 問 /api/config，不要問會讀鏈的端點。後者在 web/data/ 過期時會回 503，
+  # 於是「前端沒在跑」——但它明明在跑，只是資料要重置。
+  # 健康檢查要問的是「這個行程活著嗎」，不是「資料是不是新的」。
+  curl -fs "$WEB/api/config" >/dev/null 2>&1 \
+    && echo "前端       在跑（${WEB}）" || echo "前端       沒在跑"
   pgrep -f "simulate.mjs" >/dev/null && echo "模擬器     在跑" || echo "模擬器     沒在跑"
   ;;
 

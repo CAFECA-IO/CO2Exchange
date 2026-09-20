@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 部署前檢查：確認目標鏈能不能跑這套合約，以及要用哪種部署模式。
 #
-#   ./script/preflight.sh                        # 預設 http://127.0.0.1:8545
+#   ./script/preflight.sh                        # 預設 http://127.0.0.1:28545
 #   ./script/preflight.sh http://127.0.0.1:20024 # 指定 RPC
 #   RPC_URL=... ./script/preflight.sh
 #
@@ -20,7 +20,7 @@ set -uo pipefail
 # macOS 內建的 bash 3.2 會把後面的多位元組字元當成識別字的一部分，
 # 於是 "$CHAIN_ID）" 會被解析成變數 "CHAIN_ID）"，在 set -u 下直接 unbound variable。
 
-RPC="${1:-${RPC_URL:-http://127.0.0.1:8545}}"
+RPC="${1:-${RPC_URL:-http://127.0.0.1:28545}}"
 DEPLOYER_PK="${DEPLOYER_PK:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}"
 
 # 只做 TSTORE→TLOAD→回傳 的 initcode；eth_call 會回傳 0x..01，鏈不支援則整段 revert。

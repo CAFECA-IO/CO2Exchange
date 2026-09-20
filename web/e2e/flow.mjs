@@ -2,7 +2,7 @@
 //   自然人：登入 → passkey → KYC → faucet → 掛單買 + v4 買 → 被擋下註銷 → 轉售上架
 //   法人  ：KYC → 買下自然人的掛單 → 註銷 → 憑證 → 管理員產生 PDF 並回寫 → 下載
 // 自然人在官方制度裡開不了額度帳戶，所以只能買賣、不能註銷；最後用掉的一定是事業。
-// 前置：anvil 已跑 DemoFlow、next 在 :3000（KYC_AUTO_APPROVE=0）。執行：node e2e/flow.mjs
+// 前置：anvil 已跑 DemoFlow、next 在 :10010（KYC_AUTO_APPROVE=0）。執行：node e2e/flow.mjs
 import { BASE, adminApproveAllKyc, applyKyc, buyFromBook, createPasskeyAccount, launch, login, marketBuy, newUser, retireOnPage, sellOnBook, waitKycActive, waitOk } from "./lib.mjs";
 
 const browser = await launch();

@@ -56,14 +56,14 @@ export function isDeploymentMismatch(e: unknown): boolean {
 export function handle(e: unknown): Response {
   if (e instanceof HttpError) return Response.json({ error: e.message }, { status: e.status });
   if (isChainUnreachable(e)) {
-    const rpc = process.env.RPC_URL ?? "http://127.0.0.1:8545";
+    const rpc = process.env.RPC_URL ?? "http://127.0.0.1:28545";
     return Response.json(
       { error: `無法連線到區塊鏈節點（${rpc}）。請確認節點已啟動，且 web/.env.local 的 RPC_URL / CHAIN_ID 指向正確的鏈。`, code: "CHAIN_UNREACHABLE" },
       { status: 503 },
     );
   }
   if (isDeploymentMismatch(e)) {
-    const rpc = process.env.RPC_URL ?? "http://127.0.0.1:8545";
+    const rpc = process.env.RPC_URL ?? "http://127.0.0.1:28545";
     return Response.json(
       {
         error:

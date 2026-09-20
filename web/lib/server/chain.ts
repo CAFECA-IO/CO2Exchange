@@ -8,7 +8,7 @@ import type { Deployment } from "../deployment";
 // Anvil account0：Phase 0 同時是 relayer、身分驗證服務、營運角色。正式環境三者分開並放 HSM。
 const ANVIL_PK0 = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
-export const RPC_URL = process.env.RPC_URL ?? "http://127.0.0.1:8545";
+export const RPC_URL = process.env.RPC_URL ?? "http://127.0.0.1:28545";
 export const CHAIN_ID = Number(process.env.CHAIN_ID ?? 31337);
 
 export const chain = defineChain({
