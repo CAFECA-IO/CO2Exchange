@@ -27,7 +27,6 @@ export function mulberry32(seed) {
 
 const pick = (rng, arr) => arr[Math.floor(rng() * arr.length)];
 const between = (rng, lo, hi) => lo + rng() * (hi - lo);
-const intBetween = (rng, lo, hi) => Math.floor(between(rng, lo, hi + 1));
 
 /// 角色。每一種的「為什麼來」都不一樣，行為模型也就不一樣。
 export const ROLES = {
@@ -97,6 +96,22 @@ const LOCATIONS = [
   { city: "雅加達", country: "ID", w: 2 },
 ];
 
+/// 依權重把 n 個名額分給各角色，再洗牌。餘數給權重最大的角色。
+function assignRoles(rng, n) {
+  const keys = Object.keys(ROLES);
+  const total = keys.reduce((s, k) => s + ROLES[k].weight, 0);
+  const slots = [];
+  for (const k of keys) for (let i = 0; i < Math.floor((n * ROLES[k].weight) / total); i++) slots.push(k);
+  const biggest = keys.reduce((a, b) => (ROLES[a].weight >= ROLES[b].weight ? a : b));
+  while (slots.length < n) slots.push(biggest);
+  // Fisher–Yates，讓 id 的順序不帶角色資訊
+  for (let i = slots.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [slots[i], slots[j]] = [slots[j], slots[i]];
+  }
+  return slots;
+}
+
 function weightedPick(rng, items, weightOf) {
   const total = items.reduce((s, x) => s + weightOf(x), 0);
   let r = rng() * total;
@@ -117,13 +132,26 @@ const REPORTING_MONTHS = { TW: [3, 4, 5], KR: [4, 5, 6], JP: [1, 2, 3], TH: [3, 
  */
 export function buildPersonas(n, seed) {
   const rng = mulberry32(seed);
-  const roleKeys = Object.keys(ROLES);
   const out = [];
 
+  // 角色用**配額**分配，不是每個人各抽一次。
+  // 各抽一次的話，名冊的組成會隨著亂數序列飄——後面多加一個 rng() 呼叫（例如替人物
+  // 補一個欄位），整份名冊的角色比例就跟著變，供需平衡也跟著垮。
+  // 配額法讓「16 個開發者、22 個履約對象」這件事跟後續改動無關。
+  const roleSlots = assignRoles(rng, n);
+
   for (let i = 0; i < n; i++) {
-    const roleKey = weightedPick(rng, roleKeys, (k) => ROLES[k].weight);
+    const roleKey = roleSlots[i];
     const role = ROLES[roleKey];
-    const loc = weightedPick(rng, LOCATIONS, (l) => l.w);
+    let loc = weightedPick(rng, LOCATIONS, (l) => l.w);
+    // 專案開發者一律在臺灣。本站的「自願減量專案」登錄走的是環境部的國內路徑
+    // （合約的 registerProject 把專案國別寫死成 TW），國外額度只能由主權角色
+    // 以託管帳戶帶進來。讓一家東京的公司在這裡登錄專案，資料模型上是矛盾的。
+    // 開發案抵換同理：「溫室氣體增量抵換」是臺灣環評制度裡的東西，
+    // 一家大阪的公司不會有這個義務，讓他出現在名冊上只會製造合約擋得下來的行為。
+    if ((roleKey === "developer" || roleKey === "eia") && loc.country !== "TW") {
+      loc = weightedPick(rng, LOCATIONS.filter((l) => l.country === "TW"), (l) => l.w);
+    }
     const individual = role.tier === "individual";
     // 專案開發者要有東西可以減：金融、零售這種排放集中在用電與供應鏈的行業，
     // 不會是本站上的專案方，挑產業時先排除。
@@ -181,7 +209,12 @@ export function buildPersonas(n, seed) {
     if (persona.project) {
       persona.projectName = `${persona.city} ${persona.project.what}`;
       // 專案年減量規模。核發受這個數字約束：一年之內不可能核發出比實際減量更多的額度。
-      persona.projectScaleTonnes = Math.round(between(rng, 1500, 14000));
+      // 全部開發者加起來的年供給要跟全部買方的年預算在同一個量級，
+      // 差一倍價格就會整年貼著上限或下限跑，圖表上是一條單調的線。
+      persona.projectScaleTonnes = Math.round(between(rng, 1200, 11000));
+      // 每噸的成本（設備攤提＋監測＋查驗）。低於這個價他寧可先不核發、不掛單——
+      // 賣一噸賠一噸的生意沒人做，這也是碳價實際上的底。
+      persona.costPerTonne = Math.round(between(rng, 380, 620));
     }
     out.push(persona);
   }

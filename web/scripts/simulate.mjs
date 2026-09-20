@@ -129,13 +129,25 @@ const listingAbi = parseAbi([
   "function orderOf(uint256) view returns (Order)",
   "function nextOrderId() view returns (uint256)",
 ]);
+const reserveAbi = parseAbi([
+  "struct CreditReserve { bytes2 country; string custodian; string accountRef; uint256 heldKg; uint256 onchainKg; bytes32 statementHash; }",
+  "struct CashReserve { string trustee; string accountRef; uint256 balance; uint256 tokenSupply; bytes32 statementHash; }",
+  "function publish(uint32 period, uint64 asOf, CreditReserve[] credits, CashReserve cash) returns (uint256)",
+  "function setDocumentHash(uint256 reportId, bytes32 documentHash)",
+  "function attest(uint256 reportId, uint8 status, string auditorName, string note)",
+  "function periods() view returns (uint32[])",
+]);
 const erc20Abi = parseAbi([
   "function balanceOf(address) view returns (uint256)",
   "function approve(address, uint256) returns (bool)",
   "function mint(address, uint256)",
+  "function totalSupply() view returns (uint256)",
 ]);
 
-const pub0 = createPublicClient({ transport: http(RPC) });
+/// anvil 每筆交易當場出塊，viem 預設 4 秒的輪詢間隔等於每筆交易白等四秒。
+/// 一年份的回填是幾千筆交易——這一個參數的差別是「四小時」與「二十分鐘」。
+const POLL = 50;
+const pub0 = createPublicClient({ transport: http(RPC), pollingInterval: POLL });
 const chainId = await pub0.getChainId().catch(() => {
   console.error(`連不上 ${RPC} —— anvil 起來了嗎？`);
   process.exit(1);
@@ -145,7 +157,7 @@ const chain = defineChain({
   nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
   rpcUrls: { default: { http: [RPC] } },
 });
-const pub = createPublicClient({ chain, transport: http(RPC) });
+const pub = createPublicClient({ chain, transport: http(RPC), pollingInterval: POLL });
 
 const depFile = process.env.DEPLOYMENT_FILE ?? path.resolve(process.cwd(), "..", "deployments", `${chainId}.json`);
 if (!fs.existsSync(depFile)) {
@@ -155,7 +167,7 @@ if (!fs.existsSync(depFile)) {
 const D = JSON.parse(fs.readFileSync(depFile, "utf8"));
 
 const operator = privateKeyToAccount(OPERATOR_PK);
-const opClient = createWalletClient({ account: operator, chain, transport: http(RPC) });
+const opClient = createWalletClient({ account: operator, chain, transport: http(RPC), pollingInterval: POLL });
 const opWallet = { account: operator, client: opClient, nonce: 0 };
 
 // ───────────────────────── 交易小工具 ─────────────────────────
@@ -164,7 +176,7 @@ const wallets = new Map(); // address -> { account, client, nonce }
 function walletOf(p) {
   let w = wallets.get(p.address);
   if (!w) {
-    w = { account: p.account, client: createWalletClient({ account: p.account, chain, transport: http(RPC) }), nonce: -1 };
+    w = { account: p.account, client: createWalletClient({ account: p.account, chain, transport: http(RPC), pollingInterval: POLL }), nonce: -1 };
     wallets.set(p.address, w);
   }
   return w;
@@ -208,6 +220,9 @@ const orders = new Map();   // orderId -> { seller, batchId, remainingKg, price,
 const batchMeta = new Map(); // batchId -> { country, scheme, project, vintage }
 const holdings = new Map(); // address -> Map(batchId -> kg)
 const cash = new Map();     // address -> bigint（mTWD 最小單位）
+const importedProjects = new Map(); // 國外專案名稱 -> projectId
+const foreignMeta = new Map();      // projectId -> { country, scheme, name, methodology }
+const publishedPeriods = new Set(); // 已發過對帳報告的期別 YYYYMM
 
 const hold = (addr) => holdings.get(addr) ?? holdings.set(addr, new Map()).get(addr);
 const addHold = (addr, batchId, kg) => {
@@ -240,15 +255,72 @@ async function loadMarket() {
     }
   }
   // 平台（部署者）手上的國外額度：模擬期間會分批放到市場上
-  const ids = await pub.readContract({ address: D.carbonCredit1155, abi: creditAbi, functionName: "heldBatches", args: [operator.address] });
+  await loadHoldings(operator.address);
+
+  // 已經在鏈上的人接手回來。模擬器中斷之後可以接著跑——不然只能砍掉 anvil 從頭來，
+  // 而回填一年要二十分鐘，為了一個中斷重跑一次太貴。
+  // 專案也要認回來，不然每次接手都會替同一個開發者再登錄一個一模一樣的專案，
+  // 公告欄上就會出現三個「高雄 廢熱回收發電」。
+  const nextProject = await pub.readContract({ address: D.carbonRegistry, abi: registryAbi, functionName: "nextProjectId" });
+  const projectByOwner = new Map();
+  for (let id = 1n; id < nextProject; id++) {
+    const pr = await pub.readContract({ address: D.carbonRegistry, abi: registryAbi, functionName: "projectOf", args: [id] });
+    if (pr.active && !projectByOwner.has(pr.owner.toLowerCase())) projectByOwner.set(pr.owner.toLowerCase(), Number(id));
+  }
+
+  let resumed = 0;
+  for (const p of personas) {
+    const active = await pub.readContract({ address: D.kycRegistry, abi: kycAbi, functionName: "isActive", args: [p.address] });
+    if (!active) continue;
+    p.joined = true;
+    resumed += 1;
+    p.projectId = projectByOwner.get(p.address.toLowerCase()) ?? p.projectId;
+    await loadHoldings(p.address);
+    cash.set(p.address, await pub.readContract({ address: D.settlementToken, abi: erc20Abi, functionName: "balanceOf", args: [p.address] }));
+  }
+  if (resumed > 0) console.log(`  接手已在鏈上的帳戶 ${resumed} 個（接續先前的模擬）`);
+
+  // 已發過的對帳期別（接手時不要重發同一個月）
+  const periods = await pub.readContract({ address: D.reserveAttestation, abi: reserveAbi, functionName: "periods" });
+  for (const x of periods) publishedPeriods.add(Number(x));
+
+  // 已登錄的國外專案（接手時不要再登錄一次同名專案）
+  for (let id = 1n; id < nextProject; id++) {
+    const pr = await pub.readContract({ address: D.carbonRegistry, abi: registryAbi, functionName: "projectOf", args: [id] });
+    const country = Buffer.from(pr.country.slice(2), "hex").toString("utf8").replace(/\0/g, "");
+    if (pr.active && country !== "TW" && pr.owner.toLowerCase() === operator.address.toLowerCase()) {
+      importedProjects.set(pr.name, Number(id));
+      foreignMeta.set(Number(id), { country, scheme: pr.scheme, name: pr.name, methodology: pr.methodology });
+    }
+  }
+
+  // 參考價從簿子推回來：取現有掛單價格的中位數。用中位數不用平均，
+  // 是因為簿子上常有一兩張掛得很離譜的單，平均會被它們拉走。
+  const asks = [...orders.values()].map((o) => o.price).sort((a, b) => Number(a - b));
+  if (asks.length >= 3) {
+    refPrice = clampPrice(asks[Math.floor(asks.length / 2)]);
+    anchorPrice = refPrice;
+    console.log(`  參考價由掛單簿推回 ${(Number(refPrice) / 1e6).toFixed(0)} mTWD/噸`);
+  }
+}
+
+/// 把一個地址目前持有的批次讀回記憶體
+async function loadHoldings(addr) {
+  const ids = await pub.readContract({ address: D.carbonCredit1155, abi: creditAbi, functionName: "heldBatches", args: [addr] });
   for (const id of ids) {
-    const bal = await pub.readContract({ address: D.carbonCredit1155, abi: creditAbi, functionName: "balanceOf", args: [operator.address, id] });
-    if (bal > 0n) addHold(operator.address, Number(id), Number(bal));
+    const bal = await pub.readContract({ address: D.carbonCredit1155, abi: creditAbi, functionName: "balanceOf", args: [addr, id] });
+    if (bal > 0n) addHold(addr, Number(id), Number(bal));
   }
 }
 
 /// 市場參考價（mTWD / 噸，以最小單位計）。有成交就跟著成交價走。
+/// 起始值只在「鏈上還沒有任何掛單」時用得到；接手先前的模擬時會改由簿子推回來，
+/// 不然每次接手價格都會跳回 800，圖表上出現一道跟市場無關的斷崖。
 let refPrice = 800n * 10n ** 6n;
+/// 買方的心理價位要有一個**慢的**參照。若直接用當天的參考價 × 心理價位倍數，
+/// 價格漲多少、買方願意出的價就跟著漲多少——那等於沒有人會嫌貴，價格必然一路頂到上限。
+/// 真實的預算是去年編的，跟得上大勢、跟不上一個月的急漲。這裡用半衰期很長的 EMA 當錨。
+let anchorPrice = refPrice;
 const PRICE_FLOOR = 300n * 10n ** 6n;
 const PRICE_CEIL = 2200n * 10n ** 6n;
 const clampPrice = (p) => (p < PRICE_FLOOR ? PRICE_FLOOR : p > PRICE_CEIL ? PRICE_CEIL : p);
@@ -327,6 +399,8 @@ async function actIssue(p, now, rng) {
   if (p.issuedYear !== year) { p.issuedYear = year; p.issuedTonnes = 0; }
   const remainTonnes = p.projectScaleTonnes - p.issuedTonnes;
   if (remainTonnes < 200) return false;
+  // 市價低於成本就先不送查驗。查驗是要花錢的，核發出來也賣不掉。
+  if (p.costPerTonne && Number(refPrice) < p.costPerTonne * 1e6 * 0.95 && rng() < 0.85) return false;
   const lot = Math.min(remainTonnes, rndInt(rng, Math.round(p.projectScaleTonnes * 0.2), Math.round(p.projectScaleTonnes * 0.5)));
   const amountKg = BigInt(lot * 1000);
   const serial = keccak256(toBytes(`SIM-${p.id}-${p.issueCount ?? 0}-${now}`));
@@ -355,7 +429,11 @@ async function actIssue(p, now, rng) {
   });
   const batchId = await send(w, { address: D.carbonRegistry, abi: registryAbi, functionName: "issue", args: [a, signature] }, true);
   const id = Number(batchId);
-  batchMeta.set(id, { country: p.country === "TW" ? "TW" : p.country, scheme: p.country === "TW" ? "TCER" : "—", project: p.projectName, vintage: new Date(now * 1000).getUTCFullYear() - 1 });
+  // 核發國一律是 TW。`registerProject` 走的是**國內**登錄路徑，合約把專案的 country
+  // 寫死成 DOMESTIC；國外額度只有主權角色能用 `registerImportedProject` 帶進來。
+  // 之前這裡照人物的所在地標成 JP／TH，記憶體與鏈上就對不起來——
+  // 託管報告按記憶體分國、揭露頁按鏈上分國，兩邊差了七千多噸，看起來像帳不符。
+  batchMeta.set(id, { country: "TW", scheme: "TCER", project: p.projectName, vintage: new Date(now * 1000).getUTCFullYear() - 1 });
   addHold(p.address, id, Number(amountKg));
   p.issueCount = (p.issueCount ?? 0) + 1;
   p.issuedTonnes += lot;
@@ -376,8 +454,21 @@ async function actList(p, now, rng) {
   // 這一條是掛單簿有沒有厚度的關鍵：所有人都掛在成交價附近，每一張單就會被立刻吃掉，
   // 簿子上永遠只剩兩三筆——那不是「交易冷清」，那是模型少了價格分散。
   // 真實的賣方各有各的成本與耐心：急著出貨的貼著市價掛，不急的掛高了等人來。
-  const markup = p.role === "maker" ? 1.04 + rng() * 0.22 : 0.97 + rng() * 0.3;
-  const price = clampPrice(BigInt(Math.round(Number(refPrice) * markup)));
+  // 階梯要**跨在**參考價兩邊，不能整段掛在它上面。買方永遠挑最便宜的那一張，
+  // 所以成交價會落在階梯底部；階梯若整段在參考價之上，每一次成交都把參考價往上帶一格，
+  // 跑一年就是一路頂到上限的棘輪。跨著掛，成交把價格往下拉、簿子變薄把價格往上推，
+  // 兩股力量才有得抵。
+  const markup = p.role === "maker" ? 1.0 + rng() * 0.22 : 0.88 + rng() * 0.3;
+  let price = clampPrice(BigInt(Math.round(Number(refPrice) * markup)));
+  // 專案方不會賠本賣。價格跌到成本以下，他寧可把額度留著等明年——
+  // 這是碳價的下緣，也是為什麼供給過剩不會讓價格一路跌到零。
+  if (p.costPerTonne) {
+    const floor = BigInt(p.costPerTonne) * 10n ** 6n;
+    if (price < floor) {
+      if (rng() < 0.8) return false; // 多數人收手
+      price = clampPrice(floor); // 少數急需現金的照成本掛
+    }
+  }
   const w = walletOf(p);
   const orderId = await send(w, {
     address: D.listing, abi: listingAbi, functionName: "list",
@@ -388,6 +479,19 @@ async function actList(p, now, rng) {
   return true;
 }
 
+/// 「國外」有兩個不同的意思，混在一起就會寫出合約會擋下來的行為：
+///
+///   1. **相對於核發國**：增量抵換與環評承諾是臺灣環評制度的東西，
+///      只有臺灣核發的額度有這個用途。日本的 J-Credit 拿去做增量抵換，
+///      不管持有人是誰、在哪裡申報，合約都會 revert（各轄區的 purposeMask）。
+///   2. **相對於持有人的申報地**：高碳洩漏風險事業在臺灣申報不得使用國外額度，
+///      這是臺灣的碳費規則，看的是「申報地是不是臺灣、額度是不是臺灣核發」。
+///
+/// 第 1 條是合約強制的，第 2 條是申報時的規則。兩條都要遵守，但判斷基準不同。
+const DOMESTIC = "TW";
+const issuedAbroad = (m) => m.country !== DOMESTIC;
+const foreignToPersona = (m, p) => m.country !== p.country;
+
 /// 買進：從掛單簿挑最便宜、而且符合自己用途的那一筆
 function pickOrder(p, rng) {
   const wantForeignOk = p.foreignShare > 0 && rng() < p.foreignShare;
@@ -396,10 +500,11 @@ function pickOrder(p, rng) {
     .filter(([, o]) => {
       const m = batchMeta.get(o.batchId);
       if (!m) return false;
-      const foreign = m.country !== p.country;
-      // 環評增量抵換只認本地額度；高碳洩漏風險事業在臺灣申報不得用國外額度
-      if (foreign && (p.role === "eia" || p.leakageRisk)) return false;
-      if (foreign && !wantForeignOk) return false;
+      // 開發案抵換只能用臺灣核發的額度——這是合約層的硬規則，不是偏好
+      if (p.role === "eia" && issuedAbroad(m)) return false;
+      // 高碳洩漏風險事業在臺灣申報不得使用國外額度（碳費收費辦法第 10 條）
+      if (p.leakageRisk && p.country === DOMESTIC && issuedAbroad(m)) return false;
+      if (foreignToPersona(m, p) && !wantForeignOk) return false;
       return true;
     })
     .sort((a, b) => Number(a[1].price - b[1].price));
@@ -412,13 +517,23 @@ async function actBuy(p, now, rng, date) {
   const found = pickOrder(p, rng);
   if (!found) return false;
   const [orderId, o] = found;
-  const willing = BigInt(Math.round(Number(refPrice) * p.priceTolerance));
+  // 申報季逼近時多付一點是合理的（沒買到的代價更高），但也就 15%，不是無上限。
+  const urgencyNow = seasonality(p, date) > 2 ? 1.15 : 1;
+  const willing = BigInt(Math.round(Number(anchorPrice) * p.priceTolerance * urgencyNow));
   if (o.price > willing) return false;
+
+  // 年度採購預算。沒有這條，一個履約對象會整年不停地買——他手上的額度被註銷掉之後
+  // 又「不夠了」，於是再買，一年下來買進的量是他實際需求的十幾倍，市場就被他抽乾。
+  // 實際上買多少是年初就編好的：需求量加一點緩衝，買夠了就收手。
+  const year = date.getUTCFullYear();
+  if (p.buyYear !== year) { p.buyYear = year; p.boughtThisYear = 0; }
+  const quota = p.role === "maker" ? Infinity : p.annualNeedTonnes * 1.3;
+  if (p.boughtThisYear >= quota) return false;
 
   const season = seasonality(p, date);
   const baseTonnes = { compliance: p.annualNeedTonnes / 8, voluntary: p.annualNeedTonnes / 5, eia: p.annualNeedTonnes / 3, retail: Math.max(1, p.annualNeedTonnes / 4), maker: 8, developer: 0 }[p.role] ?? 2;
   let kg = Math.round(Math.max(100, baseTonnes * season * (0.5 + rng())) * 1000);
-  kg = Math.min(kg, o.remainingKg);
+  kg = Math.min(kg, o.remainingKg, Math.round((quota - p.boughtThisYear) * 1000));
   if (kg < o.minFillKg && kg !== o.remainingKg) return false;
 
   const cost = (BigInt(kg) * o.price) / 1000n;
@@ -433,9 +548,12 @@ async function actBuy(p, now, rng, date) {
   addHold(p.address, o.batchId, kg);
   cash.set(p.address, (cash.get(p.address) ?? 0n) - cost);
   cash.set(o.seller, (cash.get(o.seller) ?? 0n) + cost);
-  // 成交價推動參考價：買壓大就往上走
-  refPrice = clampPrice((refPrice * 97n + o.price * 3n) / 100n + BigInt(Math.round(Number(refPrice) * 0.0008 * season)));
+  // 參考價跟著成交價走（EMA）。這裡刻意**不加**「買壓讓價格上漲」的項：
+  // 每一筆成交都往上推一點，跑一年就必然頂到上限——那不是市場，是單向的棘輪。
+  // 供需對價格的影響交給下面的掛單簿深度，那才是真的會兩邊跑的東西。
+  refPrice = clampPrice((refPrice * 97n + o.price * 3n) / 100n);
   p.boughtTonnes = (p.boughtTonnes ?? 0) + kg / 1000;
+  p.boughtThisYear += kg / 1000;
   return true;
 }
 
@@ -449,12 +567,14 @@ async function actRetire(p, now, rng) {
   if (entries.length === 0) return false;
   const [batchId, kg] = entries[Math.floor(rng() * entries.length)];
   const meta = batchMeta.get(batchId);
-  const foreign = meta && meta.country !== p.country;
+  if (!meta) return false;
 
   let purpose = { compliance: PURPOSE.CarbonFee, eia: PURPOSE.IncrementOffset, voluntary: PURPOSE.VoluntaryNeutrality, maker: PURPOSE.VoluntaryNeutrality, developer: PURPOSE.VoluntaryNeutrality }[p.role];
-  // 國外額度只能扣碳費或做自願性碳中和（氣候變遷因應法第 27 條）
-  if (foreign && (purpose === PURPOSE.IncrementOffset || purpose === PURPOSE.EiaCommitment)) {
-    if (p.role === "eia") return false; // 環評抵換只能用本地額度，他不會拿國外的去試
+  // 增量抵換與環評承諾只有臺灣核發的額度有這個用途，看的是**核發國**不是持有人。
+  // 之前這裡拿持有人的申報地來比，於是一家大阪的公司拿日本額度去做「增量抵換」——
+  // 對他來說那是本地額度，但日本的登錄簿裡根本沒有這個用途，合約直接 revert。
+  if (issuedAbroad(meta) && (purpose === PURPOSE.IncrementOffset || purpose === PURPOSE.EiaCommitment)) {
+    if (p.role === "eia") return false; // 他不會拿非臺灣的額度去辦環評抵換
     purpose = PURPOSE.VoluntaryNeutrality;
   }
   const amountKg = BigInt(Math.max(1000, Math.round(kg * (0.4 + rng() * 0.6))));
@@ -483,6 +603,118 @@ async function actReprice(p, rng) {
   return true;
 }
 
+/// 本站在各國登錄簿的託管帳戶。名稱與帳號跟 DemoFlow 的第一份對帳報告一致。
+const CUSTODY = {
+  TW: { custodian: "環境部 溫室氣體減量額度管理系統", ref: "TW-ACC-0001" },
+  JP: { custodian: "Ｊ－クレジット登録簿", ref: "JP-ACC-0007", scheme: "J-Credit" },
+  TH: { custodian: "TGO T-VER Registry", ref: "TH-ACC-0012", scheme: "T-VER" },
+  AU: { custodian: "ANREU", ref: "AU-ACC-0031", scheme: "ACCU" },
+  KR: { custodian: "온실가스 종합정보센터 배출권등록부", ref: "KR-ACC-0004", scheme: "KOC" },
+  ID: { custodian: "SRN PPI（Sistem Registri Nasional）", ref: "ID-ACC-0019", scheme: "SPE-GRK" },
+};
+
+/// 平台進貨：本站在各國登錄簿的託管帳戶收到新的額度，對應上鏈。
+/// 沒有這一段，國外額度就是部署時給的那幾十噸，賣完就再也沒有——
+/// 而託管帳戶本來就是會持續進貨的，那是這門生意的一部分。
+///
+/// 注意：模擬器**不**登錄新的國外專案。`registerImportedProject` 要 SOVEREIGN_ROLE，
+/// 那把鑰匙在國家 Safe 手上，不在營運方的熱錢包裡——這是設計，不是限制。
+/// 開一個新轄區、認一個新專案是主權行為；把託管帳戶收到的額度對應上鏈是營運行為。
+/// 所以這裡只往**既有的**國外專案裡進貨，新專案請由治理流程另行登錄。
+async function actImportForeign(now, rng) {
+  const entries = [...importedProjects.entries()];
+  if (entries.length === 0) return false;
+  const [, pid] = entries[Math.floor(rng() * entries.length)];
+  const meta = foreignMeta.get(pid);
+  if (!meta || !CUSTODY[meta.country]) return false;
+  const amountKg = BigInt(rndInt(rng, 400, 3000) * 1000);
+  const a = {
+    projectId: BigInt(pid),
+    monitoringStart: BigInt(now - 365 * 86400),
+    monitoringEnd: BigInt(now - 86400),
+    amountKg,
+    serialHash: keccak256(toBytes(`IMP-${meta.country}-${pid}-${now}`)),
+    reportHash: keccak256(toBytes(`${meta.methodology} verification ${pid}-${now}`)),
+    attestationId: BigInt(now * 1000 + 900000 + pid),
+    deadline: BigInt(now + 365 * 86400),
+  };
+  const signature = await operator.signTypedData({
+    domain: { name: "CO2Exchange CarbonRegistry", version: "1", chainId, verifyingContract: D.carbonRegistry },
+    types: {
+      IssuanceAttestation: [
+        { name: "projectId", type: "uint256" }, { name: "monitoringStart", type: "uint64" },
+        { name: "monitoringEnd", type: "uint64" }, { name: "amountKg", type: "uint256" },
+        { name: "serialHash", type: "bytes32" }, { name: "reportHash", type: "bytes32" },
+        { name: "attestationId", type: "uint256" }, { name: "deadline", type: "uint256" },
+      ],
+    },
+    primaryType: "IssuanceAttestation",
+    message: a,
+  });
+  const batchId = await send(opWallet, { address: D.carbonRegistry, abi: registryAbi, functionName: "issue", args: [a, signature] }, true);
+  const id = Number(batchId);
+  batchMeta.set(id, { country: meta.country, scheme: meta.scheme, project: meta.name, vintage: new Date(now * 1000).getUTCFullYear() - 1 });
+  addHold(operator.address, id, Number(amountKg));
+  return true;
+}
+
+/// 每月 5 日的託管與準備金對帳報告。
+///
+/// 這不是裝飾。平台在首頁與契約裡都寫了「每月 5 日公開對帳」，
+/// 展示資料裡卻只有部署當天那一份，跑了十個月都沒更新——
+/// 那頁面看起來就是「說了做不到」。報告的託管餘額直接取鏈上即時流通量：
+/// demo 環境的登錄簿餘額本來就是由鏈上推導的，所以一定對得起來；
+/// 正式環境是人工填報後由查核機構簽署，兩邊對不上才是要查的事。
+async function actPublishReserve(now) {
+  const period = Number(`${new Date(now * 1000).getUTCFullYear()}${String(new Date(now * 1000).getUTCMonth() + 1).padStart(2, "0")}`);
+  if (publishedPeriods.has(period)) return false;
+  publishedPeriods.add(period);
+
+  // 各國託管餘額直接從鏈上算：核發減註銷，依核發國分組。
+  // 不要用模擬器記憶體裡的持有量——那少掉掛在簿子上的、池子裡的，以及 demo 腳本
+  // 留下的那幾個帳戶，報告出來會像託管帳戶短少了幾萬噸。
+  // 揭露頁的「鏈上流通（即時）」也是用同一個算法自己重算一次，兩邊要對得起來。
+  const byCountry = new Map();
+  for (const [batchId, meta] of batchMeta) {
+    const b = await pub.readContract({ address: D.carbonCredit1155, abi: creditAbi, functionName: "batchOf", args: [BigInt(batchId)] });
+    const kg = Number(b.issuedKg - b.retiredKg);
+    if (kg > 0) byCountry.set(meta.country, (byCountry.get(meta.country) ?? 0) + kg);
+  }
+  const rows = [...byCountry.entries()]
+    .filter(([c]) => CUSTODY[c])
+    .map(([country, kg]) => ({
+      country: toHex(Buffer.from(country, "utf8")),
+      custodian: CUSTODY[country].custodian,
+      accountRef: CUSTODY[country].ref,
+      heldKg: BigInt(kg),
+      onchainKg: BigInt(kg),
+      statementHash: keccak256(toBytes(`registry statement ${country} ${period}`)),
+    }));
+  if (rows.length === 0) return false;
+
+  const supply = await pub.readContract({ address: D.settlementToken, abi: erc20Abi, functionName: "totalSupply" });
+  const cashRow = {
+    trustee: "某某商業銀行 信託部",
+    accountRef: "TRUST-CO2X-001",
+    balance: supply,
+    tokenSupply: supply,
+    statementHash: keccak256(toBytes(`trust statement ${period}`)),
+  };
+  const reportId = await send(opWallet, {
+    address: D.reserveAttestation, abi: reserveAbi, functionName: "publish",
+    args: [period, BigInt(now), rows, cashRow],
+  }, true);
+  await send(opWallet, {
+    address: D.reserveAttestation, abi: reserveAbi, functionName: "setDocumentHash",
+    args: [reportId, keccak256(toBytes(`reserve report ${period}.pdf`))],
+  });
+  await send(opWallet, {
+    address: D.reserveAttestation, abi: reserveAbi, functionName: "attest",
+    args: [reportId, 1, "某某會計師事務所", "各國託管帳戶餘額與鏈上流通量相符；信託專戶餘額與結算幣發行量相符"],
+  });
+  return true;
+}
+
 /// 平台把託管在各國登錄簿的國外額度分批放到市場上
 async function actPlatformSupply(rng) {
   const h = hold(operator.address);
@@ -507,12 +739,18 @@ async function actPlatformSupply(rng) {
 let tickNo = 0;
 async function runTick(now, rng, progress) {
   const date = new Date(now * 1000);
-  const stats = { join: 0, issue: 0, list: 0, buy: 0, retire: 0, cancel: 0 };
+  const stats = { join: 0, issue: 0, import: 0, list: 0, buy: 0, retire: 0, cancel: 0, report: 0 };
 
   // 掛單簿的深度決定供給端要多積極。薄了就補貨，厚了就收手——
   // 賣方看得到簿子，本來就會這樣反應，不必另外編一個理由。
   const depthTonnes = [...orders.values()].reduce((s2, o) => s2 + o.remainingKg, 0) / 1000;
   const thin = depthTonnes < 4000;
+
+  // 每月 5 日的託管對帳報告。跨過那一天就發，不管當輪落在幾點。
+  if (date.getUTCDate() >= 5 && await attempt("託管對帳報告", () => actPublishReserve(now))) stats.report += 1;
+
+  // 平台進貨：託管帳戶收到新的國外額度（約每十天一批）
+  if (rng() < TICK / (10 * 86400)) { if (await attempt("平台進貨", () => actImportForeign(now, rng))) stats.import += 1; }
 
   // 平台補貨：國外額度慢慢放，不要一次倒光
   if (rng() < (thin ? 0.25 : 0.06)) { if (await attempt("平台上架", () => actPlatformSupply(rng))) stats.list += 1; }
@@ -567,8 +805,14 @@ async function runTick(now, rng, progress) {
     }
   }
 
-  // 沒有成交的時候價格也會漂移（賣方觀望、買方等待）
-  refPrice = clampPrice(refPrice + BigInt(Math.round(Number(refPrice) * (rng() - 0.5) * 0.004)));
+  // 掛單簿的厚薄決定價格往哪邊走：貨堆著賣不掉就得降價，貨不夠就有人願意出更高。
+  // 這是雙向的，所以價格會回頭；只有「買壓推升」那一項的話，跑久了一定貼著上限。
+  const TARGET_DEPTH = 8000; // 噸。市場覺得「夠深」的水位
+  const depthNow = [...orders.values()].reduce((s2, o) => s2 + o.remainingKg, 0) / 1000;
+  const pressure = Math.max(-1, Math.min(1, (TARGET_DEPTH - depthNow) / TARGET_DEPTH));
+  refPrice = clampPrice(refPrice + BigInt(Math.round(Number(refPrice) * (0.003 * pressure + (rng() - 0.5) * 0.004))));
+  // 錨價每輪只走參考價的 0.5%：一個月（約 90 輪）追得上，一週的急漲追不上。
+  anchorPrice = (anchorPrice * 199n + refPrice) / 200n;
   tickNo += 1;
   if (!QUIET || tickNo % 40 === 0) {
     const line = Object.entries(stats).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}`).join(" ");
@@ -601,6 +845,8 @@ fs.writeFileSync(rosterPath, JSON.stringify({
   note: "模擬用虛構人物，與任何真實公司或個人無關",
   seed: SEED,
   generatedAt: new Date().toISOString(),
+  // account 是 viem 的簽章物件，序列化沒有意義（而且裡面有私鑰推導的東西）
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   personas: personas.map(({ account, ...p }) => p),
 }, null, 2));
 

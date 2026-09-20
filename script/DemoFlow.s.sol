@@ -191,12 +191,14 @@ contract DemoFlow is Deploy {
             accountRef: "TRUST-CO2X-001",
             balance: twd.totalSupply(),
             tokenSupply: twd.totalSupply(),
-            statementHash: keccak256("trust statement 2026-09")
+            statementHash: keccak256(abi.encodePacked("trust statement ", _period()))
         });
 
         vm.startBroadcast(cfg.pk);
-        uint256 id = reserve.publish(202609, uint64(block.timestamp), c, cash);
-        reserve.setDocumentHash(id, keccak256("reserve report 2026-09.pdf"));
+        // 期別由鏈上時間推導，不能寫死。回填模擬會把鏈開在一年前，
+        // 寫死的期別會讓第一份報告標著「2026 年 9 月」卻蓋在 2025 年 11 月的基準日上。
+        uint256 id = reserve.publish(_period(), uint64(block.timestamp), c, cash);
+        reserve.setDocumentHash(id, keccak256(abi.encodePacked("reserve report ", _period(), ".pdf")));
         reserve.attest(
             id,
             ReserveAttestation.Status.Attested,
@@ -204,6 +206,19 @@ contract DemoFlow is Deploy {
             unicode"各國託管帳戶餘額與鏈上流通量相符；信託專戶餘額與結算幣發行量相符"
         );
         vm.stopBroadcast();
+    }
+
+    /// @dev 目前這一期的期別 YYYYMM（由鏈上時間推導）。
+    function _period() internal view returns (uint32) {
+        uint256 z = block.timestamp / 86400 + 719468;
+        uint256 era = z / 146097;
+        uint256 doe = z - era * 146097;
+        uint256 yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        uint256 doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        uint256 mp = (5 * doy + 2) / 153;
+        uint256 m = mp < 10 ? mp + 3 : mp - 9;
+        uint256 y = yoe + era * 400 + (m <= 2 ? 1 : 0);
+        return uint32(y * 100 + m);
     }
 
     function _reserveRow(bytes2 country, string memory custodian, string memory ref, uint256 kg)
