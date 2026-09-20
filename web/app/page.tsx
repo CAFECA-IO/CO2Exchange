@@ -400,15 +400,34 @@ export default function Home() {
         <p className="text-sm">
           基於上述理由，本平台不把「CBAM 扣抵」列為額度用途。若規則變動，會依主管機關與歐盟公告更新。
         </p>
-        <Notice kind="info">
-          <b>本站額度怎麼持有的，也要講清楚：</b>這裡的額度由卡菲卡股份有限公司協助向環境部申辦，
-          並登錄在卡菲卡於「溫室氣體減量額度管理系統」開立的額度帳戶內。您在鏈上持有的，是
-          <b>請求代為辦理官方移轉與註銷的權利</b>，不是環境部登錄簿上的直接登記名義。
-          依規定每一單位額度在官方登錄簿的移轉以一次為限，因此鏈上的多次買賣不觸發官方移轉；
-          只有在您<b>要使用（註銷）</b>時，才會辦理那唯一一次的官方移轉與註銷。
-          所有核發、上架、移轉與註銷都在<Link className="underline" href="/registry">公告欄</Link>即時公告，
-          權利義務見<Link className="underline" href="/agreements">定型化契約</Link>。
-        </Notice>
+        <h3 className="pt-2 font-display text-base font-semibold text-ink-50">那，我買到的到底是什麼？</h3>
+        <p>
+          你買到的是<b>一批已經發生、而且被查驗過的減量</b>，以及在你需要的時候把它<b>登記成你用掉</b>的權利。
+          聽起來拗口，但對你的實際差別只有一件事：<b>買賣的時候你什麼都不用辦，要用的時候我們幫你辦。</b>
+        </p>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {[
+            ["買的時候", "點一下就成交，價金與額度同時交割。不必跑環境部、不必等公文。"],
+            ["放著的時候", "額度在你的帳戶名下，隨時看得到、可以再賣掉。沒有保管費。"],
+            ["要用的時候", "按「註銷」，我們替你向環境部辦官方過戶與註銷，完成後憑證上會出現官方註銷編號。"],
+          ].map(([t, d]) => (
+            <div key={t} className="rounded-[--radius-card] border border-ink-500 bg-ink-700 p-4">
+              <h4 className="text-sm font-semibold text-ink-50">{t}</h4>
+              <p className="mt-1 text-sm leading-6 text-ink-300">{d}</p>
+            </div>
+          ))}
+        </div>
+        <p>
+          為什麼要這樣設計？因為法規規定<b>每一單位額度在環境部登錄簿只能過戶一次</b>。
+          如果每次買賣都去辦一次官方過戶，第二手就沒得賣了。所以這裡的額度統一由卡菲卡代為申辦並保管在官方帳戶，
+          鏈上的買賣是所有權在本站登錄簿上的移轉，那唯一一次的官方過戶，留到你真正要用掉的那一刻才動用。
+        </p>
+        <p className="text-ink-300">
+          兩件事值得你順手確認：每一筆核發、上架、移轉、註銷都會即時出現在
+          <Link className="text-tide underline" href="/registry">公告欄</Link>，包括別人的，你可以自己核對；
+          你和賣方之間的權利義務寫在<Link className="text-tide underline" href="/agreements">定型化契約</Link>裡，
+          下單前會請你確認，不會藏在小字裡。
+        </p>
         <p className="text-xs leading-6 text-ink-300">
           本站目前為 Phase 0 展示版本：身分驗證、查驗機構簽章與結算幣皆為模擬，額度不具法律效力，不得作為任何申報依據。
           正式營運的前提是主管機關認可、查驗機構以自己的金鑰簽章，以及金融機構提供的結算工具。

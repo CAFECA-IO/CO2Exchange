@@ -44,6 +44,19 @@ await verifier.page.locator('[data-testid="verifier-row"]').first().getByRole("b
 await waitOk(verifier.page, "已簽章核發");
 console.log("✔ 查驗機構核發");
 
+// 企業：先從 /trade 賣出 5 噸再取消（交易頁也要能賣，不是只有 /enterprise）
+await corp.page.goto(`${BASE}/trade`);
+const sellRow = corp.page.locator('[data-testid="sell-row"]').first();
+await sellRow.waitFor({ timeout: 30_000 });
+await sellRow.getByLabel("數量（噸）").fill("5");
+await sellRow.getByLabel("使用期限").fill("2027-12-31");
+await agreeAll(corp.page);
+await sellRow.getByRole("button", { name: "上架" }).click();
+await waitOk(corp.page, "上架批次 #");
+await corp.page.getByRole("button", { name: "取消掛單" }).first().click();
+await waitOk(corp.page, "取消掛單 #");
+console.log("✔ 交易頁賣出並取消");
+
 // 企業：掛單 20 噸、入池 30 噸
 await corp.page.goto(`${BASE}/enterprise`);
 await corp.page.locator('[data-testid="holding-row"]', { hasText: "50 噸" }).waitFor({ timeout: 30_000 });

@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useReload } from "@/lib/client/useReload";
 import { encodeFunctionData, keccak256, toBytes, type Address, type Hex } from "viem";
@@ -6,22 +7,25 @@ import { useAccount } from "@/components/AccountProvider";
 import { AccountGate } from "@/components/AccountGate";
 import { AgreementCheck, useAgreementGate } from "@/components/AgreementGate";
 import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/components/ui";
-import { creditAbi, erc20Abi, listingAbi, poolAbi, routerAbi } from "@/lib/abis";
+import { creditAbi, erc1155ApprovalAbi, erc20Abi, listingAbi, listingWriteAbi, poolAbi, routerAbi } from "@/lib/abis";
 import { PURPOSE_LABEL } from "@/lib/deployment";
 import { signAndRelay, type Call } from "@/lib/client/passkey";
 
-type Order = { orderId: number; batchId: number; remainingKg: number; pricePerTonne: string; minFillKg: number; project: { name: string; methodology: string; location: string }; vintageYear: number };
+type Order = { orderId: number; seller: string; batchId: number; remainingKg: number; pricePerTonne: string; minFillKg: number; project: { name: string; methodology: string; location: string }; vintageYear: number };
 type Market = {
   orders: Order[]; spotPricePerTonne: number | null; listingFeeBps: number;
   poolKey: { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address } | null; // SKIP_V4 部署時為 null
   holdings: { twd: string; cct: string; batches: { batchId: number; kg: number; vintageYear: number; project: string }[] } | null;
 };
 
+/// 掛單表單的預設值：整批、參考價 800、最小成交 0.1 噸
+const defaultSell = (kg: number) => ({ tonnes: String(kg / 1000), price: "800", minFill: "0.1", usageDeadline: "" });
+
 const MIN_SQRT = 4295128739n;
 const MAX_SQRT = 1461446703485210103287273052203988822378723970342n;
 
 export default function TradePage() {
-  const { credential, config, userId } = useAccount();
+  const { credential, config, userId, tier } = useAccount();
   const [m, setM] = useState<Market | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -32,10 +36,13 @@ export default function TradePage() {
   const [purpose, setPurpose] = useState(1);
   const [memo, setMemo] = useState("");
   const [retireKg, setRetireKg] = useState<Record<string, string>>({});
+  // 賣出（掛單）：數量與最小成交都以噸為單位，使用期限依第 12 條申報
+  const [sellForm, setSellForm] = useState<Record<number, { tonnes: string; price: string; minFill: string; usageDeadline: string }>>({});
 
   const [reloadKey, reload] = useReload();
   // 買進與註銷各自需要的定型化契約。條文改版會自動再問一次。
   const buyGate = useAgreementGate(credential?.address, ["platform-terms", "trade-agreement"]);
+  const sellGate = useAgreementGate(credential?.address, ["platform-terms", "service-fee", "trade-agreement"]);
   const retireGate = useAgreementGate(credential?.address, ["retirement-mandate"]);
   useEffect(() => {
     let ignore = false;
@@ -49,10 +56,11 @@ export default function TradePage() {
   if (!userId || !credential || !config) return <AccountGate />;
   const d = config.deployment;
 
-  async function relay(label: string, calls: Call[]) {
+  async function relay(label: string, calls: Call[], after?: () => Promise<unknown>) {
     setBusy(label); setMsg(null);
     try {
       const r = await signAndRelay(config!.rpcUrl, credential!, calls);
+      if (after) await after();
       setMsg({ kind: "ok", text: `${label}完成 · tx ${r.txHash.slice(0, 10)}… · gas ${Number(r.gasUsed).toLocaleString()}（平台代付）` });
       reload();
     } catch (e) {
@@ -73,6 +81,27 @@ export default function TradePage() {
     relay(`購買 ${fmtKg(Number(kg))}`, [
       { target: d.settlementToken, value: 0n, data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [d.listing, cost] }) },
       { target: d.listing, value: 0n, data: encodeFunctionData({ abi: listingAbi, functionName: "buy", args: [BigInt(o.orderId), kg] }) },
+    ]);
+  }
+
+  /// 賣出＝在掛單簿上架。代幣層只允許法人轉出，所以自然人看到的是說明而不是表單。
+  function sell(b: { batchId: number; kg: number }) {
+    const f = sellForm[b.batchId] ?? defaultSell(b.kg);
+    const kg = BigInt(Math.min(b.kg, Math.max(1, Math.round(Number(f.tonnes) * 1000))));
+    relay(`上架批次 #${b.batchId} ${fmtKg(Number(kg))}`, [
+      { target: d.carbonCredit1155, value: 0n, data: encodeFunctionData({ abi: erc1155ApprovalAbi, functionName: "setApprovalForAll", args: [d.listing, true] }) },
+      { target: d.listing, value: 0n, data: encodeFunctionData({ abi: listingWriteAbi, functionName: "list", args: [
+        BigInt(b.batchId), kg, BigInt(Math.round(Number(f.price) * 1e6)), BigInt(Math.max(0, Math.round(Number(f.minFill) * 1000))),
+      ] }) },
+    ], () => fetch("/api/listing-meta", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ batchId: b.batchId, seller: credential!.address, usageDeadline: f.usageDeadline, amountKg: Number(kg) }),
+    }));
+  }
+
+  function cancelOrder(o: Order) {
+    relay(`取消掛單 #${o.orderId}`, [
+      { target: d.listing, value: 0n, data: encodeFunctionData({ abi: listingWriteAbi, functionName: "cancel", args: [BigInt(o.orderId)] }) },
     ]);
   }
 
@@ -109,6 +138,7 @@ export default function TradePage() {
   }
 
   const h = m?.holdings;
+  const myOrders = (m?.orders ?? []).filter((o) => o.seller?.toLowerCase() === credential.address.toLowerCase());
   const cctKg = h ? Math.floor(Number(BigInt(h.cct) / 10n ** 15n)) : 0;
   // 深度條的基準：本頁最大的那筆掛單量
   const maxDepthKg = Math.max(1, ...(m?.orders ?? []).map((o) => o.remainingKg));
@@ -272,6 +302,77 @@ export default function TradePage() {
           )}
         </Card>
       </div>
+
+      {/* 賣出：買得到也要賣得掉，否則不叫交易所 */}
+      <Card title="賣出（上架掛單）">
+        {tier !== 2 ? (
+          <div className="space-y-2 text-sm leading-7 text-ink-200">
+            <p>
+              目前您的身分是<b>{tier === 1 ? "自然人" : "未完成身分驗證"}</b>，不能轉售額度。
+              自然人可以買、可以註銷，但額度不能再轉出——這是代幣合約層的規則，不是介面擋的，
+              目的是避免個人之間的轉手炒作。
+            </p>
+            <p className="text-ink-300">
+              需要賣出請以法人身分驗證（工商憑證），到
+              <Link className="text-tide underline" href="/kyc">身分驗證</Link>辦理。
+            </p>
+          </div>
+        ) : !h || h.batches.length === 0 ? (
+          <p className="text-sm text-ink-300">尚未持有可上架的額度批次。</p>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-xs leading-6 text-ink-300">
+              上架後買方可直接成交，價金即時入帳。上架本交易所的額度，其代辦服務費適用每噸減免；
+              不配合官方移轉者不得上架、不適用減免並依約定書追繳。
+              使用期限依溫室氣體減量額度交易拍賣及移轉管理辦法第 12 條於上架時申報，並隨掛單公告。
+            </p>
+            <AgreementCheck gate={sellGate} />
+            <ul className="space-y-3 text-sm">
+              {h.batches.map((b) => {
+                const f = sellForm[b.batchId] ?? defaultSell(b.kg);
+                const set = (patch: Partial<typeof f>) => setSellForm({ ...sellForm, [b.batchId]: { ...f, ...patch } });
+                return (
+                  <li key={b.batchId} className="rounded-[--radius-card] border border-ink-500 bg-ink-800 p-3" data-testid="sell-row">
+                    <div className="mb-2 font-medium text-ink-50">批次 #{b.batchId} · {b.project} · {b.vintageYear} · 持有 {fmtKg(b.kg)}</div>
+                    <div className="flex flex-wrap items-end gap-2">
+                      <Field label="數量（噸）"><input className={`${inputCls} w-28`} type="number" step="0.001" value={f.tonnes} onChange={(e) => set({ tonnes: e.target.value })} /></Field>
+                      <Field label="單價 mTWD / 噸"><input className={`${inputCls} w-32`} type="number" value={f.price} onChange={(e) => set({ price: e.target.value })} /></Field>
+                      <Field label="最小成交（噸）"><input className={`${inputCls} w-28`} type="number" step="0.001" value={f.minFill} onChange={(e) => set({ minFill: e.target.value })} /></Field>
+                      <Field label="使用期限"><input className={`${inputCls} w-36`} type="date" value={f.usageDeadline} onChange={(e) => set({ usageDeadline: e.target.value })} /></Field>
+                      <Button
+                        onClick={async () => { await sellGate.accept(`batch:${b.batchId}`); sell(b); }}
+                        disabled={!!busy || !sellGate.ok}
+                      >
+                        上架
+                      </Button>
+                    </div>
+                    <p className="mt-2 text-xs text-ink-300">
+                      預計收入 {(Number(f.tonnes) * Number(f.price)).toLocaleString("zh-TW", { maximumFractionDigits: 2 })} mTWD
+                      （尚未扣平台手續費 {(m?.listingFeeBps ?? 0) / 100}%，由賣方承擔）
+                    </p>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
+        {myOrders.length > 0 && (
+          <div className="mt-5 border-t border-ink-500 pt-4">
+            <h3 className="mb-2 font-display text-sm font-semibold text-ink-50">我的掛單</h3>
+            <ul className="space-y-2 text-sm">
+              {myOrders.map((o) => (
+                <li key={o.orderId} className="flex flex-wrap items-center gap-3 rounded-[--radius-card] border border-ink-500 p-3">
+                  <span className="flex-1">
+                    掛單 #{o.orderId} · 批次 #{o.batchId} · 剩餘 {fmtKg(o.remainingKg)} · {fmtTwd(o.pricePerTonne)} mTWD / 噸
+                  </span>
+                  <Button variant="secondary" onClick={() => cancelOrder(o)} disabled={!!busy}>取消掛單</Button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </Card>
 
       <Card title="註銷並取得憑證">
         <div className="mb-4 space-y-3">
