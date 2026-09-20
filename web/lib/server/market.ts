@@ -106,6 +106,50 @@ export async function listOrders(limit = 60, maxScan = 400): Promise<Order[]> {
   return out.sort((a, b) => Number(BigInt(a.pricePerTonne) - BigInt(b.pricePerTonne)));
 }
 
+export type Bid = {
+  bidId: number;
+  buyer: Address;
+  /// 想買哪一國核發的；空字串＝不限
+  country: string;
+  remainingKg: number;
+  pricePerTonne: string;
+  minFillKg: number;
+};
+
+/// 買單側。比賣單簡單得多——買單只帶核發國，不牽涉批次與專案，
+/// 所以不必像 listOrders 那樣回頭查批次與專案的資料。
+export async function listBids(limit = 60, maxScan = 400): Promise<Bid[]> {
+  const d = deployment();
+  const next = Number(
+    await publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "nextBidId" }).catch(() => 1n),
+  );
+  const ids: number[] = [];
+  for (let i = next - 1; i >= 1 && ids.length < maxScan; i--) ids.push(i);
+
+  const out: Bid[] = [];
+  const CHUNK = 40;
+  for (let i = 0; i < ids.length && out.length < limit; i += CHUNK) {
+    const slice = ids.slice(i, i + CHUNK);
+    const bids = await Promise.all(
+      slice.map((id) =>
+        publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "bidOf", args: [BigInt(id)] })
+          .then((b) => ({ id, b })),
+      ),
+    );
+    for (const { id, b } of bids) {
+      if (out.length >= limit) break;
+      if (!b.active || b.remainingKg === 0n) continue;
+      out.push({
+        bidId: id, buyer: b.buyer, country: countryCode(b.country),
+        remainingKg: Number(b.remainingKg), pricePerTonne: b.pricePerTonne.toString(),
+        minFillKg: Number(b.minFillKg),
+      });
+    }
+  }
+  // 買單由高價往低價排：最佳買價（出得最多的）在前，跟賣單那側的「最佳」方向相反。
+  return out.sort((a, b) => Number(BigInt(b.pricePerTonne) - BigInt(a.pricePerTonne)));
+}
+
 export async function holdings(account: Address) {
   const d = deployment();
   const [twd, cct, ids] = await Promise.all([

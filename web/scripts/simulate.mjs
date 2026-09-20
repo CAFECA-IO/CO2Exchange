@@ -128,6 +128,12 @@ const listingAbi = parseAbi([
   "function cancel(uint256 orderId)",
   "function orderOf(uint256) view returns (Order)",
   "function nextOrderId() view returns (uint256)",
+  "struct Bid { address buyer; bytes2 country; uint256 remainingKg; uint256 pricePerTonne; uint256 minFillKg; bool active; uint256 escrow; }",
+  "function placeBid(bytes2 country, uint256 amountKg, uint256 pricePerTonne, uint256 minFillKg) returns (uint256)",
+  "function fillBid(uint256 bidId, uint256 batchId, uint256 amountKg)",
+  "function cancelBid(uint256 bidId)",
+  "function bidOf(uint256) view returns (Bid)",
+  "function nextBidId() view returns (uint256)",
 ]);
 const reserveAbi = parseAbi([
   "struct CreditReserve { bytes2 country; string custodian; string accountRef; uint256 heldKg; uint256 onchainKg; bytes32 statementHash; }",
@@ -217,6 +223,8 @@ async function setChainTime(ts) {
 // ───────────────────────── 市場模型 ─────────────────────────
 
 const orders = new Map();   // orderId -> { seller, batchId, remainingKg, price, minFillKg }
+/// 買單簿。跟 orders 一樣放記憶體裡——模擬器是鏈上唯一的寫入者。
+const bids = new Map();     // bidId -> { buyer, country, remainingKg, price }
 const batchMeta = new Map(); // batchId -> { country, scheme, project, vintage }
 const holdings = new Map(); // address -> Map(batchId -> kg)
 const cash = new Map();     // address -> bigint（mTWD 最小單位）
@@ -232,9 +240,11 @@ const addHold = (addr, batchId, kg) => {
 };
 
 async function loadMarket() {
-  const [nextOrder, nextBatch] = await Promise.all([
+  const [nextOrder, nextBatch, nextBid] = await Promise.all([
     pub.readContract({ address: D.listing, abi: listingAbi, functionName: "nextOrderId" }),
     pub.readContract({ address: D.carbonCredit1155, abi: creditAbi, functionName: "nextBatchId" }),
+    // 舊部署沒有買單，讀不到就當作 1（沒有任何買單）
+    pub.readContract({ address: D.listing, abi: listingAbi, functionName: "nextBidId" }).catch(() => 1n),
   ]);
   // 批次與它的核發國：註銷用途要看國別，掛單也要標
   for (let id = 1n; id < nextBatch; id++) {
@@ -254,6 +264,20 @@ async function loadMarket() {
       });
     }
   }
+  // 買單也要接回來，否則接續跑的時候簿子上那些買單模擬器看不見，
+  // 賣方就永遠不會去成交它們，而買方還以為自己掛著。
+  const firstBid = Number(nextBid) > 400 ? Number(nextBid) - 400 : 1;
+  for (let id = firstBid; id < Number(nextBid); id++) {
+    const b = await pub.readContract({ address: D.listing, abi: listingAbi, functionName: "bidOf", args: [BigInt(id)] });
+    if (b.active && b.remainingKg > 0n) {
+      bids.set(id, {
+        buyer: b.buyer,
+        country: Buffer.from(b.country.slice(2), "hex").toString("utf8").replace(/\0/g, ""),
+        remainingKg: Number(b.remainingKg), price: b.pricePerTonne,
+      });
+    }
+  }
+
   // 平台（部署者）手上的國外額度：模擬期間會分批放到市場上
   await loadHoldings(operator.address);
 
@@ -442,6 +466,9 @@ async function actIssue(p, now, rng) {
 
 /// 上架：賣方把手上的額度掛出去，價格繞著市場參考價走
 async function actList(p, now, rng) {
+  // 對稱的一條：簿子上已經有人出得比我想掛的價還高，就直接賣給他。
+  // 不然賣單會掛在買單下面，一樣造成交叉。
+
   const h = hold(p.address);
   const entries = [...h.entries()].filter(([, kg]) => kg >= 1000);
   if (entries.length === 0) return false;
@@ -469,6 +496,15 @@ async function actList(p, now, rng) {
       price = clampPrice(floor); // 少數急需現金的照成本掛
     }
   }
+  // 簿子上已經有人出得比我想掛的價還高，就直接賣給他，不要掛在他下面——
+  // 那會讓最佳買價高過最佳賣價（交叉），真實市場裡不可能存在。
+  const meta = batchMeta.get(batchId);
+  const bestBid = [...bids.values()]
+    .filter((b) => b.remainingKg >= 1000 && b.buyer.toLowerCase() !== p.address.toLowerCase())
+    .filter((b) => !b.country || (meta && b.country === meta.country))
+    .reduce((hi, b) => (hi === null || b.price > hi ? b.price : hi), null);
+  if (bestBid !== null && bestBid >= price) return await actFillBid(p, rng);
+
   const w = walletOf(p);
   const orderId = await send(w, {
     address: D.listing, abi: listingAbi, functionName: "list",
@@ -491,6 +527,90 @@ async function actList(p, now, rng) {
 const DOMESTIC = "TW";
 const issuedAbroad = (m) => m.country !== DOMESTIC;
 const foreignToPersona = (m, p) => m.country !== p.country;
+
+/// 掛買單：出價等人來賣。買方指定核發國——他還沒有那批額度，指不了批次。
+///
+/// 為什麼要有這個：只有賣單的簿子是半邊的市場。想買的人只能吃現有的價，
+/// 沒有地方表達「我願意出這個價、要這麼多」。真實的交易所兩邊都有掛單。
+async function actPlaceBid(p, now, rng) {
+  const year = new Date(now * 1000).getUTCFullYear();
+  if (p.buyYear !== year) { p.buyYear = year; p.boughtThisYear = 0; }
+  const quota = p.role === "maker" ? Infinity : p.annualNeedTonnes * 1.3;
+  const left = quota - (p.boughtThisYear ?? 0);
+  if (left < 1) return false;
+
+  // 出價掛在參考價**之下**——買單是「我願意等，但要便宜一點」。
+  // 掛在參考價之上的買單會立刻被賣方吃掉，那跟直接買沒兩樣。
+  const price = clampPrice(BigInt(Math.round(Number(refPrice) * (0.9 + rng() * 0.08))));
+
+  // 如果簿子上已經有人賣得比我想出的價還便宜，理性的買家會直接買，不會掛單等。
+  // 少了這一條，買單簿的最佳買價會高過賣單簿的最佳賣價——一本**交叉**的簿子，
+  // 在真實市場裡不可能存在（會馬上被套利掉），看在懂行的人眼裡就是資料假的。
+  const cheapestOk = [...orders.values()]
+    .filter((o) => o.remainingKg >= 1000 && o.seller.toLowerCase() !== p.address.toLowerCase())
+    .filter((o) => {
+      const meta = batchMeta.get(o.batchId);
+      return meta && (!(p.leakageRisk && p.country === DOMESTIC) || !issuedAbroad(meta));
+    })
+    .reduce((lo, o) => (lo === null || o.price < lo ? o.price : lo), null);
+  if (cheapestOk !== null && cheapestOk <= price) return false;
+  const tonnes = Math.min(left, Math.max(1, Math.round(p.annualNeedTonnes / 10 * (0.5 + rng()))));
+  const kg = BigInt(Math.round(tonnes * 1000));
+  const cost = (kg * price) / 1000n;
+  if ((cash.get(p.address) ?? 0n) < cost) {
+    await topUp(p);
+    if ((cash.get(p.address) ?? 0n) < cost) return false;
+  }
+  // 高碳洩漏風險事業在臺灣申報不得用國外額度，那就只掛臺灣的買單
+  const country = p.leakageRisk || p.role === "eia" || rng() < 0.7 ? "TW" : "";
+  // 不要在這裡 approve。註冊時已經給過 Listing 一筆極大的額度，
+  // 在這裡改成「剛好 cost」會把那筆蓋掉——買單一成交額度就歸零，
+  // 接下來這個人的 buy() 全部 revert。實測 595 次略過就是這麼來的。
+  const w = walletOf(p);
+  const bidId = await send(w, {
+    address: D.listing, abi: listingAbi, functionName: "placeBid",
+    args: [country ? toHex(Buffer.from(country, "utf8")) : "0x0000", kg, price, 0n],
+  }, true);
+  bids.set(Number(bidId), { buyer: p.address, country, remainingKg: Number(kg), price });
+  cash.set(p.address, (cash.get(p.address) ?? 0n) - cost);
+  return true;
+}
+
+/// 賣給一張買單。持有人的另一條出場路徑：不必掛單等人上門。
+async function actFillBid(p, rng) {
+  const mine = [...hold(p.address).entries()].filter(([, kg]) => kg >= 1000);
+  if (mine.length === 0) return false;
+  const [batchId, haveKg] = mine[Math.floor(rng() * mine.length)];
+  const meta = batchMeta.get(batchId);
+  if (!meta) return false;
+  // 挑出價最高、而且吃得下這個批次核發國的買單
+  const cand = [...bids.entries()]
+    .filter(([, b]) => b.remainingKg >= 1000 && b.buyer.toLowerCase() !== p.address.toLowerCase())
+    .filter(([, b]) => !b.country || b.country === meta.country)
+    .sort((a, b) => Number(b[1].price - a[1].price));
+  if (cand.length === 0) return false;
+  const [bidId, b] = cand[0];
+  // 賣方不會低於自己的成本賣（開發者）或遠低於參考價賣
+  if (b.price < (refPrice * 85n) / 100n) return false;
+  const kg = Math.min(haveKg, b.remainingKg, Math.round((1 + rng() * 4) * 1000));
+  if (kg < 1000) return false;
+
+  // setApprovalForAll 註冊時也給過了，不必每次再送一筆
+  const w = walletOf(p);
+  await send(w, { address: D.listing, abi: listingAbi, functionName: "fillBid", args: [BigInt(bidId), BigInt(batchId), BigInt(kg)] });
+
+  b.remainingKg -= kg;
+  if (b.remainingKg === 0) bids.delete(bidId);
+  addHold(p.address, batchId, -kg);
+  addHold(b.buyer, batchId, kg);
+  const cost = (BigInt(kg) * b.price) / 1000n;
+  const fee = (cost * 100n) / 10_000n;
+  cash.set(p.address, (cash.get(p.address) ?? 0n) + cost - fee);
+  const buyer = personas.find((x) => x.address.toLowerCase() === b.buyer.toLowerCase());
+  if (buyer) buyer.boughtThisYear = (buyer.boughtThisYear ?? 0) + kg / 1000;
+  refPrice = clampPrice((refPrice * 97n + b.price * 3n) / 100n);
+  return true;
+}
 
 /// 買進：從掛單簿挑最便宜、而且符合自己用途的那一筆
 function pickOrder(p, rng) {
@@ -739,7 +859,7 @@ async function actPlatformSupply(rng) {
 let tickNo = 0;
 async function runTick(now, rng, progress) {
   const date = new Date(now * 1000);
-  const stats = { join: 0, issue: 0, import: 0, list: 0, buy: 0, retire: 0, cancel: 0, report: 0 };
+  const stats = { join: 0, issue: 0, import: 0, list: 0, bid: 0, buy: 0, fill: 0, retire: 0, cancel: 0, report: 0 };
 
   // 掛單簿的深度決定供給端要多積極。薄了就補貨，厚了就收手——
   // 賣方看得到簿子，本來就會這樣反應，不必另外編一個理由。
@@ -774,6 +894,8 @@ async function runTick(now, rng, progress) {
           if (await attempt(`${p.name} 核發`, () => actIssue(p, now, rng))) stats.issue += 1;
           else if (await attempt(`${p.name} 上架`, () => actList(p, now, rng))) stats.list += 1;
         } else {
+          // 簿子上有人出得夠高就直接賣給他，省得掛單等
+          if (rng() < 0.3 && await attempt(`${p.name} 賣給買單`, () => actFillBid(p, rng))) { stats.fill += 1; break; }
           // 一輪掛兩到三張，鋪在不同價位上——出貨壓力大的賣方本來就會這樣掛。
           for (let k = 0; k < (thin ? 3 : 2); k++) {
             if (await attempt(`${p.name} 上架`, () => actList(p, now, rng))) stats.list += 1;
@@ -783,8 +905,10 @@ async function runTick(now, rng, progress) {
         break;
       }
       case "maker": {
+        // 做市商兩邊都掛——這本來就是做市：買賣兩側同時報價、賺價差。
         const r = rng();
-        if (r < 0.5) { if (await attempt(`${p.name} 買進`, () => actBuy(p, now, rng, date))) stats.buy += 1; }
+        if (r < 0.3) { if (await attempt(`${p.name} 買進`, () => actBuy(p, now, rng, date))) stats.buy += 1; }
+        else if (r < 0.5) { if (await attempt(`${p.name} 掛買單`, () => actPlaceBid(p, now, rng))) stats.bid += 1; }
         else if (r < 0.85) { if (await attempt(`${p.name} 上架`, () => actList(p, now, rng))) stats.list += 1; }
         else if (await attempt(`${p.name} 改價`, () => actReprice(p, rng))) stats.cancel += 1;
         break;
@@ -796,7 +920,12 @@ async function runTick(now, rng, progress) {
         if (!needMore && held >= 1 && p.tier === "corporate" && seasonality(p, date) > 2 && rng() < 0.5) {
           if (await attempt(`${p.name} 註銷`, () => actRetire(p, now, rng))) stats.retire += 1;
         } else if (p.role === "retail" && held >= 1 && rng() < 0.25) {
-          if (await attempt(`${p.name} 賣出`, () => actList(p, now, rng))) stats.list += 1;
+          // 手上有貨又剛好有人出得夠高，就直接賣給買單，不必掛單等
+          if (rng() < 0.4 && await attempt(`${p.name} 賣給買單`, () => actFillBid(p, rng))) stats.fill += 1;
+          else if (await attempt(`${p.name} 賣出`, () => actList(p, now, rng))) stats.list += 1;
+        } else if (needMore && rng() < 0.25 && await attempt(`${p.name} 掛買單`, () => actPlaceBid(p, now, rng))) {
+          // 有時候不追價，掛一張買單在下面等
+          stats.bid += 1;
         } else if (await attempt(`${p.name} 買進`, () => actBuy(p, now, rng, date))) {
           stats.buy += 1;
         }
@@ -818,7 +947,7 @@ async function runTick(now, rng, progress) {
     const line = Object.entries(stats).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}`).join(" ");
     console.log(
       `[${date.toISOString().slice(0, 16).replace("T", " ")}] 參考價 ${(Number(refPrice) / 1e6).toFixed(0)} ` +
-      `掛單 ${orders.size} ${line || "（無動作）"}`,
+      `賣單 ${orders.size} 買單 ${bids.size} ${line || "（無動作）"}`,
     );
   }
 }
@@ -836,7 +965,7 @@ const s = rosterSummary(personas);
 console.log(`模擬器啟動：${s.total} 個帳戶（seed=${SEED}，虛構人物）`);
 console.log(`  角色：${s.roles.map(([k, v]) => `${k}×${v}`).join("、")}`);
 console.log(`  申報地：${s.countries.map(([k, v]) => `${k}×${v}`).join("、")}`);
-console.log(`  既有掛單 ${orders.size} 筆、已知批次 ${batchMeta.size} 個\n`);
+console.log(`  既有賣單 ${orders.size} 筆、買單 ${bids.size} 筆、已知批次 ${batchMeta.size} 個\n`);
 
 // 人物名冊寫成檔案，介面上看到誰在買賣時可以對照
 const rosterPath = path.resolve(process.cwd(), "data", "sim-personas.json");

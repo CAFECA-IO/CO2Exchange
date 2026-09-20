@@ -57,6 +57,31 @@ contract Listing is
     uint256 public nextOrderId;
     mapping(uint256 => Order) private _orders;
 
+    /// @notice 買單。賣單是「我有這一批，賣這個價」；買單是「我要這一國的額度，出這個價」。
+    ///
+    /// 買方指定的是**核發國**而不是批次——他還沒有那批額度，指不了；而核發國決定了
+    /// 法律效力與可用途徑，本來就是買方真正在意的條件。年份與專案交給賣方挑。
+    /// `country` 為 0x0000 表示不限。
+    struct Bid {
+        address buyer;
+        bytes2 country;
+        uint256 remainingKg;
+        uint256 pricePerTonne; // 結算代幣最小單位 / 噸
+        uint256 minFillKg;
+        bool active;
+        /// @dev 還鎖著多少錢。**記下來，不要每次用數量乘回去算。**
+        ///      託管是 floor(數量 × 單價 / 1000) 收一次，付款是每次成交各 floor 一次，
+        ///      兩邊的無條件捨去對不起來，餘數會留在合約裡沒有人領得走。
+        ///      實測 180 張買單累積了 62 個最小單位——金額微不足道，
+        ///      但「合約餘額 = 所有有效買單的託管總和」這條不變式就不成立了，
+        ///      而這種帳是要給稽核看的。
+        uint256 escrow;
+    }
+
+    /// @dev 這兩個是後來才加的，只能附加在既有變數之後——UUPS 的儲存配置不能插隊。
+    uint256 public nextBidId;
+    mapping(uint256 => Bid) private _bids;
+
     event Listed(
         uint256 indexed orderId,
         address indexed seller,
@@ -67,6 +92,15 @@ contract Listing is
     );
     event Filled(uint256 indexed orderId, address indexed buyer, uint256 amountKg, uint256 cost, uint256 fee);
     event Cancelled(uint256 indexed orderId, uint256 returnedKg);
+    event BidPlaced(
+        uint256 indexed bidId, address indexed buyer, bytes2 indexed country,
+        uint256 amountKg, uint256 pricePerTonne, uint256 minFillKg
+    );
+    event BidFilled(
+        uint256 indexed bidId, address indexed seller, uint256 indexed batchId,
+        uint256 amountKg, uint256 cost, uint256 fee
+    );
+    event BidCancelled(uint256 indexed bidId, uint256 refunded);
     event FeeUpdated(uint256 feeBps, address treasury);
     event FeeScheduleUpdated(address feeSchedule);
 
@@ -79,6 +113,10 @@ contract Listing is
     error FeeTooHigh();
     error ZeroAmount();
     error ZeroAddress();
+    error BidInactive(uint256 bidId);
+    error NotBuyer();
+    error CountryMismatch(bytes2 wanted, bytes2 got);
+    error CannotFillOwnBid();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -112,6 +150,7 @@ contract Listing is
         treasury = treasury_;
         feeBps = feeBps_;
         nextOrderId = 1;
+        nextBidId = 1;
     }
 
     // ───────────────────────── 營運 ─────────────────────────
@@ -212,6 +251,98 @@ contract Listing is
 
     function orderOf(uint256 orderId) external view returns (Order memory) {
         return _orders[orderId];
+    }
+
+    // ───────────────────────── 買單 ─────────────────────────
+
+    /// @notice 掛買單：指定核發國與價格，把錢鎖進本合約等人來賣。
+    /// @param country 想買哪一國核發的額度；0x0000 表示不限。
+    /// @dev 錢先收進來，不是等成交才跟買方拿。買單是對市場的承諾，
+    ///      承諾要有擔保——否則掛單簿上會充滿付不出錢的買單，賣方看得到吃不到。
+    ///      這跟賣單那一側是對稱的：賣單也是先把額度轉進合約託管。
+    function placeBid(bytes2 country, uint256 amountKg, uint256 pricePerTonne, uint256 minFillKg)
+        external
+        nonReentrant
+        whenNotPaused
+        returns (uint256 bidId)
+    {
+        if (amountKg == 0) revert ZeroAmount();
+        if (!kyc.isActive(msg.sender)) revert NotActiveAccount(msg.sender);
+        bidId = nextBidId++;
+        uint256 escrow = amountKg * pricePerTonne / KG_PER_TONNE;
+        _bids[bidId] = Bid({
+            buyer: msg.sender,
+            country: country,
+            remainingKg: amountKg,
+            pricePerTonne: pricePerTonne,
+            minFillKg: minFillKg,
+            active: true,
+            escrow: escrow
+        });
+        settlementToken.safeTransferFrom(msg.sender, address(this), escrow);
+        emit BidPlaced(bidId, msg.sender, country, amountKg, pricePerTonne, minFillKg);
+    }
+
+    /// @notice 持有人把手上的批次賣給某一張買單。
+    /// @dev 手續費由**賣方**承擔，跟 `buy()` 同一套規則——同一筆交易不該因為
+    ///      誰先掛單而收不同的費。
+    function fillBid(uint256 bidId, uint256 batchId, uint256 amountKg) external nonReentrant whenNotPaused {
+        Bid storage b = _bids[bidId];
+        if (!b.active) revert BidInactive(bidId);
+        if (b.buyer == msg.sender) revert CannotFillOwnBid();
+        if (!kyc.isActive(msg.sender)) revert NotActiveAccount(msg.sender);
+        if (amountKg == 0) revert ZeroAmount();
+        if (amountKg > b.remainingKg) revert ExceedsRemaining();
+        if (amountKg < b.minFillKg && amountKg != b.remainingKg) revert BelowMinFill();
+
+        uint256 projectId = credit.batchOf(batchId).projectId;
+        // 轄區關掉之後不能再上架，買單這一側同理。
+        IJurisdictions(credit.registry()).checkTradable(projectId);
+        if (b.country != bytes2(0)) {
+            (bytes2 got,) = IJurisdictions(credit.registry()).jurisdictionOfProject(projectId);
+            if (got != b.country) revert CountryMismatch(b.country, got);
+        }
+
+        uint256 cost = amountKg * b.pricePerTonne / KG_PER_TONNE;
+        uint256 fee = cost * feeBpsOf(batchId) / 10_000;
+
+        b.remainingKg -= amountKg;
+        b.escrow -= cost;
+        uint256 dust;
+        if (b.remainingKg == 0) {
+            b.active = false;
+            // 全部成交了，捨去的餘數退還買方——留在合約裡就沒有人領得走了
+            dust = b.escrow;
+            b.escrow = 0;
+        }
+
+        // 錢從託管付出去；額度由賣方直接轉給買方（白名單在 _update 檢查雙方，
+        // 買方若已失效或被凍結，這一步會 revert——規則只寫在身分層那一處）。
+        settlementToken.safeTransfer(msg.sender, cost - fee);
+        if (fee > 0) settlementToken.safeTransfer(treasury, fee);
+        if (dust > 0) settlementToken.safeTransfer(b.buyer, dust);
+        credit.safeTransferFrom(msg.sender, b.buyer, batchId, amountKg, "");
+
+        emit BidFilled(bidId, msg.sender, batchId, amountKg, cost, fee);
+    }
+
+    /// @notice 取消買單，退回剩下的託管款。
+    /// @dev 不檢查 KYC：那是買方自己的錢，身分過期也該拿得回去。
+    function cancelBid(uint256 bidId) external nonReentrant {
+        Bid storage b = _bids[bidId];
+        if (!b.active) revert BidInactive(bidId);
+        if (b.buyer != msg.sender && !hasRole(OPERATOR_ROLE, msg.sender)) revert NotBuyer();
+        // 退還「實際還鎖著的」，不是用剩餘數量乘回去——兩者會差一點捨去的餘數
+        uint256 refund = b.escrow;
+        b.active = false;
+        b.remainingKg = 0;
+        b.escrow = 0;
+        settlementToken.safeTransfer(b.buyer, refund);
+        emit BidCancelled(bidId, refund);
+    }
+
+    function bidOf(uint256 bidId) external view returns (Bid memory) {
+        return _bids[bidId];
     }
 
     function supportsInterface(bytes4 interfaceId)

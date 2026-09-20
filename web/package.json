@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "e2e": "node e2e/flow.mjs && node e2e/enterprise.mjs && node e2e/globe.mjs",
+    "e2e": "node e2e/flow.mjs && node e2e/enterprise.mjs && node e2e/bids.mjs && node e2e/globe.mjs",
     "seed:market": "node scripts/seed-market.mjs",
     "data:reset": "node scripts/data-reset.mjs",
     "simulate": "node scripts/simulate.mjs",

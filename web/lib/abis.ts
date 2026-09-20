@@ -71,6 +71,32 @@ export const listingAbi = [
   },
   { type: "function", name: "feeBps", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "buy", stateMutability: "nonpayable", inputs: [{ type: "uint256" }, { type: "uint256" }], outputs: [] },
+  // 買單側：指定核發國出價，錢鎖在合約裡等人來賣
+  { type: "function", name: "nextBidId", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+  {
+    type: "function", name: "bidOf", stateMutability: "view", inputs: [{ type: "uint256" }],
+    outputs: [{ type: "tuple", components: [
+      { name: "buyer", type: "address" }, { name: "country", type: "bytes2" }, { name: "remainingKg", type: "uint256" },
+      { name: "pricePerTonne", type: "uint256" }, { name: "minFillKg", type: "uint256" }, { name: "active", type: "bool" },
+      { name: "escrow", type: "uint256" } ] }],
+  },
+] as const;
+
+/// 買單的寫入面。跟 listingWriteAbi 分開，理由同那一份：
+/// 讀用的 ABI 到處都在用，寫入的只有下單流程需要。
+export const bidWriteAbi = [
+  {
+    type: "function", name: "placeBid", stateMutability: "nonpayable",
+    inputs: [{ name: "country", type: "bytes2" }, { name: "amountKg", type: "uint256" },
+      { name: "pricePerTonne", type: "uint256" }, { name: "minFillKg", type: "uint256" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function", name: "fillBid", stateMutability: "nonpayable",
+    inputs: [{ name: "bidId", type: "uint256" }, { name: "batchId", type: "uint256" }, { name: "amountKg", type: "uint256" }],
+    outputs: [],
+  },
+  { type: "function", name: "cancelBid", stateMutability: "nonpayable", inputs: [{ type: "uint256" }], outputs: [] },
 ] as const;
 
 export const creditAbi = [

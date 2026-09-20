@@ -2,12 +2,12 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useReload } from "@/lib/client/useReload";
-import { encodeFunctionData, type Address } from "viem";
+import { encodeFunctionData, toHex, type Address } from "viem";
 import { useAccount } from "@/components/AccountProvider";
 import { AccountGate } from "@/components/AccountGate";
 import { AgreementCheck, useAgreementGate } from "@/components/AgreementGate";
 import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/components/ui";
-import { erc1155ApprovalAbi, erc20Abi, listingAbi, listingWriteAbi, poolAbi, routerAbi } from "@/lib/abis";
+import { bidWriteAbi, erc1155ApprovalAbi, erc20Abi, listingAbi, listingWriteAbi, poolAbi, routerAbi } from "@/lib/abis";
 import { flagOf } from "@/lib/deployment";
 import { signAndRelay, type Call } from "@/lib/client/passkey";
 
@@ -29,8 +29,9 @@ type Order = {
   country: string; scheme: string; domestic: boolean;
 };
 type Batch = { batchId: number; kg: number; vintageYear: number; project: string; country: string; scheme: string };
+type Bid = { bidId: number; buyer: Address; country: string; remainingKg: number; pricePerTonne: string; minFillKg: number };
 type Market = {
-  orders: Order[]; spotPricePerTonne: number | null; listingFeeBps: number;
+  orders: Order[]; bids: Bid[]; spotPricePerTonne: number | null; listingFeeBps: number;
   poolKey: { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address } | null;
   holdings: { twd: string; cct: string; batches: Batch[] } | null;
 };
@@ -69,6 +70,10 @@ export default function TradePage() {
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [mode, setMode] = useState<"limit" | "market">("limit");
   const [selected, setSelected] = useState<Order | null>(null);
+  /// 賣方選中的那一張買單（要賣給誰）。跟 selected（買方選中的賣單）是對稱的兩件事。
+  const [selectedBid, setSelectedBid] = useState<Bid | null>(null);
+  /// 掛買單的表單
+  const [bidForm, setBidForm] = useState({ country: "TW", tonnes: "10", price: "" });
   const [qtyKg, setQtyKg] = useState("1000");
   const [marketTonnes, setMarketTonnes] = useState("1");
   /// 市價的**實際**成本，跟鏈要，不是用現貨價乘一乘。
@@ -138,6 +143,41 @@ export default function TradePage() {
     setBusy("領取"); setMsg(null);
     try { await fetch("/api/faucet", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ account: credential!.address }) }); reload(); }
     finally { setBusy(null); }
+  }
+
+  /// 掛買單：指定核發國出價，錢當場鎖進合約。
+  /// 授權與掛單放同一筆簽章——分兩次簽，使用者會在中間那一步不知道自己在簽什麼。
+  function doPlaceBid() {
+    const tonnes = Number(bidForm.tonnes);
+    const price = Number(bidForm.price);
+    if (!(tonnes > 0) || !(price > 0)) return;
+    const kg = BigInt(Math.round(tonnes * 1000));
+    const pricePerTonne = BigInt(Math.round(price * 1e6));
+    const cost = (kg * pricePerTonne) / 1000n;
+    const country = bidForm.country === "ANY" ? "0x0000" : toHex(bidForm.country, { size: 2 });
+    relay(`掛買單 ${fmtKg(Number(kg))}`, [
+      { target: d.settlementToken, value: 0n, data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [d.listing, cost] }) },
+      { target: d.listing, value: 0n, data: encodeFunctionData({ abi: bidWriteAbi, functionName: "placeBid",
+        args: [country as `0x${string}`, kg, pricePerTonne, 0n] }) },
+    ]);
+  }
+
+  /// 賣給一張買單。額度由賣方直接轉給買方，錢從合約託管付出來。
+  function doFillBid() {
+    const b = selectedBid;
+    const batch = sb;
+    if (!b || !batch) return;
+    const kg = BigInt(Math.min(b.remainingKg, batch.kg, Math.max(1, Math.round(Number(sellForm[batch.batchId]?.tonnes ?? "1") * 1000))));
+    relay(`賣給買單 #${b.bidId} ${fmtKg(Number(kg))}`, [
+      { target: d.carbonCredit1155, value: 0n, data: encodeFunctionData({ abi: erc1155ApprovalAbi, functionName: "setApprovalForAll", args: [d.listing, true] }) },
+      { target: d.listing, value: 0n, data: encodeFunctionData({ abi: bidWriteAbi, functionName: "fillBid", args: [BigInt(b.bidId), BigInt(batch.batchId), kg] }) },
+    ], async () => { setSelectedBid(null); });
+  }
+
+  function doCancelBid(bidId: number) {
+    relay(`取消買單 #${bidId}`, [
+      { target: d.listing, value: 0n, data: encodeFunctionData({ abi: bidWriteAbi, functionName: "cancelBid", args: [BigInt(bidId)] }) },
+    ]);
   }
 
   function doBuy() {
@@ -222,6 +262,13 @@ export default function TradePage() {
   const allOrders = m?.orders ?? [];
   const countries = [...new Set(allOrders.map((o) => o.country))];
   const orders = filter === "ALL" ? allOrders : allOrders.filter((o) => o.country === filter);
+  const allBids = m?.bids ?? [];
+  // 「不限核發國」的買單在任何篩選底下都該出現——它確實吃得下這一國的額度。
+  const bids = filter === "ALL" ? allBids : allBids.filter((b) => b.country === filter || b.country === "");
+  const myBids = allBids.filter((b) => b.buyer?.toLowerCase() === credential.address.toLowerCase());
+  const maxBidKg = Math.max(1, ...bids.map((b) => b.remainingKg));
+  const bestAsk = orders.length ? Number(BigInt(orders[0].pricePerTonne)) / 1e6 : null;
+  const bestBid = bids.length ? Number(BigInt(bids[0].pricePerTonne)) / 1e6 : null;
   const myOrders = allOrders.filter((o) => o.seller?.toLowerCase() === credential.address.toLowerCase());
   const maxDepthKg = Math.max(1, ...orders.map((o) => o.remainingKg));
   const buyCost = selected ? (Number(qtyKg || 0) * Number(selected.pricePerTonne)) / 1000 / 1e6 : 0;
@@ -270,14 +317,20 @@ export default function TradePage() {
         {/* ── 掛單簿 ───────────────────────────── */}
         <Card
           title="掛單簿"
-          action={<span className="text-xs text-ink-300">賣單，由最佳價排起</span>}
+          action={
+            <span className="text-xs text-ink-300">
+              {bestBid !== null && bestAsk !== null
+                ? <>最佳買 <b className="text-up">{twd2(bestBid)}</b> · 最佳賣 <b className="text-down">{twd2(bestAsk)}</b> · 價差 {twd2(bestAsk - bestBid)}</>
+                : "賣單由低價排起，買單由高價排起"}
+            </span>
+          }
         >
           {countries.length > 1 && (
             <div className="mb-2 flex flex-wrap gap-1">
               <button
                 onClick={() => setFilter("ALL")}
                 className={`rounded-full border px-2.5 py-1 text-xs transition ${filter === "ALL" ? "border-tide bg-tide/10 text-tide" : "border-ink-500 text-ink-300 hover:text-ink-50"}`}
-              >全部 {allOrders.length}</button>
+              >全部 {allOrders.length + allBids.length}</button>
               {countries.map((c) => (
                 <button
                   key={c}
@@ -325,7 +378,53 @@ export default function TradePage() {
                   );
                 })}
               </ul>
-              <p className="mt-2 text-xs text-ink-300">平台手續費 {(m.listingFeeBps ?? 0) / 100}%，由賣方承擔。國外額度在臺灣的可用途徑與國內不同，下單前會再提示一次。</p>
+              {/* ── 買單 ───────────────────────────────
+                  買單只帶核發國，不帶批次——買方還沒有那批額度，指不了；
+                  而核發國決定法律效力與可用途徑，本來就是他真正在意的條件。 */}
+              <div className="mt-4 border-t border-ink-500 pt-3">
+                <div className="mb-1 flex items-baseline justify-between">
+                  <h3 className="text-sm font-medium text-ink-50">買單</h3>
+                  <span className="text-[11px] text-ink-300">有人出這個價要收，持有人可以直接賣給他</span>
+                </div>
+                {bids.length === 0 ? (
+                  <p className="py-2 text-sm text-ink-300">目前沒有買單。</p>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-[1fr_auto_auto] gap-x-4 border-b border-ink-500 pb-1.5 text-[11px] uppercase tracking-wider text-ink-300">
+                      <span>要買的核發國</span><span className="text-right">數量</span><span className="text-right">價格 / 噸</span>
+                    </div>
+                    <ul className="max-h-[260px] divide-y divide-ink-500 overflow-auto" data-testid="bid-book">
+                      {bids.map((b) => {
+                        const depth = Math.min(100, (b.remainingKg / maxBidKg) * 100);
+                        const mine = b.buyer?.toLowerCase() === credential.address.toLowerCase();
+                        const sel = selectedBid?.bidId === b.bidId;
+                        return (
+                          <li key={b.bidId}>
+                            <button
+                              data-testid={`bid-${b.bidId}`}
+                              onClick={() => { setSide("sell"); setMode("limit"); setSelectedBid(b); }}
+                              aria-pressed={sel}
+                              className={`relative grid w-full grid-cols-[1fr_auto_auto] gap-x-4 px-1 py-2 text-left text-sm transition hover:bg-ink-600 ${sel ? "bg-ink-600" : ""}`}
+                            >
+                              <span className="pointer-events-none absolute inset-y-0 right-0 bg-up/12" style={{ width: `${depth}%` }} aria-hidden />
+                              <span className="relative min-w-0">
+                                <span className="flex items-center gap-1.5 truncate text-ink-50">
+                                  {b.country ? <CountryTag code={b.country} /> : <span className="rounded bg-ink-600 px-1.5 py-0.5 text-[10px] text-ink-300">不限核發國</span>}
+                                  {mine && <span className="rounded bg-ink-600 px-1.5 py-0.5 text-[10px] text-ink-300">我的買單</span>}
+                                </span>
+                                {b.minFillKg > 0 && <span className="block truncate text-xs text-ink-300">最少成交 {fmtKg(b.minFillKg)}</span>}
+                              </span>
+                              <span className="tnum relative self-center text-right text-ink-200">{fmtKg(b.remainingKg)}</span>
+                              <span className="tnum relative self-center text-right font-medium text-up">{fmtTwd(b.pricePerTonne)}</span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </>
+                )}
+              </div>
+              <p className="mt-2 text-xs text-ink-300">平台手續費 {(m.listingFeeBps ?? 0) / 100}%，由賣方承擔（買單成交也一樣）。國外額度在臺灣的可用途徑與國內不同，下單前會再提示一次。</p>
             </div>
           )}
         </Card>
@@ -365,7 +464,45 @@ export default function TradePage() {
           {/* 買進 · 限價 */}
           {side === "buy" && mode === "limit" && (
             !selected ? (
-              <p className="text-sm text-ink-300">從左邊的掛單簿點一筆來下單。</p>
+              /* 掛單簿上沒有你要的價，就自己掛一張買單等人來賣。
+                 這是市場的另一半：以前只能吃現有的賣單，出價的人沒有地方表達。 */
+              <div className="space-y-3" data-testid="place-bid-form">
+                <p className="text-sm leading-6 text-ink-300">
+                  從左邊的掛單簿點一筆賣單直接成交，或在這裡<b className="text-ink-200">掛一張買單</b>——
+                  指定你要哪一國核發的額度與願意出的價，錢會鎖在合約裡等人來賣。
+                </p>
+                <Field label="要買哪一國核發的">
+                  <select className={inputCls} value={bidForm.country} data-testid="bid-country"
+                    onChange={(e) => setBidForm({ ...bidForm, country: e.target.value })}>
+                    <option value="TW">臺灣 TCER（國內，四種註銷用途全開）</option>
+                    {countries.filter((c) => c !== "TW").map((c) => <option key={c} value={c}>{c}（國外，僅碳費與自願性碳中和）</option>)}
+                    <option value="ANY">不限核發國</option>
+                  </select>
+                </Field>
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="數量（噸）">
+                    <input className={inputCls} type="number" step="0.001" min="0.001" data-testid="bid-tonnes"
+                      value={bidForm.tonnes} onChange={(e) => setBidForm({ ...bidForm, tonnes: e.target.value })} />
+                  </Field>
+                  <Field label="出價（mTWD / 噸）">
+                    <input className={inputCls} type="number" step="0.01" min="0.01" data-testid="bid-price"
+                      placeholder={bestAsk ? twd2(bestAsk) : ""}
+                      value={bidForm.price} onChange={(e) => setBidForm({ ...bidForm, price: e.target.value })} />
+                  </Field>
+                </div>
+                <dl className="space-y-1 border-t border-ink-500 pt-3 text-sm">
+                  <div className="flex justify-between"><dt className="text-ink-300">鎖定金額</dt>
+                    <dd className="tnum font-medium text-ink-50" data-testid="bid-cost">{twd2(Number(bidForm.tonnes || 0) * Number(bidForm.price || 0))} mTWD</dd></div>
+                  {bestAsk !== null && <div className="flex justify-between"><dt className="text-ink-300">目前最佳賣價</dt><dd className="tnum text-down">{twd2(bestAsk)}</dd></div>}
+                </dl>
+                <p className="text-xs leading-6 text-ink-300">
+                  錢當場鎖進合約——買單是對市場的承諾，要有擔保，否則賣方看得到吃不到。
+                  沒成交的部分隨時可以取消退回。
+                </p>
+                {Number(bidForm.tonnes || 0) * Number(bidForm.price || 0) > balance && <Notice kind="error">餘額不足。</Notice>}
+                <Button data-testid="submit-bid" className="w-full" disabled={!!busy || !(Number(bidForm.tonnes) > 0 && Number(bidForm.price) > 0) || Number(bidForm.tonnes) * Number(bidForm.price) > balance}
+                  onClick={doPlaceBid}>掛買單</Button>
+              </div>
             ) : (
               <div className="space-y-3">
                 <div className="rounded-[--radius-ctl] border border-ink-500 bg-ink-800 p-3 text-sm">
@@ -486,7 +623,41 @@ export default function TradePage() {
                   <input className={inputCls} type="number" step="0.001" value={sf?.tonnes ?? ""} onChange={(e) => setSf({ tonnes: e.target.value })} />
                 </Field>
 
-                {mode === "limit" ? (
+                {/* 選了買單就是「直接賣給他」，不是掛一張新的賣單等人來買。
+                    兩者的差別是會不會馬上成交，使用者該看得出來自己在做哪一件。 */}
+                {mode === "limit" && selectedBid ? (
+                  <div className="space-y-3" data-testid="fill-bid">
+                    <div className="rounded-[--radius-ctl] border border-up/40 bg-ink-800 p-3 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-ink-300">賣給買單 #{selectedBid.bidId}</span>
+                        <button className="text-xs text-ink-300 underline hover:text-ink-50" onClick={() => setSelectedBid(null)}>改成掛賣單</button>
+                      </div>
+                      <dl className="mt-2 space-y-1">
+                        <div className="flex justify-between"><dt className="text-ink-300">他要的核發國</dt>
+                          <dd className="text-ink-50">{selectedBid.country || "不限"}</dd></div>
+                        <div className="flex justify-between"><dt className="text-ink-300">出價</dt>
+                          <dd className="tnum font-medium text-up">{fmtTwd(selectedBid.pricePerTonne)} mTWD / 噸</dd></div>
+                        <div className="flex justify-between"><dt className="text-ink-300">還要多少</dt>
+                          <dd className="tnum text-ink-200">{fmtKg(selectedBid.remainingKg)}</dd></div>
+                      </dl>
+                    </div>
+                    {sb && selectedBid.country && sb.country !== selectedBid.country && (
+                      <Notice kind="error">
+                        這張買單只要 {selectedBid.country} 核發的額度，你選的批次是 {sb.country}。換一個批次，或改成掛賣單。
+                      </Notice>
+                    )}
+                    <dl className="space-y-1 border-t border-ink-500 pt-3 text-sm">
+                      <div className="flex justify-between"><dt className="text-ink-300">預估實收</dt>
+                        <dd className="tnum font-medium text-ink-50">
+                          {twd2(Number(sf?.tonnes ?? 0) * (Number(BigInt(selectedBid.pricePerTonne)) / 1e6) * (1 - (m?.listingFeeBps ?? 0) / 10000))} mTWD
+                        </dd></div>
+                      <div className="flex justify-between"><dt className="text-ink-300">手續費</dt>
+                        <dd className="tnum text-ink-300">{(m?.listingFeeBps ?? 0) / 100}%（賣方承擔）</dd></div>
+                    </dl>
+                    <Button data-testid="submit-fill-bid" className="w-full" disabled={!!busy || !sb || !(Number(sf?.tonnes) > 0)
+                      || (!!selectedBid.country && sb.country !== selectedBid.country)} onClick={doFillBid}>賣給這張買單</Button>
+                  </div>
+                ) : mode === "limit" ? (
                   <>
                     <Field label="單價 mTWD / 噸">
                       <input className={inputCls} type="number" value={sf?.price ?? ""} onChange={(e) => setSf({ price: e.target.value })} />
@@ -537,14 +708,29 @@ export default function TradePage() {
         </Card>
       </div>
 
-      {myOrders.length > 0 && (
-        <Card title={`我的掛單（${myOrders.length}）`}>
+      {(myOrders.length > 0 || myBids.length > 0) && (
+        <Card title={`我的掛單（賣 ${myOrders.length}／買 ${myBids.length}）`}>
           <ul className="space-y-2 text-sm">
             {myOrders.map((o) => (
-              <li key={o.orderId} className="flex flex-wrap items-center gap-3 rounded-[--radius-card] border border-ink-500 p-3">
+              <li key={`o${o.orderId}`} className="flex flex-wrap items-center gap-3 rounded-[--radius-card] border border-ink-500 p-3">
+                <span className="rounded bg-down/15 px-1.5 py-0.5 text-[10px] text-down">賣</span>
                 <CountryTag code={o.country} scheme={o.scheme} />
                 <span className="flex-1">掛單 #{o.orderId} · 批次 #{o.batchId} · 剩餘 {fmtKg(o.remainingKg)} · {fmtTwd(o.pricePerTonne)} mTWD / 噸</span>
                 <Button variant="secondary" onClick={() => cancelOrder(o)} disabled={!!busy}>取消掛單</Button>
+              </li>
+            ))}
+            {/* 買單取消一定要有——錢鎖在合約裡，沒有這顆按鈕就是拿不回來 */}
+            {myBids.map((b) => (
+              <li key={`b${b.bidId}`} className="flex flex-wrap items-center gap-3 rounded-[--radius-card] border border-ink-500 p-3" data-testid={`my-bid-${b.bidId}`}>
+                <span className="rounded bg-up/15 px-1.5 py-0.5 text-[10px] text-up">買</span>
+                {b.country ? <CountryTag code={b.country} /> : <span className="text-xs text-ink-300">不限核發國</span>}
+                <span className="flex-1">
+                  買單 #{b.bidId} · 還要 {fmtKg(b.remainingKg)} · {fmtTwd(b.pricePerTonne)} mTWD / 噸
+                  <span className="ml-2 text-xs text-ink-300">
+                    鎖定 {twd2(b.remainingKg / 1000 * Number(BigInt(b.pricePerTonne)) / 1e6)} mTWD
+                  </span>
+                </span>
+                <Button variant="secondary" data-testid={`cancel-bid-${b.bidId}`} onClick={() => doCancelBid(b.bidId)} disabled={!!busy}>取消買單（退款）</Button>
               </li>
             ))}
           </ul>
