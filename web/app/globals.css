@@ -37,6 +37,11 @@
   --color-up-soft: #1ae2a0;
   --color-down: #e86d6d; /* 跌 */
   --color-warn: #f9c53d;
+  /* 圖表用的兩個類別色。不是隨手挑的：以 dataviz 的驗證器對深色面 #1e2329 跑過
+     亮度帶、彩度下限、色盲分離度（deutan ΔE 10.4）、對比度，全部通過。
+     要加第三個類別色請重跑驗證器，不要憑眼睛加。 */
+  --color-cat-1: #1fa5c4;
+  --color-cat-2: #8b6ae0;
 
   --radius-card: 12px;
   --radius-ctl: 10px;
@@ -70,6 +75,8 @@
     --color-up-soft: #17bf88;
     --color-down: #d14343;
     --color-warn: #a16207;
+    --color-cat-1: #0f8aa3;
+    --color-cat-2: #7551e0;
   }
 }
 
@@ -93,6 +100,8 @@
   --color-up-soft: #17bf88;
   --color-down: #d14343;
   --color-warn: #a16207;
+  --color-cat-1: #0f8aa3;
+  --color-cat-2: #7551e0;
 }
 
 body {

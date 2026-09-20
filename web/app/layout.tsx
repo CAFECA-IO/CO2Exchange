@@ -10,7 +10,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="zh-TW" className="h-full antialiased">
+    // 首屏防閃爍的 inline script 會在 hydrate 之前就把 data-theme 寫到 <html> 上，
+    // 伺服器端沒有這個屬性，React 會報 hydration mismatch。這是預期中的差異，
+    // 所以在這一層（也只在這一層）關掉警告。
+    <html lang="zh-TW" className="h-full antialiased" suppressHydrationWarning>
       <head>
         {/*
           TideBit-DeFi 用 Barlow（標題 / 數字）+ Inter（內文）。

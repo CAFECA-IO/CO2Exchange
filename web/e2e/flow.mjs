@@ -3,7 +3,7 @@
 //   法人  ：KYC → 買下自然人的掛單 → 註銷 → 憑證 → 管理員產生 PDF 並回寫 → 下載
 // 自然人在官方制度裡開不了額度帳戶，所以只能買賣、不能註銷；最後用掉的一定是事業。
 // 前置：anvil 已跑 DemoFlow、next 在 :3000（KYC_AUTO_APPROVE=0）。執行：node e2e/flow.mjs
-import { BASE, adminApproveAllKyc, agreeAll, applyKyc, buyFromBook, createPasskeyAccount, launch, login, newUser, waitKycActive, waitOk } from "./lib.mjs";
+import { BASE, adminApproveAllKyc, agreeAll, applyKyc, buyFromBook, createPasskeyAccount, launch, login, newUser, retireOnPage, sellOnBook, waitKycActive, waitOk } from "./lib.mjs";
 
 const browser = await launch();
 const alice = await newUser(browser, "alice");
@@ -27,26 +27,29 @@ await page.goto(`${BASE}/trade`);
 await page.getByRole("button", { name: "領取測試用 mTWD" }).click();
 await page.locator('[data-testid="twd"]', { hasText: "100,000" }).waitFor({ timeout: 30_000 });
 await buyFromBook(page, { tonnes: 1 });
+// v4 流動性池收在「進階」摺疊區裡
+await page.locator("summary", { hasText: "流動性池" }).click();
 await agreeAll(page);
 await page.getByRole("button", { name: "以 passkey 簽章購買" }).click();
 await waitOk(page, "流動性池購買（2000 mTWD）完成");
 console.log("✔ 掛單 + v4 購買");
 
+// 我的資產：買完之後看得到持有、成本與損益
+await page.goto(`${BASE}/portfolio`);
+await page.locator("text=資產總值").first().waitFor({ timeout: 30_000 });
+await page.locator("text=平均成本").first().waitFor({ timeout: 30_000 });
+console.log("✔ 我的資產頁");
+
 // 自然人不能註銷：介面要講清楚，而不是給一顆按了會失敗的按鈕
+await page.goto(`${BASE}/retire`);
 await page.locator("text=自然人無法註銷額度").first().waitFor({ timeout: 30_000 });
-const retireDisabled = await page.getByRole("button", { name: "註銷", exact: true }).first().isDisabled();
+const retireDisabled = await page.getByRole("button", { name: "註銷並取得憑證" }).first().isDisabled();
 if (!retireDisabled) throw new Error("自然人的註銷按鈕應該是停用的");
 console.log("✔ 自然人被擋下註銷，且畫面有說明");
 
 // 自然人的出場方式是轉售：在交易頁上架
-const sellRow = page.locator('[data-testid="sell-row"]').first();
-await sellRow.waitFor({ timeout: 30_000 });
-await sellRow.getByLabel("數量（噸）").fill("1");
-await sellRow.getByLabel("單價 mTWD / 噸").fill("900");
-await sellRow.getByLabel("使用期限").fill("2027-12-31");
-await agreeAll(page);
-await sellRow.getByRole("button", { name: "上架" }).click();
-await waitOk(page, "上架批次 #");
+await page.goto(`${BASE}/trade`);
+await sellOnBook(page, { tonnes: 1, price: 900 });
 console.log("✔ 自然人轉售上架");
 
 // 法人買下自然人的掛單並註銷——官方端只有事業能做這件事
@@ -62,10 +65,9 @@ await corp.page.locator('[data-testid="twd"]', { hasText: "100,000" }).waitFor({
 await buyFromBook(corp.page, { tonnes: 1 });
 console.log("✔ 法人買下自然人的掛單");
 
-await corp.page.getByPlaceholder("某某股份有限公司").fill("買方股份有限公司");
-await agreeAll(corp.page); // 註銷需先簽註銷暨移轉委任書
 const bought = (await corp.page.locator('[data-testid="batches"]').innerText()).match(/#(\d+)/)[1];
-await corp.page.getByRole("button", { name: "註銷", exact: true }).first().click();
+// 註銷在另一頁；需先簽註銷暨移轉委任書
+await retireOnPage(corp.page, { beneficiary: "買方股份有限公司", tonnes: 1 });
 await waitOk(corp.page, `註銷批次 #${bought} 1 噸完成`);
 await corp.page.goto(`${BASE}/certificates`);
 await corp.page.locator("text=憑證 #").first().waitFor({ timeout: 30_000 });

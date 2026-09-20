@@ -4,6 +4,7 @@ import { signIn, useSession } from "next-auth/react";
 import { useAccount } from "@/components/AccountProvider";
 import { Button, Card, Field, Notice, inputCls } from "@/components/ui";
 import { MarketPanel } from "@/components/MarketPanel";
+import { MarketOverview } from "@/components/MarketOverview";
 import Link from "next/link";
 
 /// 這頁的說明文字刻意寫得像講給人聽，而不是抄法條：
@@ -140,6 +141,8 @@ export default function Home() {
         </div>
       </div>
 
+      {/* ── 市場概況：數字與圖，回答「這個市場有多大」 ─────────────── */}
+      <MarketOverview />
 
       {/* ── 什麼是自願減量專案 ──────────────────────────────────────── */}
       <Section id="project" eyebrow="本平台交易的標的" title="什麼是自願減量專案：從一家扣件廠說起">

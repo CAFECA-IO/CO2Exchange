@@ -35,7 +35,7 @@ export function useAgreementGate(account: string | undefined, ids: readonly stri
   const need = ids.join(",");
 
   useEffect(() => {
-    if (!account) return;
+    if (!account) return; // 沒有帳戶時 loading 維持 true，ok 因此為 false——本來就不該能簽
     let ignore = false;
     (async () => {
       setLoading(true);
@@ -56,7 +56,9 @@ export function useAgreementGate(account: string | undefined, ids: readonly stri
     [],
   );
 
-  const ok = missing.every((m) => checked[m.id]);
+  /// 載入中一律視為未通過。missing 還沒回來時 every() 對空陣列會回 true，
+  /// 那一瞬間按鈕就變成可按的——等於讓人跳過定型化契約，不能這樣。
+  const ok = !loading && missing.every((m) => checked[m.id]);
 
   const accept = useCallback(async (context?: string) => {
     if (!account || missing.length === 0) return;

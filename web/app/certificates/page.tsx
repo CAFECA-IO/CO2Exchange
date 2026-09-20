@@ -26,7 +26,7 @@ export default function CertificatesPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">我的註銷憑證</h1>
-      {!certs ? <p className="text-sm text-ink-300">讀取中…</p> : certs.length === 0 ? <Notice>尚無憑證。到<Link className="underline" href="/trade">購買與註銷</Link>完成第一筆。</Notice> : (
+      {!certs ? <p className="text-sm text-ink-300">讀取中…</p> : certs.length === 0 ? <Notice>尚無憑證。到<Link className="underline" href="/trade">交易</Link>買進，再到<Link className="underline" href="/retire">註銷</Link>完成第一筆。</Notice> : (
         <div className="grid gap-4 md:grid-cols-2">
           {certs.map((c) => (
             <Card key={c.certId} title={`憑證 #${c.certId}`}>

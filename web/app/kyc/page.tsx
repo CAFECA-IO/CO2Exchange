@@ -69,7 +69,7 @@ export default function KycPage() {
             )}
           </dl>
         ) : <p className="text-sm text-ink-300">讀取中…</p>}
-        {active && <div className="mt-4 flex gap-2"><Link href="/trade"><Button>前往購買與註銷</Button></Link>{identity?.tier === TIER.Corporate && <Link href="/enterprise"><Button variant="secondary">企業功能</Button></Link>}</div>}
+        {active && <div className="mt-4 flex gap-2"><Link href="/trade"><Button>前往交易</Button></Link>{identity?.tier === TIER.Corporate && <Link href="/enterprise"><Button variant="secondary">企業功能</Button></Link>}</div>}
         {identity?.application?.status === "pending" && <div className="mt-3"><Button variant="secondary" onClick={() => { reload(); refreshTier(); }}>重新整理</Button></div>}
       </Card>
 

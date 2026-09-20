@@ -145,14 +145,19 @@ forge script script/Deploy.s.sol   --rpc-url chain --broadcast  # 鏈沒有 EIP-
 
 ## 前端（web/，Next.js 16 + React 19）
 
-四種角色、七個頁面：
+四種角色、十個頁面：
 
 | 角色 | 頁面 | 內容 |
 |---|---|---|
-| 自然人 / 法人 | `/`、`/kyc`、`/trade`、`/certificates` | 登入 → passkey 建帳戶 → 身分驗證申請 → 購買（掛單 / v4 池）→ 註銷 → 憑證（含 PDF 下載） |
+| 自然人 / 法人 | `/`、`/kyc`、`/trade`、`/portfolio`、`/retire`、`/certificates`、`/registry`、`/agreements` | 登入 → passkey 建帳戶 → 身分驗證申請 → 交易（買進 / 賣出同一頁，下單前確認單）→ 我的資產（持有、成本、損益）→ 註銷 → 憑證（含 PDF 下載）；公告欄與定型化契約不需登入 |
 | 法人 | `/enterprise` | 登錄專案、上傳 ISO 14064-3 查驗報告申請核發、批次掛單 / 入池、取消掛單 |
 | 查驗機構（`VERIFIER_EMAILS`） | `/verifier` | 待查驗佇列：檢視報告與雜湊 → 簽署 IssuanceAttestation 核發，或退回 |
 | 管理員（`ADMIN_EMAILS`） | `/admin` | KYC 審核佇列（核准 = 簽 attestation 上鏈）、憑證 PDF 產生與 `documentHash` 回寫、治理狀態（角色矩陣、Safe、Timelock 排程） |
+
+`/trade` 的買進與賣出共用同一個下單面板，使用者只處理**數量**與**單價**；最小成交量與使用期限有預設值、收在「進階」裡。
+送出前一律跳出確認單，把成交條件、費用、對方與待簽的定型化契約攤開，按下去就是簽章上鏈。
+註銷另開 `/retire`——註銷是「用掉」不是「賣掉」，而且自然人做不了，混在下單頁裡會讓人以為買完就該註銷。
+`/portfolio` 以**移動加權平均成本**算持有成本，已實現與未實現損益分開列；核發取得的部位成本以 0 計並在介面標示。
 
 `KYC_AUTO_APPROVE=1` 時申請直接核准（demo）；`0` 時進管理後台佇列——**這時 `ADMIN_EMAILS` 必須包含你自己登入用的 email**，
 否則申請會卡在沒有人能核准的佇列裡（要走查驗核發那條線同理，`VERIFIER_EMAILS` 也要加）。憑證 PDF 用 `fonts/NotoSansTC-Subset.otf`（Big5 常用字子集），

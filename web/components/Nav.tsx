@@ -5,7 +5,16 @@ import { signOut, useSession } from "next-auth/react";
 import { useAccount } from "./AccountProvider";
 import { ThemeToggle } from "./ThemeToggle";
 
-const base = [["/", "首頁"], ["/kyc", "身分驗證"], ["/trade", "購買與註銷"], ["/certificates", "我的憑證"], ["/registry", "公告欄"], ["/agreements", "契約"]] as const;
+const base = [
+  ["/", "首頁"],
+  ["/kyc", "身分驗證"],
+  ["/trade", "交易"],
+  ["/portfolio", "我的資產"],
+  ["/retire", "註銷"],
+  ["/certificates", "我的憑證"],
+  ["/registry", "公告欄"],
+  ["/agreements", "契約"],
+] as const;
 
 export function Nav() {
   const path = usePathname();
