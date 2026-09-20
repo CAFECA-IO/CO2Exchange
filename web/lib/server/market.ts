@@ -1,8 +1,12 @@
 import "server-only";
-import { encodeAbiParameters, keccak256, encodePacked, type Address } from "viem";
-import { creditAbi, erc20Abi, listingAbi, poolAbi, poolManagerAbi, registryAbi } from "@/lib/abis";
+import { encodeAbiParameters, keccak256, encodePacked, type Address, type Hex } from "viem";
+import { creditAbi, erc20Abi, listingAbi, poolAbi, poolManagerAbi, registryAbi, routerAbi } from "@/lib/abis";
 import { deployment, publicClient } from "./chain";
 import { countryCode, hasV4 } from "@/lib/deployment";
+
+/// v4 的價格上下界。方向只看 zeroForOne，與精準輸入／輸出無關。
+const MIN_SQRT = 4295128739n;
+const MAX_SQRT = 1461446703485210103287273052203988822378723970342n;
 
 export type Order = {
   orderId: number; seller: Address; batchId: number; remainingKg: number; pricePerTonne: string; minFillKg: number;
@@ -122,4 +126,68 @@ export async function holdings(account: Address) {
   }));
   const pooled = await publicClient.readContract({ address: d.carbonPool, abi: poolAbi, functionName: "pooledKg", args: [1n] }).catch(() => 0n);
   return { twd: twd.toString(), cct: cct.toString(), batches: batches.filter((b) => b.kg > 0), pooledKgBatch1: pooled.toString() };
+}
+
+/// 市價買賣的**實際**成本，用模擬的方式問鏈，不是用現貨價推算。
+///
+/// 為什麼一定要問：v4 的池子是曲線，精準輸出的成交價是**沿路的平均價**，
+/// 不是現貨價。池子薄的時候差距大到荒謬——實測這個 demo 池：
+/// 買 1 噸比現貨貴 3.7%，5 噸貴 19.6%，20 噸貴 183%，50 噸直接吃光流動性。
+/// 前端原本用「現貨 × 1.05」估最高支付並照那個數字授權，於是 5 噸以上必定失敗，
+/// 而畫面上那個「最高支付」根本不是使用者會付的錢。
+///
+/// 做法是 eth_call 模擬 `TrustedRouter.swap`，並用 state override 暫時給足餘額與授權
+/// （只存在於這一次模擬，不上鏈）。回傳的 BalanceDelta 就是真正的進出金額。
+export async function quoteMarket(
+  account: Address,
+  kg: bigint,
+  side: "buy" | "sell",
+): Promise<{ twd: number; perTonne: number; spot: number | null } | null> {
+  const d = deployment();
+  const key = poolKey();
+  if (!key) return null; // SKIP_V4 部署沒有池子
+  const cct = kg * 10n ** 15n;
+  const twdIsCurrency0 = key.currency0.toLowerCase() === d.settlementToken.toLowerCase();
+  // 買 = 精準輸出（要拿到正好這麼多 CCT）；賣 = 精準輸入（正好投入這麼多 CCT）
+  const zeroForOne = side === "buy" ? twdIsCurrency0 : !twdIsCurrency0;
+  const amountSpecified = side === "buy" ? cct : -cct;
+
+  // 暫時把餘額與授權撐大。mapping 的槽位由 keccak(key . slot) 算出來，
+  // MockTWD 是單純的 ERC20：_balances 在槽 0、_allowances 在槽 1。
+  const huge = `0x${(10n ** 30n).toString(16).padStart(64, "0")}` as Hex;
+  const mapSlot = (slot: number, k: Address) =>
+    keccak256(encodeAbiParameters([{ type: "address" }, { type: "uint256" }], [k, BigInt(slot)]));
+  const token = side === "buy" ? d.settlementToken : d.cct;
+  const overrides = [{
+    address: token,
+    stateDiff: [
+      { slot: mapSlot(0, account), value: huge },
+      {
+        slot: keccak256(encodeAbiParameters([{ type: "address" }, { type: "bytes32" }], [d.router, mapSlot(1, account)])),
+        value: huge,
+      },
+    ],
+  }];
+
+  try {
+    const { result } = await publicClient.simulateContract({
+      address: d.router, abi: routerAbi, functionName: "swap", account,
+      args: [key, { zeroForOne, amountSpecified, sqrtPriceLimitX96: zeroForOne ? MIN_SQRT + 1n : MAX_SQRT - 1n },
+        0n, BigInt(Math.floor(Date.now() / 1000) + 600)],
+      stateOverride: overrides,
+    });
+    // BalanceDelta 是 int128 amount0（高位）| int128 amount1（低位）
+    const packed = BigInt(result as bigint);
+    const amount0 = BigInt.asIntN(128, packed >> 128n);
+    const amount1 = BigInt.asIntN(128, packed & ((1n << 128n) - 1n));
+    const twdRaw = twdIsCurrency0 ? amount0 : amount1;
+    // 買進時 delta 是負的（錢出去），賣出時是正的
+    const twd = Number(side === "buy" ? -twdRaw : twdRaw) / 1e6;
+    const tonnes = Number(kg) / 1000;
+    const spot = await poolSpotPricePerTonne().catch(() => null);
+    return { twd, perTonne: tonnes > 0 ? twd / tonnes : 0, spot };
+  } catch {
+    // 流動性不足、或這個帳戶過不了 hook 的身分檢查
+    return null;
+  }
 }

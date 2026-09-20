@@ -71,6 +71,15 @@ export default function TradePage() {
   const [selected, setSelected] = useState<Order | null>(null);
   const [qtyKg, setQtyKg] = useState("1000");
   const [marketTonnes, setMarketTonnes] = useState("1");
+  /// 市價的**實際**成本，跟鏈要，不是用現貨價乘一乘。
+  /// 池子是曲線，精準輸出的成交價是沿路的平均價；這個 demo 池薄到
+  /// 買 5 噸就比現貨貴兩成、20 噸貴一倍多。用現貨估出來的「最高支付」
+  /// 既不是使用者會付的錢，照它授權還會讓交易必定失敗。
+  // 報價連同「它是對哪一組輸入報的」一起存。這樣切換模式或改數量時，
+  // 舊的報價自然就對不上而失效，不必在 effect 裡同步 setState 清空它
+  //（那會觸發連鎖 render，而且 hooks 的順序也不允許放在早退之後）。
+  type Quote = { twd: number; perTonne: number; spot: number | null } | "none";
+  const [quoted, setQuoted] = useState<{ key: string; value: Quote } | null>(null);
   const [filter, setFilter] = useState<string>("ALL");
   const [advanced, setAdvanced] = useState(false);
   const [sellBatch, setSellBatch] = useState<number | null>(null);
@@ -90,6 +99,24 @@ export default function TradePage() {
     })();
     return () => { ignore = true; };
   }, [credential, reloadKey]);
+
+  // 市價報價：使用者打字時延遲一下再問，不要每按一鍵就打一次鏈。
+  const quoteKey = side === "buy" && mode === "market" && credential && Number(marketTonnes) > 0
+    ? `${credential.address}:${Math.round(Number(marketTonnes) * 1000)}` : "";
+  useEffect(() => {
+    if (!quoteKey) return;
+    const [address, kg] = quoteKey.split(":");
+    let ignore = false;
+    const id = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/market/quote?account=${address}&kg=${kg}&side=buy`);
+        const j = await r.json();
+        if (!ignore) setQuoted({ key: quoteKey, value: j.unavailable ? "none" : j });
+      } catch { if (!ignore) setQuoted({ key: quoteKey, value: "none" }); }
+    }, 350);
+    return () => { ignore = true; clearTimeout(id); };
+  }, [quoteKey]);
+  const quote: Quote | null = quoted && quoted.key === quoteKey ? quoted.value : null;
 
   if (!userId || !credential || !config) return <AccountGate />;
   const d = config.deployment;
@@ -147,7 +174,11 @@ export default function TradePage() {
     const tonnes = Number(marketTonnes);
     const kg = BigInt(Math.round(tonnes * 1000));
     const cctOut = kg * 10n ** 15n;
-    const maxSpend = BigInt(Math.ceil(tonnes * m.spotPricePerTonne * (1 + SLIPPAGE) * 1e6));
+    // 授權金額**從報價來**。原本是「現貨 × 數量 × 1.05」——那不是成交價，
+    // 池子薄的時候差兩成以上，於是授權必定不夠，交易必定失敗。
+    // 報價是對當下池況模擬出來的實際金額，再加一點緩衝吸收這段期間的價格變動。
+    const quoted = typeof quote === "object" && quote ? quote.twd : tonnes * m.spotPricePerTonne;
+    const maxSpend = BigInt(Math.ceil(quoted * (1 + SLIPPAGE) * 1e6));
     const zeroForOne = m.poolKey.currency0.toLowerCase() === d.settlementToken.toLowerCase();
     relay(`市價買進 ${fmtKg(Number(kg))}`, [
       { target: d.settlementToken, value: 0n, data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [d.router, maxSpend] }) },
@@ -205,12 +236,17 @@ export default function TradePage() {
   const sellProceeds = sf ? Number(sf.tonnes) * Number(sf.price) : 0;
   const sellFee = (sellProceeds * (m?.listingFeeBps ?? 0)) / 10_000;
 
-  const mBuyCost = spot ? Number(marketTonnes) * spot : 0;
+
+  const mBuyCost = typeof quote === "object" && quote ? quote.twd : spot ? Number(marketTonnes) * spot : 0;
+  const impact = typeof quote === "object" && quote && quote.spot ? quote.perTonne / quote.spot - 1 : null;
   const mSellProceeds = sf && spot ? Number(sf.tonnes) * spot : 0;
 
   const buyReady = !!selected && !!qtyKg && Number(qtyKg) >= (selected.minFillKg || 1) && !notEnough;
   const sellReady = !!sb && !!sf && Number(sf.tonnes) > 0 && Number(sf.price) > 0 && Number(sf.tonnes) * 1000 <= sb.kg;
-  const mBuyReady = hasMarket && Number(marketTonnes) > 0 && mBuyCost <= balance;
+  // 報不出價就不讓送出。讓使用者按下去撞 revert，等於把「流動性不足」
+  // 這個本來就知道的事實，包裝成一個看不懂的錯誤丟回他臉上。
+  const mBuyReady = hasMarket && Number(marketTonnes) > 0 && quote !== "none"
+    && typeof quote === "object" && quote !== null && mBuyCost <= balance;
   const mSellReady = hasMarket && !!sb && !!sf && sb.country === "TW" && Number(sf.tonnes) > 0 && Number(sf.tonnes) * 1000 <= sb.kg;
 
   return (
@@ -391,9 +427,36 @@ export default function TradePage() {
               </div>
               <dl className="space-y-1 border-t border-ink-500 pt-3 text-sm">
                 <div className="flex justify-between"><dt className="text-ink-300">目前市價</dt><dd className="tnum text-ink-50">{spot ? twd2(spot) : "—"} mTWD / 噸</dd></div>
-                <div className="flex justify-between"><dt className="text-ink-300">預估金額</dt><dd className="tnum font-medium text-ink-50">{twd2(mBuyCost)} mTWD</dd></div>
-                <div className="flex justify-between"><dt className="text-ink-300">最高支付</dt><dd className="tnum text-ink-200">{twd2(mBuyCost * (1 + SLIPPAGE))} mTWD</dd></div>
+                {quote === null ? (
+                  <div className="flex justify-between"><dt className="text-ink-300">試算中…</dt><dd className="tnum text-ink-300">—</dd></div>
+                ) : quote === "none" ? null : (
+                  <>
+                    <div className="flex justify-between"><dt className="text-ink-300">實際成交價</dt><dd className="tnum text-ink-50">{twd2(quote.perTonne)} mTWD / 噸</dd></div>
+                    <div className="flex justify-between"><dt className="text-ink-300">應付金額</dt><dd className="tnum font-medium text-ink-50" data-testid="mbuy-cost">{twd2(quote.twd)} mTWD</dd></div>
+                    {impact !== null && (
+                      <div className="flex justify-between">
+                        <dt className="text-ink-300">價格影響</dt>
+                        <dd className={`tnum ${impact > 0.05 ? "text-warn" : "text-ink-200"}`}>{(impact * 100).toFixed(1)}%</dd>
+                      </div>
+                    )}
+                    <div className="flex justify-between"><dt className="text-ink-300">最高支付</dt><dd className="tnum text-ink-200">{twd2(quote.twd * (1 + SLIPPAGE))} mTWD</dd></div>
+                  </>
+                )}
               </dl>
+              {/* 報不出價就是池子吃不下這個量。與其讓他送出去撞一個看不懂的 revert，
+                  不如現在就說清楚，並指回掛單簿——那裡的量體大得多。 */}
+              {quote === "none" && (
+                <Notice kind="error">
+                  流動性不足，這個數量吃不下。市價池是即時成交用的，量體有限；
+                  大額請改用<b>限價</b>從掛單簿買，或把數量調小。
+                </Notice>
+              )}
+              {impact !== null && impact > 0.05 && (
+                <Notice kind="info">
+                  這筆會把價格推高 {(impact * 100).toFixed(1)}%——市價池薄，量一大就滑價。
+                  同樣的量從<b>限價</b>掛單簿買通常便宜得多。
+                </Notice>
+              )}
               {mBuyCost > balance && <Notice kind="error">餘額不足。</Notice>}
               <Button data-testid="submit-market-buy" onClick={() => setConfirm("mbuy")} disabled={!!busy || !mBuyReady} className="w-full">市價買進</Button>
             </div>

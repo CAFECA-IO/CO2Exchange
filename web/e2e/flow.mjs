@@ -54,6 +54,10 @@ await page.locator('[data-testid="twd"]', { hasText: "100,000" }).waitFor({ time
 await buyFromBook(page, { match: "屋頂太陽能", tonnes: 1 }); // 在地優先：明確買國內專案
 // 市價買進：成交後立刻拆解成具體批次，使用者看到的是碳權批次而不是中介代幣
 await marketBuy(page, { tonnes: 1 });
+// 5 噸：這個量會把這個 demo 池的價格推高約兩成。原本前端用「現貨 × 1.05」授權，
+// 於是 5 噸以上必定失敗（ERC20InsufficientAllowance），而畫面上的「最高支付」
+// 顯示的是一個使用者根本不會付到的數字。授權改成從實際報價算之後才過得了。
+await marketBuy(page, { tonnes: 5 });
 console.log("✔ 掛單買進 + 市價買進");
 
 // 我的資產：買完之後看得到持有、成本與損益

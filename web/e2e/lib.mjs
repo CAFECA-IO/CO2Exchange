@@ -121,6 +121,10 @@ export async function marketBuy(page, { tonnes = 1 } = {}) {
   await page.locator('[data-testid="tab-buy"]').click();
   await page.locator('[data-testid="mode-market"]').click();
   await page.locator('[data-testid="market-qty"]').fill(String(tonnes));
+  // 等實際報價回來再送出。授權金額是**從報價算的**，不是用現貨價乘一乘——
+  // 池子是曲線，成交價是沿路的平均價，薄的時候差兩成以上。
+  // 沒等到報價就送出，授權會退回用現貨估，正好重現原本那個 bug。
+  await page.locator('[data-testid="mbuy-cost"]').waitFor({ timeout: 15_000 });
   await page.locator('[data-testid="submit-market-buy"]').click();
   const dialog = page.getByRole("dialog", { name: "確認市價買進" });
   await dialog.waitFor({ timeout: 10_000 });
