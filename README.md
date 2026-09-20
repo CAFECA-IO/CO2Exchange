@@ -550,7 +550,10 @@ e2e 等的是 `data-testid` 標記的**狀態**，不是畫面上的某一句話
 - **尚未涵蓋**：正式第三方合約稽核、形式驗證（如 Certora）、經濟/賽局面攻擊面分析、跨合約 MEV/夾單分析、
   正式 bug bounty。這些屬 Phase 1/2 範疇，見下方「尚未包含」與 project 文件的分期規劃。
 
-## 授權提醒
+## 授權
+
+本 repo 的程式碼為 **MIT**（見 [`LICENSE`](LICENSE)），著作權人為卡菲卡金融科技股份有限公司。
+`lib/` 底下的第三方元件以 submodule 引入，各依其原授權條款，其中一項要特別注意：
 
 `lib/v4-core/src/PoolManager.sol` 為 **BUSL-1.1**（interfaces 與 `Hooks` library 為 MIT）。
 本 repo 的 v4 模組僅供非生產展示；國家單位正式營運屬生產使用，需 Uniswap Additional Use Grant、等 Change Date、或改用自寫 AMM。

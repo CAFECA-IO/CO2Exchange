@@ -113,10 +113,6 @@ export default function GlobeHero() {
             </div>
           )}
         </div>
-        <p className="mt-2 text-center text-xs text-ink-300">
-          柱子的高度是各轄區的{meta.label}，拖曳可以轉動地球。
-          <span className="hidden sm:inline">量的精確比較請看右邊的清單——球面會把靠近邊緣的柱子壓短。</span>
-        </p>
       </div>
 
       {/* ── 數據清單：精確的那一份 ────────────────────────────────── */}
