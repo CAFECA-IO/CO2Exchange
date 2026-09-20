@@ -6,3 +6,6 @@ node_modules/
 
 # Cowork 在專案資料夾裡放截圖與產出的地方，不是專案內容
 Claude outputs/
+
+# demo-box.sh 的 anvil / 部署 log
+.demo-box/
