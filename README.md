@@ -11,6 +11,10 @@
 
 架構決策、風險與分期紀錄於 Claude project `CO2Exchange › claude/architecture-decisions.md`。
 
+**要動手的人看這裡**：[營運手冊](#營運手冊) — [啟動](#啟動)、[建立模擬資料](#建立模擬資料)、[更新](#更新)、[日常營運](#日常營運)、[出事的時候](#出事的時候)。
+其餘章節是設計說明：[分層](#分層)、[治理](#治理safe--timelock)、[安裝](#安裝)、[部署到私有鏈](#部署到既有的私有鏈)、
+[前端](#前端webnextjs-16--react-19)、[模擬市場](#模擬市場100-個有人格的帳戶)、[測試](#測試113)、[自我審查](#自我審查self-review--audit-prep)。
+
 ## 分層
 
 ```
@@ -85,18 +89,60 @@ forge test
 | forge-std | v1.16.2 |
 | safe-smart-account | v1.4.1 |
 
-## 本地展示（Anvil）
+## 營運手冊
+
+四件事：**啟動**（從零到能用）、**建立模擬資料**（讓畫面上有東西可看）、**更新**（拉了新版之後要補做什麼）、
+**日常營運**（每天／每月固定要做的）。出事的時候看最後一段。
+
+### 啟動
+
+第一次，或換一台機器：
 
 ```bash
-anvil
-# 另一個終端
-forge script script/DeployV4.s.sol   --rpc-url anvil --broadcast                # 只部署（含 v4）
-forge script script/DemoFlowV4.s.sol --rpc-url anvil --broadcast --sig "demo()" # 部署 + 完整流程
+# 0. 合約：裝 Foundry、拉依賴、build、test（只有第一次要跑）
+bash setup.sh
+
+# 1. 鏈。--prune-history 不是可選的，理由見「建立模擬資料」
+anvil --prune-history
+
+# 2. 部署 + 走一次完整流程（另一個終端）
+forge script script/DemoFlowV4.s.sol --rpc-url anvil --broadcast --sig "demo()"
+
+# 3. 前端（第三個終端）
+cd web && cp .env.example .env.local && npm install && npm run dev
 ```
 
-`DemoFlowV4` 用 Anvil 預設帳戶：account0 = 國家單位 / 營運 / 身分驗證服務 / 查驗機構（Phase 0 合一），
-account1 = 減量企業，account2 = 做市商，account3 = 自然人。流程：憑證 attestation 註冊 → 專案登錄 →
-查驗簽章核發 100 噸 → 30 噸掛單、60 噸入池、做市商提供 v4 流動性 → 自然人從掛單與 v4 各買一次 → 兩邊註銷取得憑證。
+開 <http://localhost:3000>。`.env.local` 至少要確認三件事：
+
+| 變數 | 為什麼非看不可 |
+|---|---|
+| `RPC_URL` / `CHAIN_ID` | 對不上的話前端讀的是另一條鏈，畫面全空但不會報錯 |
+| `ADMIN_EMAILS` / `VERIFIER_EMAILS` | `KYC_AUTO_APPROVE=0` 時**必須包含你自己登入用的 email**，否則申請會卡在沒有人能核准的佇列裡 |
+| `RELAYER_PK` / `DOCUMENT_SIGNER_PK` | Phase 0 由平台代付 gas。這兩把在該鏈上沒餘額，建帳戶與註銷都會失敗 |
+
+環境還在、只是關掉了（第二天開工）：
+
+```bash
+anvil --prune-history                        # 鏈的狀態不留，要重跑第 2、3 步
+cd web && npm run dev
+```
+
+> Anvil 一關就忘光。想留住昨天的資料，用 `anvil --state anvil-state.json --prune-history`
+> （`--state` 是 `--load-state` 與 `--dump-state` 的別名：檔案在就載入，關掉時寫回，
+> 第一次跑檔案不存在也不會失敗）。這樣就不必每天重跑第 2、3 步，
+> 前端 `web/data/` 的申請紀錄也還對得上——那些紀錄是用**帳戶地址**當鍵的，
+> 鏈重開又重新部署就會對不上，機制與處理方式見下面「出事的時候」。
+
+**確認真的跑起來了**（三個都該有東西）：
+
+```bash
+./script/govern.sh status                                  # 治理角色是不是都在該在的地方
+curl -s localhost:3000/api/market/ticker?hours=24 | head -c 200   # 行情讀得到鏈
+curl -s localhost:3000/api/market/by-country | head -c 200        # 各轄區統計讀得到鏈
+```
+
+`govern.sh status` 印出來的那張表，每一格都該是 `true`，而且 `admin` 那一欄要指向 Timelock、
+`sov` 指向國家 Safe。有 `false` 就是部署沒完成，不要繼續往下用。
 
 ### 四支部署腳本
 
@@ -111,6 +157,200 @@ v4 的編譯期相依已經從核心拆出去，所以「要不要 v4」是選�
 
 用 `Deploy.s.sol` 時部署檔裡 v4 的三個地址會是 0，前端據此自動隱藏 v4 相關 UI
 （`/trade` 的流動性池卡片、`/admin` 的 PoolManager 狀態）。
+
+`DemoFlowV4` 用 Anvil 預設帳戶：account0 = 國家單位 / 營運 / 身分驗證服務 / 查驗機構（Phase 0 合一），
+account1 = 減量企業，account2 = 做市商，account3 = 自然人。流程：憑證 attestation 註冊 → 專案登錄 →
+查驗簽章核發 100 噸 → 30 噸掛單、60 噸入池、做市商提供 v4 流動性 → 自然人從掛單與 v4 各買一次 → 兩邊註銷取得憑證。
+
+
+### 建立模擬資料
+
+`demo()` 只鋪一張最小的桌子：幾個專案、幾張掛單，夠把流程走一次，但行情圖上只有一兩根 K 棒、
+首頁的地球只有一個國家有柱子。要讓畫面像個市場，有三個等級：
+
+| 要什麼 | 用什麼 | 花多久 |
+|---|---|---|
+| 只要流程能走一遍 | `DemoFlowV4.s.sol` 的 `demo()` | 十幾秒 |
+| 只要行情圖有 K 棒 | `SeedMarket.s.sol` + `npm run seed:market` | 一兩分鐘 |
+| 要整個市場：多國、掛單簿厚薄、申報季波峰、每月託管報告 | `npm run simulate` | 三到五分鐘（一年份） |
+
+**只要一條像樣的價格曲線**（不需要人物與多國資料）：
+
+```bash
+forge script script/SeedMarket.s.sol --rpc-url anvil --broadcast   # 掛出一批單
+cd web && npm run seed:market -- --days 365 --per-day 3            # 逐筆買掉，每筆推進時間
+```
+
+每筆成交之間會推進區塊時間，K 棒才有時間軸可分；全程一個行程、keep-alive 連線，
+不是每筆開一個 `cast`。
+
+**要完整的市場**（首頁地球、各轄區統計、託管揭露都會有資料）：
+
+```bash
+# 1. 鏈要從一年前開始。回填只能把時間往前推，不能倒退
+anvil --timestamp $(( $(date +%s) - 365*86400 )) --prune-history
+
+# 2. 部署
+forge script script/DemoFlowV4.s.sol --rpc-url anvil --broadcast --sig "demo()"
+
+# 3. 回填。--from 要晚於鏈上現在的時間
+cd web
+npm run simulate -- --dry-run                              # 先看人物名冊，不送任何交易
+npm run simulate -- --from 2025-11-25 --tick 8h --quiet    # 回填到現在，約 3–5 分鐘
+```
+
+跑完會有：約 3,600 筆交易、十七萬噸核發、十五萬噸成交、九個轄區的掛單簿，以及十一期每月託管對帳報告。
+參數與人物設定見下面「模擬市場」。
+
+**這三件事不照做就會踩到：**
+
+1. **`--prune-history` 不是可選的。** anvil 預設把每個區塊的歷史狀態寫到 `~/.foundry/anvil/tmp/`，
+   五千筆交易下來好幾 GB，而且**每次重開 anvil 都留一份**——磁碟會在你還沒發現的時候滿掉。
+   歷史狀態對這裡沒有用：行情、公告欄與託管揭露讀的是事件與區塊標頭，那兩樣 `--prune-history` 都會保留。
+   已經滿了就清掉（anvil 沒在跑的時候）：`rm -rf ~/.foundry/anvil/tmp/*`
+2. **`--from` 必須晚於鏈上現在的時間。** 回填用 `anvil_setTime` 推進時間，而區塊時間只能往前。
+   對不上的時候腳本會直接印出該用的 anvil 指令，不會跑到一半才爆。
+3. **模擬跑的時候不要同時用前端下單。** 模擬器假設自己是鏈上唯一的寫入者，
+   掛單簿與持有量都在記憶體裡跟著更新（這是一年份回填能從「幾萬次 RPC」降到「幾千筆交易」的原因）。
+
+**續跑與重來：**
+
+```bash
+npm run simulate -- --from <上次停的日期> --tick 8h   # 接著跑：會從鏈上把狀態全部認回來
+npm run simulate                                      # 持續模式：依真實時間每分鐘一輪
+```
+
+續跑會把已註冊的帳戶、持有量、掛單簿、已登錄的專案與已發布的對帳期別認回來，
+參考價由掛單簿的中位數推回——不會把同一個開發者的專案再登錄一次，也不會讓價格跳回起始值。
+要完全重來就重開 anvil，然後回到第 1 步。
+
+### 更新
+
+拉了新版之後要補做什麼，看你改動了什麼：
+
+| 改了什麼 | 要做的事 |
+|---|---|
+| 只有前端（`web/app`、`web/components`） | `npm run dev` 熱更新就好 |
+| 前端依賴（`web/package.json`） | `cd web && npm install` |
+| 合約原始碼（`src/`） | `forge build && forge test` → `forge snapshot`（更新 gas 基準線）→ **重新部署** → `cd web && npm run data:reset` |
+| 部署腳本或治理參數 | 重新部署 → `./script/govern.sh status` 確認角色都對 |
+| 合約依賴（`lib/`，git submodule） | `git submodule update --init --recursive` → `forge build` |
+| 契約條文（`web/contracts/*.md`） | 不必重部署，但**條文雜湊會變，既有同意紀錄失效、使用者要重簽**——這是預期行為 |
+| 地球的地理資料 | 只有要換底圖或加轄區才需要重跑 `scripts/gen-globe-mask.py`，產生出來的 `lib/globe-mask.ts` 已經在版控裡 |
+
+合約改了就一定要重新部署，重新部署就一定要處理 `web/data/`：
+
+```bash
+forge build && forge test
+anvil --prune-history                                              # 重開鏈
+forge script script/DemoFlowV4.s.sol --rpc-url anvil --broadcast --sig "demo()"
+cd web && npm run data:reset                                       # 搬到 data.bak-<時間戳>，不是刪除
+npm run build && npm run e2e                                       # 收工前跑一次
+```
+
+`data:reset` 為什麼跳不過，見下面「出事的時候 › 重新部署之後」。備份裡有使用者上傳的身分文件，
+確認不需要再自行刪除；想把兩個部署的資料分開留著，設 `DATA_DIR` 指到不同資料夾即可。
+
+**發版前的檢查清單：**
+
+```bash
+forge test                          # 113 個合約測試
+forge snapshot --check --no-match-contract "FuzzTest|PoolInvariantTest"   # gas 有沒有非預期的迴歸
+cd web && npm run lint && npm run build
+npm run e2e                         # 三條流程，需 KYC_AUTO_APPROVE=0
+```
+
+### 日常營運
+
+Phase 0 的營運動作分三種節奏。**誰做**那一欄很重要：營運方做得到的事情是刻意被限縮的，
+凍結、開關轄區、換查驗機構這些都要國家 Safe。
+
+| 節奏 | 做什麼 | 誰 | 在哪 |
+|---|---|---|---|
+| 每天 | 審 KYC 申請（核准＝簽 attestation 上鏈） | 管理員（`ADMIN_EMAILS`） | `/admin` › KYC 審核 |
+| 每天 | 審核發申請（檢視 ISO 14064-3 報告與雜湊 → 簽章核發或退回） | 查驗機構（`VERIFIER_EMAILS`） | `/verifier` |
+| 每天 | 產生註銷憑證 PDF 並把 SHA-256 回寫鏈上 | 管理員 | `/admin` › 憑證文件 |
+| 每月 5 日 | 發布託管與準備金對帳報告，查核機構簽署 | 報表金鑰 + 查核機構 | **見下方警告** |
+| 不定期 | 調整各轄區交易費（bps）與註銷費（每噸） | 管理員（服務金鑰持 `PRICING_ROLE`） | `/admin` › 費率設定 |
+| 不定期 | 認可／撤銷查驗機構、停用專案 | 國家 Safe | `govern.sh build approve-verifier` / `revoke-verifier` / `set-project-active` |
+| 不定期 | 開啟／關閉轄區 | 國家 Safe | **見下方警告** |
+| 緊急 | 凍結地址或批次、暫停市場、撤換營運方 | 國家 Safe（即時，不等 48h） | `script/govern.sh` |
+| 結構變更 | 升級合約、變更主權歸屬 | 國家 Safe → Timelock 48h | `script/govern.sh` |
+
+> ⚠️ **兩個已知的營運缺口**，不是還沒寫進文件的功能，是真的還沒有人做得了：
+>
+> 1. **每月 5 日的託管報告沒有營運端介面。** `/custody` 與 `/api/custody` 都是唯讀的，
+>    鏈上真正會呼叫 `ReserveAttestation.publish()` 的只有模擬器（`web/scripts/simulate.mjs`）。
+>    Phase 0 的展示資料靠模擬器產生；正式營運前必須補上報表端介面或腳本，
+>    否則平台在首頁與契約裡承諾的「每月 5 日公開對帳」沒有人執行得了。
+> 2. **開關轄區沒有進 `govern.sh`。** `CarbonRegistry.setJurisdiction()` 要 `SOVEREIGN_ROLE`，
+>    但 `govern.sh build` 沒有對應的子指令，現在得自己用
+>    `cast calldata 'setJurisdiction(bytes2,(bool,bool,uint8,string,string,string,string))' 0x<國碼> '(...)'`
+>    組出 calldata 再丟給 `safe national hash|exec`。開一個轄區是主權行為，
+>    這條路徑應該跟凍結、撤換查驗機構一樣有現成指令。
+
+治理操作一律是「組 calldata → 簽 → 執行」三步，`govern.sh` 把 cast 包起來：
+
+```bash
+./script/govern.sh status                                  # 先看現況
+./script/govern.sh build freeze 0x<地址> true              # 組出 target + calldata
+./script/govern.sh safe national hash <target> <calldata>  # 算出要簽的 hash
+./script/govern.sh sign <hash> <私鑰>                      # 各簽章者各自簽
+./script/govern.sh safe national exec <target> <calldata> <簽章串>
+```
+
+要走 Timelock 的（升級、主權變更）中間多一段 `timelock schedule` → 等 48 小時 → `timelock execute`，
+`timelock state` 查現在到哪一步。完整 SOP（緊急凍結、升級、簽章者管理、移轉驗收）
+見 project 文件「CO2Exchange 治理操作手冊」。
+
+### 出事的時候
+
+| 症狀 | 多半是 |
+|---|---|
+| 畫面全空、沒有錯誤訊息 | `.env.local` 的 `RPC_URL` / `CHAIN_ID` 對到另一條鏈 |
+| 建帳戶或註銷失敗 | `RELAYER_PK` / `DOCUMENT_SIGNER_PK` 在該鏈上沒餘額（Phase 0 平台代付 gas） |
+| KYC 申請卡住沒人能核准 | `KYC_AUTO_APPROVE=0` 但 `ADMIN_EMAILS` 沒有你登入用的 email |
+| 部署腳本最後一筆 `AttestationExpired` | anvil 閒置太久，見下 |
+| 重新部署後畫面有資料但對不上鏈 | `web/data/` 的舊紀錄，見下 |
+| 磁碟莫名其妙滿了 | `~/.foundry/anvil/tmp/` 的歷史狀態，見「建立模擬資料」 |
+| 首頁地球轉但沒有柱子 | 鏈上還沒有核發資料，跑一次 `demo()` 或模擬器 |
+
+#### `AttestationExpired`：部署腳本最後一筆交易失敗
+
+症狀：`forge script ... --broadcast` 模擬成功、前面上百筆交易都 ✅，然後在
+`kyc.register` 那筆 ❌，只花三萬 gas。原因是 **anvil 閒置太久**：
+
+forge 模擬時讀到的是鏈上**最後一個區塊**的時間戳，而 anvil 沒有新交易就不產生新區塊；
+等到真的送出交易，anvil 才用**現在的真實時間**打上時間戳。中間這段閒置如果超過簽章的
+有效期，attestation 送到鏈上就已經過期了，而錯誤訊息只有一句 `AttestationExpired`。
+
+解法：**重開 anvil**。demo 與種子腳本的簽章有效期已放寬到一年（`DEMO_SIG_TTL`），
+正常不會再遇到；正式環境的 attestation 由簽章服務即時簽發，短效期才是對的。
+
+#### 重新部署之後：`web/data/` 的舊紀錄
+
+`web/data/` 裡的 KYC 申請、核發申請、passkey 對照都是用**帳戶地址**當鍵的，而地址是合約部署的產物。
+鏈重開、換鏈、或 factory 重新部署之後，那些鍵在新鏈上對不到任何東西——資料讀得出來、畫面也畫得出來，錯得無聲無息。
+
+所以資料夾裡壓了一張 `.deployment.json` 戳記，記下這批資料屬於哪一**次**部署：chainId、七個決定身分的合約地址的雜湊，
+再加上部署檔裡的 `deployedAt`（`vm.unixTime()`，主機時鐘毫秒）。`poolFee` 這種不影響舊紀錄的參數不計入。
+
+`deployedAt` 不是多餘的——**Anvil 重開後重新部署會產生一模一樣的地址**（同一個部署者、同樣的 nonce 順序，實測七個全同）。
+只比對地址的話，鏈重開這件事完全看不出來，但鏈上狀態已經歸零：本機寫著「已核准」的 KYC 紀錄，
+對應帳戶在新鏈上 `identityOf` 回 tier 0。加上 `deployedAt` 之後這種情況才擋得到。對不上時：
+
+- **申請與憑證紀錄**（`kyc-requests`、`issuance-requests`）直接擋下，API 回 `503 DATA_STALE`，訊息說明怎麼處理。
+  這些是證據，不該悄悄拿舊的來用。
+- **`accounts.json`**（credentialId → 帳戶地址）不擋。那個地址是 CREATE2 從 factory + passkey 公鑰算出來的，**可以重算**，
+  舊對照當作不存在，前端重新註冊一次就拿到新地址（`AccountProvider` 的自動重綁）。硬擋反而會讓自動重綁失效。
+
+確認舊資料不用了：
+
+```bash
+cd web && npm run data:reset   # 搬到 data.bak-<時間戳>，不是刪除
+```
+
+備份裡有上傳的身分文件，確認不需要再自行刪除。想把兩個部署的資料分開留著，設 `DATA_DIR` 指到不同資料夾即可。
 
 ## 部署到既有的私有鏈
 
@@ -227,16 +467,6 @@ python3 scripts/gen-globe-mask.py ./package > lib/globe-mask.ts
 否則申請會卡在沒有人能核准的佇列裡（要走查驗核發那條線同理，`VERIFIER_EMAILS` 也要加）。憑證 PDF 用 `fonts/NotoSansTC-Subset.otf`（Big5 常用字子集），
 檔案 SHA-256 由 `DOCUMENT_SIGNER_PK`（`DOCUMENT_ROLE`）回寫鏈上，任何人可重算比對。
 
-```bash
-# 終端 1
-anvil
-# 終端 2：部署 + 種子資料
-forge script script/DemoFlowV4.s.sol --rpc-url anvil --broadcast --sig "demo()"
-# 終端 3
-cd web && cp .env.example .env.local && npm install && npm run dev
-# 開 http://localhost:3000
-```
-
 錢包架構：`PasskeyAccount`（P-256 passkey 是唯一擁有者，地址由公鑰經 CREATE2 決定，換裝置不變）。
 Phase 0 交易由平台 relayer 代送 `execute`（`/api/relay`，gas 由平台付），授權來自使用者的 WebAuthn 簽章，relayer 無法竄改內容；
 Phase 1 換成 ERC-4337 EntryPoint + paymaster，帳戶簽章格式與 nonce 語意不變。
@@ -252,54 +482,11 @@ Apple / Google 登入：在 `.env.local` 設 `AUTH_GOOGLE_ID/SECRET`、`AUTH_APP
 e2e 等的是 `data-testid` 標記的**狀態**，不是畫面上的某一句話。之前帳戶建好與否是等
 「帳戶已就緒」四個字，於是改一次文案就有三個測試掛掉——掛的不是功能，是字串。
 
-### `AttestationExpired` / 部署腳本最後一筆交易失敗
-
-症狀：`forge script ... --broadcast` 模擬成功、前面上百筆交易都 ✅，然後在
-`kyc.register` 那筆 ❌，只花三萬 gas。原因是 **anvil 閒置太久**：
-
-forge 模擬時讀到的是鏈上**最後一個區塊**的時間戳，而 anvil 沒有新交易就不產生新區塊；
-等到真的送出交易，anvil 才用**現在的真實時間**打上時間戳。中間這段閒置如果超過簽章的
-有效期，attestation 送到鏈上就已經過期了，而錯誤訊息只有一句 `AttestationExpired`。
-
-解法：**重開 anvil**。demo 與種子腳本的簽章有效期已放寬到一年（`DEMO_SIG_TTL`），
-正常不會再遇到；正式環境的 attestation 由簽章服務即時簽發，短效期才是對的。
-
-### 重新部署之後（`web/data/` 的舊紀錄）
-
-`web/data/` 裡的 KYC 申請、核發申請、passkey 對照都是用**帳戶地址**當鍵的，而地址是合約部署的產物。
-鏈重開、換鏈、或 factory 重新部署之後，那些鍵在新鏈上對不到任何東西——資料讀得出來、畫面也畫得出來，錯得無聲無息。
-
-所以資料夾裡壓了一張 `.deployment.json` 戳記，記下這批資料屬於哪一**次**部署：chainId、七個決定身分的合約地址的雜湊，
-再加上部署檔裡的 `deployedAt`（`vm.unixTime()`，主機時鐘毫秒）。`poolFee` 這種不影響舊紀錄的參數不計入。
-
-`deployedAt` 不是多餘的——**Anvil 重開後重新部署會產生一模一樣的地址**（同一個部署者、同樣的 nonce 順序，實測七個全同）。
-只比對地址的話，鏈重開這件事完全看不出來，但鏈上狀態已經歸零：本機寫著「已核准」的 KYC 紀錄，
-對應帳戶在新鏈上 `identityOf` 回 tier 0。加上 `deployedAt` 之後這種情況才擋得到。對不上時：
-
-- **申請與憑證紀錄**（`kyc-requests`、`issuance-requests`）直接擋下，API 回 `503 DATA_STALE`，訊息說明怎麼處理。
-  這些是證據，不該悄悄拿舊的來用。
-- **`accounts.json`**（credentialId → 帳戶地址）不擋。那個地址是 CREATE2 從 factory + passkey 公鑰算出來的，**可以重算**，
-  舊對照當作不存在，前端重新註冊一次就拿到新地址（`AccountProvider` 的自動重綁）。硬擋反而會讓自動重綁失效。
-
-確認舊資料不用了：
-
-```bash
-cd web && npm run data:reset   # 搬到 data.bak-<時間戳>，不是刪除
-```
-
-備份裡有上傳的身分文件，確認不需要再自行刪除。想把兩個部署的資料分開留著，設 `DATA_DIR` 指到不同資料夾即可。
-
 ## 模擬市場（100 個有人格的帳戶）
 
-`demo()` 只鋪一張最小的桌子：幾個專案、幾張掛單，夠把流程走一次，但圖表上什麼都看不出來。
-要看見「市場的樣子」——申報季的量能、掛單簿的厚薄、價格的走勢——需要一批**會照自己的理由行動**的人。
-
-```bash
-cd web
-npm run simulate -- --dry-run                 # 只印人物名冊，不送任何交易
-npm run simulate -- --from 2025-11-25         # 從那天回填到現在，跑完就結束
-npm run simulate                              # 持續模式：依真實時間，每分鐘跑一輪
-```
+怎麼跑見上面「營運手冊 › 建立模擬資料」，這一節講的是**裡面是什麼**：參數、人物模型，
+以及為什麼要這麼做。要看見「市場的樣子」——申報季的量能、掛單簿的厚薄、價格的走勢——
+需要一批**會照自己的理由行動**的人，而不是一批亂數。
 
 | 參數 | 預設 | 說明 |
 |---|---|---|
@@ -321,25 +508,7 @@ npm run simulate                              # 持續模式：依真實時間�
 - **供給有上限**。一個專案一年核發不出比它實際減下來更多的額度。
   沒有這條，模擬器會變成一個無限印額度的水龍頭，掛單簿就成了一面永遠填不完的牆。
 
-> ⚠️ **回填會把鏈的時間往前推**（`anvil_setTime`），而區塊時間只能往前、不能倒退。
-> 所以 `--from` 必須**晚於**鏈上現在的時間。要回填一年，anvil 得從一年前開始：
-> ```bash
-> anvil --timestamp $(( $(date +%s) - 365*86400 )) --prune-history
-> ```
-> 然後才跑 `demo()` 與模擬器。對不上的時候腳本會直接印出該用的指令，不會跑到一半才爆。
->
-> `--prune-history` 不是可有可無的。anvil 預設會把每個區塊的歷史狀態寫到
-> `~/.foundry/anvil/tmp/`，五千筆交易下來那個資料夾會長到好幾 GB，而且**每次重開 anvil
-> 都留一份**——磁碟會在你還沒發現的時候滿掉。歷史狀態對這裡沒有用：行情、公告欄與
-> 託管揭露讀的是事件與區塊標頭，那兩樣 `--prune-history` 都會保留。
-> 已經塞滿了就清掉：`rm -rf ~/.foundry/anvil/tmp/*`（anvil 沒在跑的時候）。
-
-模擬器可以**接著跑**。中斷之後直接再下一次，它會從鏈上把已註冊的帳戶、持有量、
-掛單簿、已登錄的專案與已發布的對帳期別全部認回來，參考價也由掛單簿的中位數推回——
-不會把同一個開發者的專案再登錄一次，也不會讓價格跳回起始值。
-
-模擬器是**鏈上唯一的寫入者**，掛單簿與持有量都在記憶體裡跟著更新，不必每輪重讀鏈——
-一年份的回填因此從「幾萬次 RPC」降到「幾千筆交易」。所以模擬跑的時候不要同時用前端下單。
+續跑、回填的時間限制、`--prune-history`，都在「營運手冊 › 建立模擬資料」。
 
 ## 測試（113）
 
@@ -376,6 +545,8 @@ npm run simulate                              # 持續模式：依真實時間�
   見 [`reports/gas-report.md`](reports/gas-report.md)；
   `.gas-snapshot`（`forge snapshot`）已提交，CI 或發版前可用 `forge snapshot --check` 偵測非預期的 gas 迴歸
   （執行時排除 fuzz/invariant：`--no-match-contract "FuzzTest|PoolInvariantTest"`）。
+  **改了合約就要重跑 `forge snapshot` 更新基準線並一起提交**，否則下一個人跑 `--check` 會看到一堆
+  與他無關的差異，然後學會忽略這個檢查——那比沒有這個檢查更糟。
 - **尚未涵蓋**：正式第三方合約稽核、形式驗證（如 Certora）、經濟/賽局面攻擊面分析、跨合約 MEV/夾單分析、
   正式 bug bounty。這些屬 Phase 1/2 範疇，見下方「尚未包含」與 project 文件的分期規劃。
 
