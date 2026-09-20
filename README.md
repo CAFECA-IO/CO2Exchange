@@ -270,7 +270,16 @@ forge test                          # 113 個合約測試
 forge snapshot --check --no-match-contract "FuzzTest|PoolInvariantTest"   # gas 有沒有非預期的迴歸
 cd web && npm run lint && npm run build
 npm run e2e                         # 三條流程，需 KYC_AUTO_APPROVE=0
+
+# shell 腳本：變數展開後面不可以直接接中文字（見下）
+grep -nP '\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]' ../script/*.sh ../setup.sh
 ```
+
+> 最後那一條 grep 要是有輸出就是有問題。**macOS 內建的是 bash 3.2**，它會把緊接在變數
+> 後面的多位元組字元當成識別字的一部分——`"每輪 $TICK）"` 會被解析成變數 `TICK<位元組>`，
+> 在 `set -u` 之下直接 unbound variable 而中斷。在 Linux 的 bash 5 上完全正常，
+> 所以這個 bug 只會在使用者的 Mac 上出現。規則很簡單：**後面接中文就用 `${VAR}`**。
+> 這個坑這個專案已經踩過兩次（`preflight.sh` 檔頭就寫著同一段警告）。
 
 ### 日常營運
 

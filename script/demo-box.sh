@@ -18,6 +18,10 @@
 #   STATE=          給 anvil --state 的檔案；設了就能跨重開保留鏈（rebuild 會先刪掉它）
 set -euo pipefail
 
+# 變數展開後面接中文字時一定要用 ${VAR} 大括號。macOS 內建的 bash 3.2 會把後面的
+# 多位元組字元當成識別字的一部分，於是 "$TICK）" 變成變數 "TICK<byte>"，
+# 在 set -u 之下直接 unbound variable。preflight.sh 早就踩過同一個坑。
+
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 DAYS=${DAYS:-365}
@@ -68,7 +72,7 @@ rebuild)
   grep -q "ONCHAIN EXECUTION COMPLETE" "$LOG/deploy.log" \
     || { echo "!! 部署失敗，看 $LOG/deploy.log"; exit 1; }
 
-  echo ">> 回填 $(days_ago $(( DAYS - 1 ))) → 現在（每輪 $TICK）"
+  echo ">> 回填 $(days_ago $(( DAYS - 1 ))) → 現在（每輪 ${TICK}）"
   ( cd web && node scripts/simulate.mjs --from "$(days_ago $(( DAYS - 1 )))" --tick "$TICK" --quiet ) \
     | tail -3
 
