@@ -38,6 +38,12 @@ export const passkeyAccountAbi = [
   { type: "function", name: "nonce", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "getDigest", stateMutability: "view", inputs: [callType, { name: "nonce_", type: "uint256" }], outputs: [{ type: "bytes32" }] },
   { type: "function", name: "execute", stateMutability: "nonpayable", inputs: [callType, { name: "signature", type: "bytes" }], outputs: [] },
+  // 這兩個 error 一定要放進 ABI。少了它們，viem 解不出 revert 的名字，
+  // 只會把原始的四個位元組丟出來——畫面上就是一句 `0x5c0dee5d`，
+  // 使用者與開發者都無從判斷發生什麼事。CallFailed 更關鍵：
+  // 它把「真正的錯誤」包在 reason 裡，不解開就等於把診斷資訊丟掉。
+  { type: "error", name: "InvalidSignature", inputs: [] },
+  { type: "error", name: "CallFailed", inputs: [{ name: "index", type: "uint256" }, { name: "reason", type: "bytes" }] },
 ] as const;
 
 export const webAuthnAuthType = {
