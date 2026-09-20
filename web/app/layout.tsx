@@ -5,7 +5,7 @@ import { Nav } from "@/components/Nav";
 
 export const metadata: Metadata = {
   title: "CO2Exchange",
-  description: "減量額度登錄、交易與註銷平台（Phase 0）",
+  description: "碳權交易所（Phase 0）",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

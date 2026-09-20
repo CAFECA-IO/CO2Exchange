@@ -69,7 +69,7 @@ export default function Home() {
       {/* ── Hero + 登入 ────────────────────────────────────────────── */}
       <div className="grid gap-6 md:grid-cols-[1.2fr_1fr]">
         <div className="space-y-4">
-          <h1 className="font-display text-3xl font-bold tracking-tight text-ink-50">減量額度登錄、交易與註銷平台</h1>
+          <h1 className="font-display text-3xl font-bold tracking-tight text-ink-50">碳權交易所</h1>
           <p className="text-sm leading-7 text-ink-200">
             一家工廠少排了一公噸二氧化碳，怎麼證明？證明完了之後，這一公噸要怎麼變成別人可以買的東西？
             買走的人用掉之後，又怎麼確定同一公噸不會被第二個人再用一次？
