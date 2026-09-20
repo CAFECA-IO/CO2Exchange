@@ -1,3 +1,5 @@
+import { parseAbiItem } from "viem";
+
 // 前端只需要的最小 ABI 子集（與 Solidity 介面一致）
 
 export const kycRegistryAbi = [
@@ -275,3 +277,20 @@ export const timelockAbi = [
     { name: "value", type: "uint256", indexed: false }, { name: "data", type: "bytes", indexed: false }, { name: "predecessor", type: "bytes32", indexed: false },
     { name: "delay", type: "uint256", indexed: false } ] },
 ] as const;
+
+/// 事件簽章集中在這裡，不要在各自的模組裡再抄一份。
+///
+/// 抄一份的代價不是重複，是**安靜的錯**：`getLogs` 找不到相符的事件時不會報錯，
+/// 它回一個空陣列，於是整頁數字變成零，看起來像「還沒有人交易」而不是「查錯東西」。
+/// 這個 bug 在 by-country 上發生過一次——事件叫 BatchIssued，那邊寫成 Issued。
+export const EVENTS = {
+  batchIssued: parseAbiItem(
+    "event BatchIssued(uint256 indexed batchId, uint256 indexed projectId, address indexed to, uint256 amountKg, bytes32 serialHash)",
+  ),
+  creditRetired: parseAbiItem(
+    "event CreditRetired(uint256 indexed batchId, address indexed holder, address indexed certificateOwner, uint256 amountKg, uint256 certId)",
+  ),
+  filled: parseAbiItem(
+    "event Filled(uint256 indexed orderId, address indexed buyer, uint256 amountKg, uint256 cost, uint256 fee)",
+  ),
+} as const;

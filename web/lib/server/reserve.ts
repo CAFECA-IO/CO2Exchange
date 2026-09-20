@@ -1,6 +1,5 @@
 import "server-only";
-import { parseAbiItem } from "viem";
-import { erc20Abi, registryAbi, reserveAbi } from "@/lib/abis";
+import { EVENTS, erc20Abi, registryAbi, reserveAbi } from "@/lib/abis";
 import { countryCode } from "@/lib/deployment";
 import { deployment, publicClient } from "./chain";
 
@@ -13,12 +12,7 @@ import { deployment, publicClient } from "./chain";
 /// 「鏈上流通量」這一欄本頁自己算（核發 − 註銷，依轄區分組），不採用報告裡填的數字——
 /// 填報的那一欄只代表營運方當時的說法，兩邊放在一起才看得出有沒有出入。
 
-const ISSUED = parseAbiItem(
-  "event BatchIssued(uint256 indexed batchId, uint256 indexed projectId, address indexed to, uint256 amountKg, bytes32 serialHash)",
-);
-const RETIRED = parseAbiItem(
-  "event CreditRetired(uint256 indexed batchId, address indexed holder, address indexed certificateOwner, uint256 amountKg, uint256 certId)",
-);
+const { batchIssued: ISSUED, creditRetired: RETIRED } = EVENTS;
 
 export const STATUS_LABEL = ["待查核", "已查核相符", "已查核有差異"] as const;
 

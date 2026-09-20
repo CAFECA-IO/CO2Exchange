@@ -8,6 +8,7 @@ import { ThemeToggle } from "./ThemeToggle";
 
 const base = [
   ["/", "首頁"],
+  ["/about", "認識碳權"],
   ["/kyc", "身分驗證"],
   ["/trade", "交易"],
   ["/portfolio", "我的資產"],

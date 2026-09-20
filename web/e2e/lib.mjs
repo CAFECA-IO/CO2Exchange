@@ -44,9 +44,9 @@ export async function login(page, email) {
 }
 
 export async function createPasskeyAccount(page) {
-  await page.getByRole("button", { name: /建立新帳戶/ }).waitFor({ timeout: 30_000 });
-  await page.getByRole("button", { name: /建立新帳戶/ }).click();
-  await page.locator("text=帳戶已就緒").waitFor({ timeout: 60_000 });
+  await page.getByRole("button", { name: /建立(新|鏈上)帳戶/ }).waitFor({ timeout: 30_000 });
+  await page.getByRole("button", { name: /建立(新|鏈上)帳戶/ }).click();
+  await page.locator('[data-testid="account-ready"]').waitFor({ timeout: 60_000 });
   return (await page.locator("dd.font-mono").first().textContent()).trim();
 }
 

@@ -1,12 +1,10 @@
 import "server-only";
-import { parseAbiItem } from "viem";
+import { EVENTS } from "@/lib/abis";
 import { deployment, publicClient } from "./chain";
 
 /// 行情全部由鏈上 Listing 的 Filled 事件推導，沒有任何捏造的數字。
 /// Filled(orderId, buyer, amountKg, cost, fee) —— 成交價 = cost / amountKg * 1000（每噸，結算幣最小單位）。
-const FILLED = parseAbiItem(
-  "event Filled(uint256 indexed orderId, address indexed buyer, uint256 amountKg, uint256 cost, uint256 fee)",
-);
+const { filled: FILLED } = EVENTS;
 
 export type Trade = { ts: number; pricePerTonne: number; kg: number; cost: number; txHash: string };
 export type Candle = { t: number; o: number; h: number; l: number; c: number; v: number };

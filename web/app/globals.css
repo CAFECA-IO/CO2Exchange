@@ -43,6 +43,12 @@
   --color-cat-1: #1fa5c4;
   --color-cat-2: #8b6ae0;
 
+  /* 地球的海與陸。分成自己的變數，而不是借用 ink-500——
+     深色模式的分隔線色（#2a3139）在淺色模式是 #dde1e6，
+     那個亮度畫在淺色底上等於沒畫。海陸對比要各自挑，不能靠翻轉。 */
+  --globe-ocean: #0d1317;
+  --globe-land: #45515e;
+
   --radius-card: 12px;
   --radius-ctl: 10px;
 
@@ -77,6 +83,8 @@
     --color-warn: #a16207;
     --color-cat-1: #0f8aa3;
     --color-cat-2: #7551e0;
+    --globe-ocean: #dae3ec;
+    --globe-land: #95a3b3;
   }
 }
 
@@ -102,6 +110,8 @@
   --color-warn: #a16207;
   --color-cat-1: #0f8aa3;
   --color-cat-2: #7551e0;
+  --globe-ocean: #dae3ec;
+  --globe-land: #95a3b3;
 }
 
 body {

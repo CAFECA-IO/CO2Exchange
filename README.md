@@ -160,15 +160,50 @@ forge script script/Deploy.s.sol   --rpc-url chain --broadcast  # 鏈沒有 EIP-
 
 ## 前端（web/，Next.js 16 + React 19）
 
-四種角色、十個頁面：
+四種角色、十一個頁面：
 
 | 角色 | 頁面 | 內容 |
 |---|---|---|
-| 自然人 / 法人 | `/`、`/kyc`、`/trade`、`/portfolio`、`/retire` | 登入 → passkey 建帳戶 → 身分驗證申請 → 交易（買賣同頁、限價與市價、下單前確認單）→ 我的資產（持有、成本、損益、**註銷憑證**）→ 註銷 |
-| 任何人（免登入） | `/registry`、`/custody`、`/agreements` | 公告欄（TCER 五分頁 + 轄區）、託管與稽核揭露（每月 5 日）、定型化契約全文 |
+| 自然人 / 法人 | `/`、`/kyc`、`/trade`、`/portfolio`、`/retire` | 首頁＝市場現況（地球＋各轄區清單）→ 登入 → passkey 建帳戶 → 身分驗證申請 → 交易（買賣同頁、限價與市價、下單前確認單）→ 我的資產（持有、成本、損益、**註銷憑證**）→ 註銷 |
+| 任何人（免登入） | `/about`、`/registry`、`/custody`、`/agreements` | 認識碳權（制度說明與行情圖表）、公告欄（TCER 五分頁 + 轄區）、託管與稽核揭露（每月 5 日）、定型化契約全文 |
 | 法人 | `/enterprise` | 登錄專案、上傳 ISO 14064-3 查驗報告申請核發、批次掛單 / 入池、取消掛單 |
 | 查驗機構（`VERIFIER_EMAILS`） | `/verifier` | 待查驗佇列：檢視報告與雜湊 → 簽署 IssuanceAttestation 核發，或退回 |
 | 管理員（`ADMIN_EMAILS`） | `/admin` | KYC 審核佇列（核准 = 簽 attestation 上鏈）、憑證 PDF 產生與 `documentHash` 回寫、**各國費率設定**、治理狀態（角色矩陣、Safe、Timelock 排程） |
+
+### 首頁的地球
+
+首頁是**市場現況**：一顆會轉的點陣地球，柱子的高度是各轄區的核發量（或交易量、掛單量，
+可以切換），旁邊是同一份資料的清單。制度說明——什麼是自願減量專案、巴黎協定第六條、
+ISO 14064、額度能用在哪——連同 K 線與市場概況全部在 `/about`。
+那些是進場前讀一次的東西，不是每天回來要看的東西。
+
+**地球不負責讓人讀出數字。** 球面會把靠近邊緣的柱子壓短，透視也會讓正對鏡頭的那一根
+看起來比較長；要比較量就看旁邊清單裡的水平長條，那裡沒有曲面。地球回答的是
+「在哪裡、大概多少」，清單回答「精確是多少」。同理，一次只畫一個量——
+三個量的數量級差很遠，疊在同一顆球上就得畫兩把尺，而讀者無法從一根柱子判斷它用的是哪一把。
+
+清單才是可近用的那一份：畫布掛 `aria-hidden`，每一國在清單裡都是一個真的按鈕，
+鍵盤與螢幕報讀器走那條路。`prefers-reduced-motion` 之下地球不自轉。
+
+實作是**零依賴的 Canvas 2D**，沒有 three.js、沒有 WebGL：正交投影下地球的輪廓永遠是正圓，
+每個點的縮放係數都一樣，柱子的長度才有可比性。深淺兩色都能上色（`--globe-ocean`／
+`--globe-land` 兩個變數），沒有 WebGL 的裝置照常運作。
+
+地理資料壓在 `web/lib/globe-mask.ts` 裡，約 14KB，由 `web/scripts/gen-globe-mask.py` 產生：
+
+```bash
+npm pack world-atlas@2 && tar xzf world-atlas-*.tgz
+pip install global-land-mask matplotlib numpy
+python3 scripts/gen-globe-mask.py ./package > lib/globe-mask.ts
+```
+
+分成兩層是有原因的。均勻取樣的球面點陣畫得出澳洲，畫不出臺灣——要讓臺灣拿到看得出
+形狀的點數，全球得鋪到六位數個點，那既跑不動也送不動。所以底圖只負責陸地輪廓
+（而且不存座標：前端用同一條費波那契球面公式把索引還原成經緯度，遮罩只回答第 i 點是不是
+陸地，32,000 個點因此只花 2,856 個字元），九個轄區另外用各自的密度取樣：大國疏、小國密，
+每一國都是看得出形狀的一塊，而不是一個圓點。
+
+來源是 Natural Earth 1:50m 國界與 GLOBE 地形陸海遮罩，皆為公有領域。
 
 `/trade` 的買進與賣出共用同一個下單面板，使用者只處理**數量**與**單價**；最小成交量與使用期限有預設值、收在「進階」裡。
 送出前一律跳出確認單，把成交條件、費用、對方與待簽的定型化契約攤開，按下去就是簽章上鏈。
@@ -208,9 +243,14 @@ Phase 1 換成 ERC-4337 EntryPoint + paymaster，帳戶簽章格式與 nonce 語
 
 Apple / Google 登入：在 `.env.local` 設 `AUTH_GOOGLE_ID/SECRET`、`AUTH_APPLE_ID/SECRET` 後自動出現；登入只建立 session，不是身分根。
 
-端到端測試（Chromium 虛擬 passkey，需 `npx playwright install chromium`）：`npm run e2e` 跑兩條流程 ——
-`e2e/flow.mjs`（自然人：KYC 人工核准 → 購買 → 註銷 → 管理員產生 PDF 並回寫 → 下載）與
-`e2e/enterprise.mjs`（法人 KYC → 專案登錄 → 上傳報告 → 查驗核發 → 掛單 + 入池 → 另一自然人購買並註銷）。需 anvil + DemoFlowV4 + `KYC_AUTO_APPROVE=0` 的伺服器。
+端到端測試（Chromium 虛擬 passkey，需 `npx playwright install chromium`）：`npm run e2e` 跑三條流程 ——
+`e2e/flow.mjs`（自然人：KYC 人工核准 → 購買 → 註銷 → 管理員產生 PDF 並回寫 → 下載）、
+`e2e/enterprise.mjs`（法人 KYC → 專案登錄 → 上傳報告 → 查驗核發 → 掛單 + 入池 → 另一自然人購買並註銷）與
+`e2e/globe.mjs`（首頁地球與各轄區清單：資料、選取、換量、減少動態、手機不橫捲，以及 `/about` 的章節有沒有搬齊）。
+需 anvil + DemoFlowV4 + `KYC_AUTO_APPROVE=0` 的伺服器。
+
+e2e 等的是 `data-testid` 標記的**狀態**，不是畫面上的某一句話。之前帳戶建好與否是等
+「帳戶已就緒」四個字，於是改一次文案就有三個測試掛掉——掛的不是功能，是字串。
 
 ### `AttestationExpired` / 部署腳本最後一筆交易失敗
 

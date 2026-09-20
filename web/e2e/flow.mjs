@@ -62,7 +62,12 @@ await corp.page.locator('[data-testid="twd"]', { hasText: "100,000" }).waitFor({
 await buyFromBook(corp.page, { match: "屋頂太陽能", tonnes: 1 });
 console.log("✔ 法人買下自然人的掛單");
 
-const bought = (await corp.page.locator('[data-testid="batches"]').innerText()).match(/#(\d+)/)[1];
+// 買完之後持有量是**非同步**重抓的，成功通知出現的那一刻還不一定抓回來了。
+// 鏈上資料一多，這個空窗就從幾十毫秒變成好幾秒——等到批次真的出現再讀，
+// 不要讀到還沒更新的「—」然後在 regex 上炸掉。
+const batchesEl = corp.page.locator('[data-testid="batches"]');
+await batchesEl.filter({ hasText: /#\d+/ }).waitFor({ timeout: 30_000 });
+const bought = (await batchesEl.innerText()).match(/#(\d+)/)[1];
 // 註銷在另一頁；需先簽註銷暨移轉委任書
 await retireOnPage(corp.page, { beneficiary: "買方股份有限公司", tonnes: 1 });
 await waitOk(corp.page, `註銷批次 #${bought} 1 噸完成`);
