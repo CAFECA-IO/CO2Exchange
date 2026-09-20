@@ -11,17 +11,27 @@
 ```
 帳戶層             PasskeyAccount / Factory  P-256 passkey 擁有的智能帳戶，CREATE2 決定地址，WebAuthn 驗簽（OZ P256）
 身分層（UUPS）     KYCRegistry            政府憑證 attestation → tier / expiry / frozen / recover
-登錄層（不可升級） CarbonRegistry         查驗機構 EIP-712 簽章核發、序號唯一、專案登錄
-                   CarbonCredit1155       額度本體，白名單主防線在 _update；retire → 憑證
-                   RetirementCertificate  ERC-721 註銷憑證（soulbound，含受益人 hash、用途、PDF hash）
+登錄層（不可升級） CarbonRegistry         查驗機構 EIP-712 簽章核發、序號唯一、專案登錄、**轄區（國別）政策**
+                   CarbonCredit1155       額度本體，白名單主防線在 _update；retire → 用途 × 轄區檢查 → 憑證
+                   RetirementCertificate  ERC-721 註銷憑證（soulbound，含受益人 hash、用途、核發國、PDF hash）
+                   ReserveAttestation     每月 5 日的託管與準備金對帳報告；查核機構簽署後不可修改
 市場層（UUPS）     Listing                企業以專案名義定價掛單（Phase 1 主市場）
-                   CarbonPool + CCT       同年份池化 ERC-20；FIFO 免費贖回、指定批次收費、redeemAndRetire
+                   CarbonPool + CCT       同年份池化 ERC-20（只收國內額度）；即時市價買賣的交割層
+市場層（不可升級） FeeSchedule            **各國**交易手續費（bps）與註銷手續費（每噸固定金額）
 v4 模組（展示）    CarbonKYCHook          只接受 TrustedRouter、建池需 OPERATOR、每日限額以實際 delta 計
                    TrustedRouter          把 msg.sender 編進 hookData，直接在使用者與 PoolManager 間結算
 mock               MockTWD                6 decimals 結算幣；正式由金融機構存款代幣化取代
 ```
 
 白名單規則：持有與註銷永遠允許；轉帳需雙方有效且未凍結；自然人預設不可轉出（政策開關）；KYC 到期只擋交易不鎖資產。
+
+**轄區規則**：每個專案帶一個核發國（ISO 3166-1 alpha-2）與機制名稱，額度與憑證都繼承。
+國內額度（TW）四種註銷用途全開；國外額度只允許「扣除碳費排放量」與「自願性碳中和」——
+氣候變遷因應法第 27 條把國外額度限縮到碳費與超額量抵銷，增量抵換（第 24 條）與環評承諾都做不到，
+所以 `CarbonCredit1155.retire` 直接 revert，不是只在介面提示。轄區可由主權角色開啟／關閉；
+關閉後不能再上架，但既有持有不受影響（流動性可以停，持有不能沒收）。
+Phase 0 已開放：TW、JP（J-Credit）、KR（KOC）、TH（T-VER）、ID（SPE-GRK）、AU（ACCU）；
+CN（CCER）與 IN（CCC）因跨境使用規定尚未訂定而關閉；SG 為買方框架，不核發額度。
 
 ## 治理（Safe + Timelock）
 
@@ -149,15 +159,29 @@ forge script script/Deploy.s.sol   --rpc-url chain --broadcast  # 鏈沒有 EIP-
 
 | 角色 | 頁面 | 內容 |
 |---|---|---|
-| 自然人 / 法人 | `/`、`/kyc`、`/trade`、`/portfolio`、`/retire`、`/certificates`、`/registry`、`/agreements` | 登入 → passkey 建帳戶 → 身分驗證申請 → 交易（買進 / 賣出同一頁，下單前確認單）→ 我的資產（持有、成本、損益）→ 註銷 → 憑證（含 PDF 下載）；公告欄與定型化契約不需登入 |
+| 自然人 / 法人 | `/`、`/kyc`、`/trade`、`/portfolio`、`/retire` | 登入 → passkey 建帳戶 → 身分驗證申請 → 交易（買賣同頁、限價與市價、下單前確認單）→ 我的資產（持有、成本、損益、**註銷憑證**）→ 註銷 |
+| 任何人（免登入） | `/registry`、`/custody`、`/agreements` | 公告欄（TCER 五分頁 + 轄區）、託管與稽核揭露（每月 5 日）、定型化契約全文 |
 | 法人 | `/enterprise` | 登錄專案、上傳 ISO 14064-3 查驗報告申請核發、批次掛單 / 入池、取消掛單 |
 | 查驗機構（`VERIFIER_EMAILS`） | `/verifier` | 待查驗佇列：檢視報告與雜湊 → 簽署 IssuanceAttestation 核發，或退回 |
-| 管理員（`ADMIN_EMAILS`） | `/admin` | KYC 審核佇列（核准 = 簽 attestation 上鏈）、憑證 PDF 產生與 `documentHash` 回寫、治理狀態（角色矩陣、Safe、Timelock 排程） |
+| 管理員（`ADMIN_EMAILS`） | `/admin` | KYC 審核佇列（核准 = 簽 attestation 上鏈）、憑證 PDF 產生與 `documentHash` 回寫、**各國費率設定**、治理狀態（角色矩陣、Safe、Timelock 排程） |
 
 `/trade` 的買進與賣出共用同一個下單面板，使用者只處理**數量**與**單價**；最小成交量與使用期限有預設值、收在「進階」裡。
 送出前一律跳出確認單，把成交條件、費用、對方與待簽的定型化契約攤開，按下去就是簽章上鏈。
 註銷另開 `/retire`——註銷是「用掉」不是「賣掉」，而且自然人做不了，混在下單頁裡會讓人以為買完就該註銷。
 `/portfolio` 以**移動加權平均成本**算持有成本，已實現與未實現損益分開列；核發取得的部位成本以 0 計並在介面標示。
+註銷憑證併在同一頁——憑證是「已經用掉的那一部分」的收據，跟資產是同一件事的兩面。
+
+**限價與市價**：限價是掛單簿（指定專案與價格）；市價是即時成交，只填數量。
+市價買進在同一筆 passkey 簽章裡做完「換到額度」與「**立刻拆解成具體批次**」兩件事——
+使用者的持有清單裡只會有帶專案、年份、核發國的碳權批次，不會出現中介代幣。
+技術上走 v4 池（精準輸出換入 + FIFO 贖回），但那是實作細節，介面上不出現「池」這個概念。
+
+**託管與揭露**：碳權託管在各國政府的官方登錄簿帳戶（國內＝專案方於環境部開立的額度帳戶，
+國外＝本站於該國登錄簿的託管帳戶），入金託管在信託專戶。每月 5 日發布對帳報告、查核機構簽署上鏈，
+公開於 `/custody`；該頁同時顯示**本頁自己從鏈上事件算出來的**流通量，兩欄並列，看得出報告有沒有對上事實。
+
+**費率**：`/admin` 的「費率設定」可逐一轄區設定交易手續費（bps，上限 5%）與註銷手續費（每噸固定金額），
+未設定者走預設值。兩者單位不同是刻意的——註銷是代辦一次官方移轉與註銷申請，成本按件與按量算，與市價無關。
 
 `KYC_AUTO_APPROVE=1` 時申請直接核准（demo）；`0` 時進管理後台佇列——**這時 `ADMIN_EMAILS` 必須包含你自己登入用的 email**，
 否則申請會卡在沒有人能核准的佇列裡（要走查驗核發那條線同理，`VERIFIER_EMAILS` 也要加）。憑證 PDF 用 `fonts/NotoSansTC-Subset.otf`（Big5 常用字子集），
@@ -208,7 +232,7 @@ cd web && npm run data:reset   # 搬到 data.bak-<時間戳>，不是刪除
 
 備份裡有上傳的身分文件，確認不需要再自行刪除。想把兩個部署的資料分開留著，設 `DATA_DIR` 指到不同資料夾即可。
 
-## 測試（80）
+## 測試（113）
 
 | 檔案 | 涵蓋 |
 |---|---|
@@ -222,6 +246,9 @@ cd web && npm run data:reset   # 搬到 data.bak-<時間戳>，不是刪除
 | `SafeGovernance.t.sol` | 真實 Safe v1.4.1 多簽簽章：移轉後 EOA 無角色；國家 Safe 2-of-3 即時凍結 / 暫停 / 撤換營運，單簽被拒；營運 Safe 不能凍結或給角色；升級與主權變更必須經 Timelock 48h，未到期執行失敗；只有國家 Safe 能提案 |
 | `PasskeyAccount.t.sol` | 以 `vm.signP256` 組出完整 WebAuthn 斷言：relayer 代送購買與註銷、重放、竄改、錯誤金鑰、內部 revert、ERC-1271、factory 決定性 |
 | `Fuzz.t.sol`（新增） | 隨機化屬性測試（`bound()`）：掛單成交金額/手續費/庫存正確、minFill 強制、池 backing 恆等、FIFO 先進先出順序、KYC 轉帳規則、註銷不可超過核發量、WebAuthn 邊界（篡改/重放）攻擊被拒 |
+| `Jurisdiction.t.sol`（新增） | 國別屬性：國內專案預設 TW、國外專案只有主權角色能登錄、憑證載明核發國、國外額度的增量抵換與環評承諾被鏈上擋下、關閉轄區後不能上架但仍可轉讓、池化拒收國外額度 |
+| `Reserve.t.sol`（新增） | 託管揭露：只有報表金鑰能發布、只有查核機構能簽署、簽署後不可再改、更正以新報告發布且舊報告保留、空報告被拒 |
+| `FeeSchedule.t.sol`（新增） | 各國費率：預設值與專屬費率、清除後回到預設、交易費上限 5%、註銷費按每噸固定金額收取（預設 0）、只有 PRICING_ROLE 能調、只有額度合約能收費 |
 | `Invariant.t.sol`（新增） | Handler-based invariant：256 runs × 500 calls（存入/贖回/指定贖回/贖回註銷隨機序列）驗證池子 1:1 backing、CCT 供給量、資產守恆、`ghostRetiredKg` 追蹤與鏈上註銷量一致，全程 0 revert |
 
 ## 自我審查（Self-review / Audit Prep）

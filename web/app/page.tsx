@@ -80,12 +80,26 @@ export default function Home() {
             額度由查驗機構在鏈上簽章核發，每一單位都能回溯到它的專案、監測期間與那一筆簽章；
             買方註銷之後拿到一張不能轉讓的憑證，那一公噸從此退出流通。
           </p>
+          <p className="text-sm leading-7 text-ink-200">
+            本站是<b>國際運行平台</b>，同時交易多個轄區核發的減量額度。每一批額度都標明<b>核發國</b>——
+            它的法律效力、可用途徑、移轉與註銷程序，一律依<b>核發國</b>的法規與該國官方登錄簿辦理，
+            不會因為在本站交易而改變。本站與用戶之間的服務關係則依中華民國法律，這是<b>兩個不同的層次</b>。
+          </p>
+          <p className="text-sm leading-7 text-ink-200">
+            本站以<b>臺灣本地的減量專案為主場</b>，同時納入日本、韓國、泰國、
+            印尼、澳洲等已有國家級自願減量法規與官方登錄簿的轄區——但國內與國外額度<b>在臺灣申報</b>時能做的事情
+            完全不同，這件事我們寫在每一筆掛單上，而不是藏在條款裡。
+            碳權託管於各國政府的官方登錄簿帳戶、入金託管於信託專戶，
+            每月 5 日<Link className="text-tide underline" href="/custody">公開對帳</Link>。
+          </p>
           <div className="flex flex-wrap gap-2 pt-1 text-xs">
             <a href="#project" className="rounded-full border border-ink-500 px-3 py-1 text-ink-300 transition hover:border-tide/60 hover:text-ink-50">什麼是自願減量專案</a>
             <a href="#paris" className="rounded-full border border-ink-500 px-3 py-1 text-ink-300 transition hover:border-tide/60 hover:text-ink-50">巴黎協定第六條</a>
             <a href="#iso" className="rounded-full border border-ink-500 px-3 py-1 text-ink-300 transition hover:border-tide/60 hover:text-ink-50">ISO 14064</a>
             <a href="#lifecycle" className="rounded-full border border-ink-500 px-3 py-1 text-ink-300 transition hover:border-tide/60 hover:text-ink-50">專案生命週期</a>
             <a href="#use" className="rounded-full border border-ink-500 px-3 py-1 text-ink-300 transition hover:border-tide/60 hover:text-ink-50">能用在哪</a>
+            <a href="#local" className="rounded-full border border-ink-500 px-3 py-1 text-ink-300 transition hover:border-tide/60 hover:text-ink-50">為什麼優先買在地</a>
+            <a href="#markets" className="rounded-full border border-ink-500 px-3 py-1 text-ink-300 transition hover:border-tide/60 hover:text-ink-50">亞太各國額度</a>
           </div>
         </div>
         <div className="space-y-4">
@@ -132,7 +146,7 @@ export default function Home() {
               <li><b>1. 登入</b> — Apple / Google 帳號只用來建立 session。</li>
               <li><b>2. 建立帳戶</b> — 用裝置的 passkey（FaceID / TouchID）當鏈上帳戶的唯一金鑰，沒有助記詞、沒有第三方託管。</li>
               <li><b>3. 身分驗證</b> — 以工商憑證 / 自然人憑證綁定帳戶地址（Phase 0 為模擬）。</li>
-              <li><b>4. 購買並註銷</b> — 從企業掛單或流動性池買入，註銷後取得憑證。</li>
+              <li><b>4. 買進並註銷</b> — 從掛單簿挑專案，或用市價即時成交；要用掉時註銷並取得憑證。</li>
             </ol>
             {config && (
               <p className="mt-3 text-xs text-ink-300">鏈 ID {config.deployment.chainId} · RPC {config.rpcUrl}</p>
@@ -361,10 +375,154 @@ export default function Home() {
         </p>
       </Section>
 
+      {/* ── 在地減碳與企業社會責任 ─────────────────────────────────── */}
+      <Section id="local" eyebrow="為什麼優先買在地" title="同樣一公噸，買在地的那一公噸不一樣">
+        <p>
+          一公噸二氧化碳在大氣裡不分國籍，所以「減在哪裡都一樣」的說法在物理上站得住腳。
+          但你買的不只是那一公噸——你買的還有<b>能不能拿來申報</b>、<b>減量發生在誰的土地上</b>、
+          以及<b>這筆錢流到哪裡</b>。這三件事，在地與國外差很多。
+        </p>
+        <p>
+          先說清楚適用範圍：下面這張對照表講的是<b>在臺灣申報</b>時的差別，依據是中華民國的法規。
+          若您在其他轄區申報或使用，適用的是<b>該額度核發國以及您申報地</b>的法規，本站照實標示核發國，
+          不代為判斷、也不提供法律意見。
+        </p>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="rounded-[--radius-card] border border-tide/40 bg-tide/5 p-4">
+            <h3 className="text-sm font-semibold text-ink-50">國內額度（臺灣 TCER）</h3>
+            <ul className="mt-2 space-y-1.5 text-sm leading-6 text-ink-200">
+              <li>· 扣除碳費排放量，上限<b>收費排放量的 10%</b></li>
+              <li>· 自願減量專案額度的扣除比率是 <b>1.2</b>——買 1 公噸抵 1.2 公噸</li>
+              <li>· 可用於<b>環評增量抵換</b>與環評承諾事項</li>
+              <li>· 可在本站合法交易（交易辦法第 4 條的適用對象）</li>
+            </ul>
+          </div>
+          <div className="rounded-[--radius-card] border border-ink-500 bg-ink-700 p-4">
+            <h3 className="text-sm font-semibold text-ink-50">國外額度</h3>
+            <ul className="mt-2 space-y-1.5 text-sm leading-6 text-ink-200">
+              <li>· 扣除碳費上限只有<b>收費排放量的 5%</b>，而且<b>沒有</b>加成比率</li>
+              <li>· 須先經<b>中央主管機關認可</b>，認可與否不在本站手上</li>
+              <li>· <b>高碳洩漏風險事業完全不得使用</b>（鋼鐵、水泥等）</li>
+              <li>· <b>不能</b>用於環評增量抵換——本站在鏈上就擋下這個選項</li>
+            </ul>
+          </div>
+        </div>
+        <p className="text-xs text-ink-300">
+          依據：氣候變遷因應法第 26、27 條；碳費收費辦法第 9、10 條；溫室氣體減量額度交易、拍賣及移轉管理辦法第 4 條。
+        </p>
+
+        <Example title="扣件廠的鄰居：同一筆錢，落在誰身上">
+          <p>
+            假設一家岡山的螺絲廠今年要處理 1,000 公噸的缺口。它有兩個選擇：
+            用每噸 320 元買泰國稻殼生質鍋爐的額度，或用每噸 800 元買隔壁鄉鎮那座
+            熱處理爐燃料轉換專案的額度。單看價格，泰國的便宜六成。
+          </p>
+          <p>
+            但把三件事算進去，答案會翻過來：第一，如果它是碳費對象，國內額度的扣除比率是 1.2、
+            上限 10%，國外額度沒有加成、上限 5%，<b>能扣的量差了一倍以上</b>；
+            第二，如果它明年要擴廠、需要環評增量抵換，<b>國外額度一噸都不能用</b>；
+            第三，那座燃料轉換專案在同一條產業聚落裡——重油改天然氣不只少了二氧化碳，
+            <b>也少了硫氧化物與粒狀污染物</b>，受益的是同一批員工與他們的家人。
+          </p>
+          <p className="text-ink-300">
+            這不是說國外額度沒有用。集團在東南亞有廠、要處理當地營運的排放，
+            或者自願性碳中和宣告需要量體，國外額度都是合理選擇。
+            重點是<b>先看用途，再看價格</b>——反過來的話，買到的很可能是一批用不上的便宜額度。
+          </p>
+        </Example>
+
+        <h3 className="pt-2 font-display text-base font-semibold text-ink-50">企業社會責任：可以被查證的那一種</h3>
+        <p>
+          ESG 報告裡最難寫的一段，往往不是「我們減了多少」，而是「憑什麼相信」。
+          在本站買進與註銷的每一筆，都留下三樣東西可以貼進報告：
+          <b>註銷憑證</b>（載明受益人、用途、數量、核發國）、
+          <b>公開的鏈上紀錄</b>（任何人都能自己重算），以及
+          <b>官方註銷編號與可對外宣告日</b>（主管機關於註銷次日起五個工作日內公開，公開後才可以對外宣告）。
+        </p>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {[
+            ["在地供應鏈", "買同一個聚落的減量專案，等於把錢投進自己供應鏈的鍋爐與製程改善。下一輪要查供應商碳含量時，受益的還是自己。"],
+            ["空污共效益", "本地的燃料轉換、廢熱回收專案，減碳的同時也減硫氧化物與粒狀物。這部分寫進 CSR 報告是實話，而且查得到。"],
+            ["對外宣告有依據", "憑證上有官方註銷編號與可宣告日；沒有完成官方程序之前，本站會照實標示「辦理中」，不讓你提早宣告。"],
+          ].map(([t, d]) => (
+            <div key={t} className="rounded-[--radius-card] border border-ink-500 bg-ink-700 p-4">
+              <h4 className="text-sm font-semibold text-ink-50">{t}</h4>
+              <p className="mt-1 text-sm leading-6 text-ink-300">{d}</p>
+            </div>
+          ))}
+        </div>
+        <p className="text-ink-300">
+          反過來說，有幾句話不要寫進報告：買了但還沒註銷的額度<b>不能</b>宣稱已減量；
+          官方尚未公開之前<b>不能</b>對外宣告；自然人持有的額度<b>不能</b>用於任何法定申報。
+          這些限制本站都會在介面上直接擋下或標示——擋下來比事後更正便宜太多。
+        </p>
+      </Section>
+
+      {/* ── 亞太各國額度 ─────────────────────────────────────────── */}
+      <Section id="markets" eyebrow="納入哪些國家" title="亞太各國的減量額度，同一本掛單簿">
+        <p>
+          本站納入的是<b>已經有國家級自願減量法規與官方登錄簿</b>的轄區——不是任何一個自稱碳權的東西都收。
+          判準有三個：有法源、有政府營運（或政府指定）的登錄簿、有可查證的核發紀錄。
+          交易所平台本身（例如某些交易所的自願碳市場）不算登錄簿。
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-sm">
+            <thead className="text-left text-xs uppercase tracking-wider text-ink-300">
+              <tr className="border-b border-ink-500">
+                <th className="py-2 pr-3 font-medium">轄區</th>
+                <th className="py-2 pr-3 font-medium">機制</th>
+                <th className="py-2 pr-3 font-medium">主管機關 / 登錄簿</th>
+                <th className="py-2 font-medium">本站狀態</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-ink-500">
+              {[
+                ["🇹🇼 臺灣", "TCER", "環境部／溫室氣體減量額度管理系統", "主場．四種用途皆可"],
+                ["🇯🇵 日本", "J-Credit", "經產・環境・農水三省／Ｊ－クレジット登録簿", "開放交易"],
+                ["🇰🇷 韓國", "KOC", "環境部 GIR／抵換登錄系統", "開放交易"],
+                ["🇹🇭 泰國", "T-VER", "TGO／T-VER Registry", "開放交易"],
+                ["🇮🇩 印尼", "SPE-GRK", "環境部／SRN PPI（與 IDXCarbon 連線）", "開放交易"],
+                ["🇦🇺 澳洲", "ACCU", "Clean Energy Regulator／ANREU", "開放交易"],
+                ["🇨🇳 中國", "CCER", "生態環境部／全國自願減排註冊登記系統", "暫不開放：跨境使用規定尚未訂定"],
+                ["🇮🇳 印度", "CCC", "Ministry of Power・BEE／Indian Carbon Market", "暫不開放：國際移轉須中央核准"],
+                ["🇸🇬 新加坡", "ICC（買方框架）", "NCCS・NEA（無自建登錄簿）", "不核發：碳稅抵換上限 5%，須第 6 條相應調整"],
+              ].map(([c, sc, reg, st]) => (
+                <tr key={c} className="text-ink-200">
+                  <td className="py-2 pr-3 whitespace-nowrap text-ink-50">{c}</td>
+                  <td className="py-2 pr-3 whitespace-nowrap">{sc}</td>
+                  <td className="py-2 pr-3">{reg}</td>
+                  <td className={`py-2 ${st.startsWith("暫不") || st.startsWith("不核發") ? "text-warn" : "text-ink-200"}`}>{st}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p>
+          「暫不開放」不是技術限制，是那些國家還沒開門：中國的《溫室氣體自願減排交易管理辦法》第 29 條
+          明定跨境交易與使用的規定「另行制定」，印度 CCTS 的國際移轉須經中央政府核准。
+          規定一旦公布，本站可以由主權角色在鏈上開啟該轄區，不必改合約。
+        </p>
+        <p>
+          反過來也一樣：本站<b>只開放各該核發國法規已經容許跨境交易或使用的轄區</b>，
+          並且會依各國法規、政策或登錄簿規則的變動，隨時停止某一轄區的上架與新掛單並公告。
+          <b>已經持有的額度不受影響</b>——仍然可以持有、在本站出售，或依該國登錄簿規則辦理註銷，
+          但流動性與可用途徑可能因此改變。
+        </p>
+        <p className="text-ink-300">
+          還有一件跨境交易繞不開的事：<b>相應調整</b>。依巴黎協定第 6.2 條，
+          地主國授權減量成果作國際用途時，必須在自己的排放清冊上作對應調整，否則同一公噸會被算兩次。
+          新加坡的碳稅抵換就強制要求這一點，並且只收已簽實施協定的夥伴國額度。
+          臺灣現行法規對國外額度的認可條件尚未公告細節，所以本站的作法是：
+          <b>照實標示核發國與機制，不對認可結果做任何承諾</b>。
+        </p>
+      </Section>
+
       {/* ── 額度用途與邊界 ─────────────────────────────────────────── */}
       <Section id="use" eyebrow="能用在哪、不能用在哪" title="買到額度之後，實際能拿來做什麼">
         <p>
-          氣候變遷因應法第 26 條列出減量額度的法定用途，常見的是這三種：
+          以下是<b>在臺灣</b>的法定用途，依氣候變遷因應法第 26 條，常見的是這三種。
+          其他轄區核發的額度在該國或在第三地能做什麼，依各該轄區的法規辦理，不因為在本站交易而改變。
         </p>
         <div className="space-y-3">
           {[
@@ -421,9 +579,15 @@ export default function Home() {
           ))}
         </div>
         <p>
-          額度從核發到用掉，<b>全程登錄在專案方自己於環境部開立的額度帳戶裡</b>，本平台不持有任何額度。
-          因為法規規定<b>每一單位額度在官方登錄簿只能過戶一次</b>——如果每次買賣都去辦一次，第二手就沒得賣了。
+          額度從核發到用掉，<b>全程存放在核發國政府的官方登錄簿帳戶裡</b>——國內額度在專案方於環境部
+          「溫室氣體減量額度管理系統」開立的額度帳戶，國外額度在本站於該國登錄簿開立的託管帳戶。
+          本平台自己的錢包裡沒有任何額度，鏈上跑的是對那些託管額度的請求權；
+          兩邊對不對得起來，每月 5 日在<Link className="text-tide underline" href="/custody">託管揭露</Link>公開，
+          由查核機構簽署後上鏈。
+          國內額度還有一層：臺灣的法規規定<b>每一單位額度在官方登錄簿只能過戶一次</b>——如果每次買賣都去辦一次，第二手就沒得賣了。
           所以那唯一一次過戶留到最後：<b>有人真的要用掉的時候，才從專案方直接過戶給他</b>，中間轉了幾手都不算。
+          國外額度沒有這一段，它始終留在本站於核發國登錄簿的託管帳戶內，鏈上易主不觸動該帳戶；
+          要用掉的時候，依<b>該核發國登錄簿的規則</b>辦理註銷。
         </p>
         <Notice kind="info">
           <b>如果你是個人，有一件事要先知道：</b>環境部的額度帳戶只開給公司、行號、工廠等「事業」，

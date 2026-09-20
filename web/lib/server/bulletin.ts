@@ -1,6 +1,8 @@
 import "server-only";
 import { parseAbiItem, type Address } from "viem";
 import { deployment, publicClient } from "./chain";
+import { registryAbi } from "@/lib/abis";
+import { countryCode } from "@/lib/deployment";
 import { tcerSerial } from "../tcer";
 
 /// 公告欄。
@@ -45,6 +47,8 @@ export type Announcement = {
   serial?: string; // TCER 格式額度編碼
   txHash: string;
   blockNumber: number;
+  /// 核發國（ISO 3166-1 alpha-2）。公告不標國別，讀者就分不出這筆額度在臺灣能不能用。
+  country?: string;
   /// 註銷專用：公開日 + 5 個工作日，之後才可以對外宣告（第 27 條）
   claimableFrom?: number;
 };
@@ -116,11 +120,29 @@ export async function bulletin(): Promise<Bulletin> {
     orderBatch.set(Number(l.args.orderId), Number(l.args.batchId));
   }
 
+  // batchId → country：公告每一列都要標核發國
+  const batchProject = new Map<number, number>();
+  for (const l of issued) batchProject.set(Number(l.args.batchId), Number(l.args.projectId));
+  const countryOfProject = new Map(
+    await Promise.all(
+      [...new Set(batchProject.values())].map((pid) =>
+        publicClient
+          .readContract({ address: d.carbonRegistry, abi: registryAbi, functionName: "projectOf", args: [BigInt(pid)] })
+          .then((p) => [pid, countryCode(p.country)] as const),
+      ),
+    ),
+  );
+  const countryOfBatch = (batchId?: number) => {
+    if (batchId == null) return undefined;
+    const pid = batchProject.get(batchId);
+    return pid == null ? undefined : countryOfProject.get(pid);
+  };
+
   const rows: Announcement[] = [];
   const seq = { issue: 0, list: 0, transfer: 0, retire: 0 };
   const push = (a: Omit<Announcement, "no">) => {
     seq[a.kind] += 1;
-    rows.push({ ...a, no: no(a.kind, a.ts, seq[a.kind]) });
+    rows.push({ ...a, country: a.country ?? countryOfBatch(a.batchId), no: no(a.kind, a.ts, seq[a.kind]) });
   };
 
   for (const l of issued) {

@@ -48,6 +48,7 @@ export const webAuthnAuthType = {
 
 export const erc20Abi = [
   { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "totalSupply", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "approve", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [{ type: "bool" }] },
   { type: "function", name: "mint", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [] },
 ] as const;
@@ -85,17 +86,75 @@ export const creditAbi = [
   },
 ] as const;
 
+const jurisdictionType = {
+  type: "tuple", components: [
+    { name: "enabled", type: "bool" }, { name: "domestic", type: "bool" }, { name: "purposeMask", type: "uint8" },
+    { name: "name", type: "string" }, { name: "scheme", type: "string" }, { name: "registryName", type: "string" },
+    { name: "note", type: "string" } ],
+} as const;
+
 export const registryAbi = [
   {
     type: "function", name: "projectOf", stateMutability: "view", inputs: [{ type: "uint256" }],
     outputs: [{ type: "tuple", components: [
       { name: "owner", type: "address" }, { name: "name", type: "string" }, { name: "methodology", type: "string" },
-      { name: "location", type: "string" }, { name: "metadataURI", type: "string" }, { name: "active", type: "bool" } ] }],
+      { name: "location", type: "string" }, { name: "metadataURI", type: "string" }, { name: "active", type: "bool" },
+      { name: "country", type: "bytes2" }, { name: "scheme", type: "string" } ] }],
+  },
+  { type: "function", name: "countries", stateMutability: "view", inputs: [], outputs: [{ type: "bytes2[]" }] },
+  { type: "function", name: "jurisdictionOf", stateMutability: "view", inputs: [{ type: "bytes2" }], outputs: [jurisdictionType] },
+  {
+    type: "function", name: "jurisdictionOfProject", stateMutability: "view", inputs: [{ type: "uint256" }],
+    outputs: [{ type: "bytes2" }, jurisdictionType],
+  },
+] as const;
+
+/// 各國費率表
+export const feeScheduleAbi = [
+  { type: "function", name: "defaultTradeBps", stateMutability: "view", inputs: [], outputs: [{ type: "uint16" }] },
+  { type: "function", name: "defaultRetireFeePerTonne", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+  {
+    type: "function", name: "countryFeeOf", stateMutability: "view", inputs: [{ type: "bytes2" }],
+    outputs: [{ type: "tuple", components: [
+      { name: "set", type: "bool" }, { name: "tradeBps", type: "uint16" }, { name: "retireFeePerTonne", type: "uint256" } ] }],
+  },
+  { type: "function", name: "setDefaults", stateMutability: "nonpayable", inputs: [{ type: "uint16" }, { type: "uint256" }], outputs: [] },
+  {
+    type: "function", name: "setCountryFee", stateMutability: "nonpayable",
+    inputs: [{ type: "bytes2" }, { type: "bool" }, { type: "uint16" }, { type: "uint256" }], outputs: [],
+  },
+] as const;
+
+/// 託管與準備金揭露
+export const reserveAbi = [
+  { type: "function", name: "latestReportId", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "periods", stateMutability: "view", inputs: [], outputs: [{ type: "uint32[]" }] },
+  { type: "function", name: "reportOfPeriod", stateMutability: "view", inputs: [{ type: "uint32" }], outputs: [{ type: "uint256" }] },
+  {
+    type: "function", name: "reportOf", stateMutability: "view", inputs: [{ type: "uint256" }],
+    outputs: [
+      { name: "report", type: "tuple", components: [
+        { name: "period", type: "uint32" }, { name: "asOf", type: "uint64" }, { name: "publishedAt", type: "uint64" },
+        { name: "attestedAt", type: "uint64" }, { name: "publisher", type: "address" }, { name: "auditor", type: "address" },
+        { name: "auditorName", type: "string" }, { name: "status", type: "uint8" }, { name: "note", type: "string" },
+        { name: "documentHash", type: "bytes32" } ] },
+      { name: "credits", type: "tuple[]", components: [
+        { name: "country", type: "bytes2" }, { name: "custodian", type: "string" }, { name: "accountRef", type: "string" },
+        { name: "heldKg", type: "uint256" }, { name: "onchainKg", type: "uint256" }, { name: "statementHash", type: "bytes32" } ] },
+      { name: "cash", type: "tuple", components: [
+        { name: "trustee", type: "string" }, { name: "accountRef", type: "string" }, { name: "balance", type: "uint256" },
+        { name: "tokenSupply", type: "uint256" }, { name: "statementHash", type: "bytes32" } ] },
+    ],
   },
 ] as const;
 
 export const poolAbi = [
   { type: "function", name: "pooledKg", stateMutability: "view", inputs: [{ type: "uint256" }], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "deposit", stateMutability: "nonpayable", inputs: [{ type: "uint256" }, { type: "uint256" }], outputs: [] },
+  {
+    type: "function", name: "redeem", stateMutability: "nonpayable", inputs: [{ type: "uint256" }],
+    outputs: [{ type: "uint256[]" }, { type: "uint256[]" }],
+  },
   {
     type: "function", name: "redeemAndRetire", stateMutability: "nonpayable",
     inputs: [{ type: "uint256" }, { type: "bytes32" }, { type: "string" }, { type: "uint8" }, { type: "string" }],
@@ -135,7 +194,8 @@ export const certificateAbi = [
       { name: "beneficiary", type: "string" }, { name: "purpose", type: "uint8" }, { name: "memo", type: "string" },
       { name: "retiredBy", type: "address" }, { name: "retiredAt", type: "uint64" }, { name: "documentHash", type: "bytes32" },
       // 官方註銷回填：編號與主管機關公開日
-      { name: "officialNo", type: "string" }, { name: "officialAnnouncedAt", type: "uint64" } ] }],
+      { name: "officialNo", type: "string" }, { name: "officialAnnouncedAt", type: "uint64" },
+      { name: "country", type: "bytes2" }, { name: "scheme", type: "string" } ] }],
   },
   {
     type: "event", name: "Retired",
@@ -143,7 +203,7 @@ export const certificateAbi = [
       { name: "certId", type: "uint256", indexed: true }, { name: "batchId", type: "uint256", indexed: true },
       { name: "retiredBy", type: "address", indexed: true }, { name: "owner", type: "address", indexed: false },
       { name: "amountKg", type: "uint256", indexed: false }, { name: "beneficiaryHash", type: "bytes32", indexed: false },
-      { name: "purpose", type: "uint8", indexed: false } ],
+      { name: "purpose", type: "uint8", indexed: false }, { name: "country", type: "bytes2", indexed: false } ],
   },
 ] as const;
 

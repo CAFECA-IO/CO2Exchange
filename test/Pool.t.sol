@@ -36,14 +36,24 @@ contract PoolTest is Fixture {
         pool.deposit(oldBatch, 1000);
     }
 
-    function test_individualCannotDeposit() public {
+    /// 自然人也能存入：介面上的「市價賣出」就是 deposit + 換回結算幣。
+    /// 自然人本來就不能註銷，再砍掉一條出場路徑沒有道理。
+    function test_individualCanDeposit() public {
         vm.prank(companyA);
         credit.safeTransferFrom(companyA, alice, batch1, 1000, "");
         vm.startPrank(alice);
         credit.setApprovalForAll(address(pool), true);
-        vm.expectRevert(abi.encodeWithSelector(CarbonPool.NotCorporate.selector, alice));
         pool.deposit(batch1, 1000);
         vm.stopPrank();
+        assertEq(cct.balanceOf(alice), 1000 * 1e15, unicode"存入後應取得等量 CCT");
+    }
+
+    /// 未通過身分驗證的帳戶不能存入。
+    function test_unverifiedCannotDeposit() public {
+        address stranger = address(0xBEEF);
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(CarbonPool.NotActiveAccount.selector, stranger));
+        pool.deposit(batch1, 1000);
     }
 
     function test_redeem_isFifoAcrossBatches() public {

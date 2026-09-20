@@ -1,6 +1,7 @@
 import "server-only";
 import { parseAbiItem, type Address } from "viem";
 import { creditAbi, erc20Abi, registryAbi } from "@/lib/abis";
+import { countryCode } from "@/lib/deployment";
 import { deployment, publicClient } from "./chain";
 import { readTrades } from "./ticker";
 
@@ -42,7 +43,7 @@ export type Movement = {
   txHash: string;
 };
 
-export type Holding = { batchId: number; project: string; vintageYear: number; kg: number };
+export type Holding = { batchId: number; project: string; vintageYear: number; kg: number; country: string; scheme: string };
 
 export type Portfolio = {
   twd: number; // 結算幣餘額（最小單位）
@@ -191,7 +192,10 @@ async function myBatches(account: Address): Promise<Holding[]> {
     if (Number(bal) === 0) continue;
     const b = await publicClient.readContract({ address: d.carbonCredit1155, abi: creditAbi, functionName: "batchOf", args: [BigInt(id)] });
     const p = await publicClient.readContract({ address: d.carbonRegistry, abi: registryAbi, functionName: "projectOf", args: [b.projectId] });
-    out.push({ batchId: id, project: p.name, vintageYear: b.vintageYear, kg: Number(bal) });
+    out.push({
+      batchId: id, project: p.name, vintageYear: b.vintageYear, kg: Number(bal),
+      country: countryCode(p.country), scheme: p.scheme,
+    });
   }
   return out;
 }

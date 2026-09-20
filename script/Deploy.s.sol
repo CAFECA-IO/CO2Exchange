@@ -8,7 +8,10 @@ import {KYCRegistry} from "../src/identity/KYCRegistry.sol";
 import {RetirementCertificate} from "../src/registry/RetirementCertificate.sol";
 import {CarbonCredit1155} from "../src/registry/CarbonCredit1155.sol";
 import {CarbonRegistry} from "../src/registry/CarbonRegistry.sol";
+import {ReserveAttestation} from "../src/registry/ReserveAttestation.sol";
+import {IJurisdictions} from "../src/interfaces/IJurisdictions.sol";
 import {Listing} from "../src/market/Listing.sol";
+import {FeeSchedule} from "../src/market/FeeSchedule.sol";
 import {CarbonCreditToken} from "../src/market/CarbonCreditToken.sol";
 import {CarbonPool} from "../src/market/CarbonPool.sol";
 import {MockTWD} from "../src/mocks/MockTWD.sol";
@@ -65,8 +68,10 @@ contract Deploy is Script {
     RetirementCertificate public cert;
     CarbonCredit1155 public credit;
     CarbonRegistry public registry;
+    ReserveAttestation public reserve;
     MockTWD public twd;
     Listing public listing;
+    FeeSchedule public feeSchedule;
     CarbonCreditToken public cct;
     CarbonPool public pool;
     // v4 模組的三個地址。核心部署不含 v4，維持 address(0)；
@@ -187,9 +192,12 @@ contract Deploy is Script {
         credit =
             new CarbonCredit1155(cfg.sovereign, cfg.sovereign, kyc, cert, "https://co2exchange.example/credit/{id}");
         registry = new CarbonRegistry(cfg.sovereign, cfg.sovereign, kyc, credit);
+        reserve = new ReserveAttestation(cfg.sovereign, cfg.sovereign, cfg.operator);
 
         // ── 市場層（UUPS）──
         twd = new MockTWD(cfg.operator);
+        // 各國費率表：預設交易 1%、註銷手續費 0（Phase 0 不收，數字由管理後台設定）
+        feeSchedule = new FeeSchedule(cfg.sovereign, cfg.sovereign, cfg.operator, twd, cfg.treasury, 100, 0);
         listing = Listing(
             address(
                 new ERC1967Proxy(
@@ -253,6 +261,17 @@ contract Deploy is Script {
         cct.grantRole(cct.POOL_ROLE(), address(pool));
         kyc.grantRole(kyc.IDENTITY_VERIFIER_ROLE(), cfg.identityVerifier);
         registry.approveVerifier(cfg.carbonVerifier);
+        // 費率：管理後台用的調價金鑰，以及讓額度合約有權向使用者收註銷手續費
+        feeSchedule.grantRole(feeSchedule.PRICING_ROLE(), cfg.documentSigner);
+        feeSchedule.grantRole(feeSchedule.COLLECTOR_ROLE(), address(credit));
+        credit.setFeeSchedule(address(feeSchedule));
+        listing.setFeeSchedule(feeSchedule);
+        // 託管揭露：營運端的報表服務金鑰負責每月 5 日發布，查核機構金鑰負責簽署定稿。
+        // 兩把鑰匙分開，否則「自己填、自己查」的揭露沒有意義。
+        reserve.grantRole(reserve.REPORTER_ROLE(), cfg.documentSigner);
+        reserve.grantRole(reserve.AUDITOR_ROLE(), cfg.carbonVerifier);
+        _seedJurisdictions();
+        _seedImportedProjects();
         kyc.addRecoverableToken(address(credit));
         kyc.addRecoverableToken(address(cct));
         kyc.setSystemContract(address(listing), true);
@@ -260,6 +279,72 @@ contract Deploy is Script {
         if (poolManager != address(0)) kyc.setSystemContract(poolManager, true);
         vm.stopBroadcast();
     }
+
+
+    /// @dev 開放的轄區。每一個都對得到那個國家真正存在的機制與登錄簿——
+    ///      不編造國家，也不把「交易平台」當成「國家級登錄簿」（例如香港 Core Climate 是平台，不是登錄簿）。
+    ///
+    ///      國外額度的 purposeMask 一律只有 CarbonFee | VoluntaryNeutrality（0x03）：
+    ///      氣候變遷因應法第 27 條把國外減量額度限縮到扣除碳費排放量與抵銷超額量，
+    ///      增量抵換（第 24 條）與環評承諾事項都只認國內額度。
+    ///      跨境使用規定尚未訂定的轄區（中國、印度）則 enabled = false：
+    ///      可以被看見、被說明，但不能上架——這不是技術限制，是那些國家還沒開門。
+    function _seedJurisdictions() internal {
+        uint8 FOREIGN = 0x03; // CarbonFee | VoluntaryNeutrality
+
+        registry.setJurisdiction("JP", IJurisdictions.Jurisdiction({
+            enabled: true, domestic: false, purposeMask: FOREIGN,
+            name: unicode"日本", scheme: "J-Credit",
+            registryName: unicode"Ｊ－クレジット登録簿",
+            note: unicode"經濟產業省、環境省、農林水產省三省共管；另有 JCM 二國間信用制度（巴黎協定第 6.2 條）"
+        }));
+        registry.setJurisdiction("KR", IJurisdictions.Jurisdiction({
+            enabled: true, domestic: false, purposeMask: FOREIGN,
+            name: unicode"韓國", scheme: "KOC",
+            registryName: unicode"溫室氣體綜合資訊中心（GIR）抵換登錄系統",
+            note: unicode"K-ETS 抵換上限為應繳配額 10%；未結轉者於發行年度結束後 8 個月失效"
+        }));
+        registry.setJurisdiction("TH", IJurisdictions.Jurisdiction({
+            enabled: true, domestic: false, purposeMask: FOREIGN,
+            name: unicode"泰國", scheme: "T-VER",
+            registryName: unicode"TGO T-VER Registry",
+            note: unicode"泰國溫室氣體管理組織（TGO）核發，分 Standard 與 Premium 兩軌；已與新加坡簽第 6 條實施協定"
+        }));
+        registry.setJurisdiction("ID", IJurisdictions.Jurisdiction({
+            enabled: true, domestic: false, purposeMask: FOREIGN,
+            name: unicode"印尼", scheme: "SPE-GRK",
+            registryName: "SRN PPI",
+            note: unicode"國家登錄簿 SRN PPI 與 IDXCarbon 交易所連線；法源已由 Perpres 110/2025 取代 98/2021"
+        }));
+        registry.setJurisdiction("AU", IJurisdictions.Jurisdiction({
+            enabled: true, domestic: false, purposeMask: FOREIGN,
+            name: unicode"澳洲", scheme: "ACCU",
+            registryName: "ANREU",
+            note: unicode"Clean Energy Regulator 核發，登錄簿 ANREU 已遷至 Unit and Certificate Registry；自然人亦可開戶"
+        }));
+        registry.setJurisdiction("CN", IJurisdictions.Jurisdiction({
+            enabled: false, domestic: false, purposeMask: FOREIGN,
+            name: unicode"中國", scheme: "CCER",
+            registryName: unicode"全國溫室氣體自願減排註冊登記系統",
+            note: unicode"生態環境部部令第 31 號；辦法第 29 條明定跨境交易與使用之規定「另行制定」，尚未開放，故本站暫不開放上架"
+        }));
+        registry.setJurisdiction("IN", IJurisdictions.Jurisdiction({
+            enabled: false, domestic: false, purposeMask: FOREIGN,
+            name: unicode"印度", scheme: "CCC",
+            registryName: "Indian Carbon Market Registry",
+            note: unicode"CCTS 2023（BEE 主管）；國際移轉須經 National Steering Committee 指引與中央政府核准，尚未開放"
+        }));
+        registry.setJurisdiction("SG", IJurisdictions.Jurisdiction({
+            enabled: false, domestic: false, purposeMask: 0,
+            name: unicode"新加坡", scheme: "ICC",
+            registryName: unicode"（無自建登錄簿，於 CCP 登錄簿退役）",
+            note: unicode"新加坡不核發國家級額度，其國際碳權制度是買方端：抵碳稅上限 5%、須符合巴黎協定第 6 條並由地主國作相應調整"
+        }));
+    }
+
+    /// @dev 國外額度的專案登錄需要主權角色，而主權角色在 _handover 之後就不在部署者手上了。
+    ///      所以要在這個時點掛進來。核心部署不引入任何國外額度，demo 腳本才覆寫。
+    function _seedImportedProjects() internal virtual {}
 
     /// @dev 目前 OPERATOR 的佈線只有 v4 hook，核心部署沒有東西要做。
     function _wireAsOperator() internal virtual {}
@@ -274,7 +359,7 @@ contract Deploy is Script {
         bytes32 SOV = keccak256("SOVEREIGN_ROLE");
         bytes32 OP = keccak256("OPERATOR_ROLE");
         address[7] memory withOperator =
-            [address(kyc), address(cert), address(listing), address(pool), hook, address(0), address(0)];
+            [address(kyc), address(cert), address(listing), address(pool), hook, address(reserve), address(feeSchedule)];
         address[2] memory sovereignOnly = [address(credit), address(registry)];
 
         vm.startBroadcast(cfg.pk);
@@ -337,6 +422,8 @@ contract Deploy is Script {
         vm.serializeAddress(j, "retirementCertificate", address(cert));
         vm.serializeAddress(j, "carbonCredit1155", address(credit));
         vm.serializeAddress(j, "carbonRegistry", address(registry));
+        vm.serializeAddress(j, "reserveAttestation", address(reserve));
+        vm.serializeAddress(j, "feeSchedule", address(feeSchedule));
         vm.serializeAddress(j, "settlementToken", address(twd));
         vm.serializeAddress(j, "listing", address(listing));
         vm.serializeAddress(j, "cct", address(cct));

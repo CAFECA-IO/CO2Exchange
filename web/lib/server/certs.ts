@@ -4,7 +4,7 @@ import { certificateAbi, creditAbi, registryAbi } from "@/lib/abis";
 import { deployment, publicClient } from "./chain";
 import type { CertData } from "./certpdf";
 
-const retiredEvent = parseAbiItem("event Retired(uint256 indexed certId, uint256 indexed batchId, address indexed retiredBy, address owner, uint256 amountKg, bytes32 beneficiaryHash, uint8 purpose)");
+const retiredEvent = parseAbiItem("event Retired(uint256 indexed certId, uint256 indexed batchId, address indexed retiredBy, address owner, uint256 amountKg, bytes32 beneficiaryHash, uint8 purpose, bytes2 country)");
 
 export async function retiredLogs() {
   return publicClient.getLogs({ address: deployment().retirementCertificate, event: retiredEvent, fromBlock: 0n });

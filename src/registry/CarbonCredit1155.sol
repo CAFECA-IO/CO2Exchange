@@ -5,8 +5,13 @@ import {ERC1155} from "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {IKYCRegistry} from "../interfaces/IKYCRegistry.sol";
+import {IJurisdictions} from "../interfaces/IJurisdictions.sol";
 import {IRecoverable} from "../interfaces/IRecoverable.sol";
 import {RetirementCertificate} from "./RetirementCertificate.sol";
+
+interface IFeeSchedule {
+    function collectRetireFee(address payer, bytes2 country, uint256 amountKg) external returns (uint256);
+}
 
 /// @title CarbonCredit1155
 /// @notice 減量額度本體（ERC-1155，不可升級）。每個 tokenId 是一個核發批次（專案 + 監測期間）。
@@ -40,6 +45,10 @@ contract CarbonCredit1155 is ERC1155, AccessControl, IRecoverable {
     IKYCRegistry public immutable kyc;
     RetirementCertificate public immutable certificate;
     address public registry; // CarbonRegistry，一次性設定
+    /// @dev 各國費率表。為 0 時不收註銷手續費（Phase 0 預設如此）。
+    ///      本合約不可升級，所以費率邏輯放在外部合約，由主權角色換掉；
+    ///      額度本身的規則留在這裡，費率那種會變的東西不該綁死在不可升級的合約裡。
+    address public feeSchedule;
 
     uint256 public nextBatchId = 1;
     mapping(uint256 => Batch) private _batches;
@@ -57,6 +66,7 @@ contract CarbonCredit1155 is ERC1155, AccessControl, IRecoverable {
         uint256 certId
     );
     event RegistrySet(address indexed registry);
+    event FeeScheduleSet(address indexed feeSchedule);
     event BalancesRecovered(address indexed from, address indexed to, uint256 batches);
 
     error OnlyRegistry();
@@ -87,6 +97,11 @@ contract CarbonCredit1155 is ERC1155, AccessControl, IRecoverable {
         if (registry_ == address(0)) revert ZeroAddress();
         registry = registry_;
         emit RegistrySet(registry_);
+    }
+
+    function setFeeSchedule(address feeSchedule_) external onlyRole(SOVEREIGN_ROLE) {
+        feeSchedule = feeSchedule_;
+        emit FeeScheduleSet(feeSchedule_);
     }
 
     function setBatchFrozen(uint256 batchId, bool frozen) external onlyRole(SOVEREIGN_ROLE) {
@@ -129,19 +144,32 @@ contract CarbonCredit1155 is ERC1155, AccessControl, IRecoverable {
         if (b.issuedKg == 0) revert UnknownBatch(r.batchId);
         if (b.frozen) revert BatchIsFrozen(r.batchId);
         kyc.checkRetire(r.certificateTo);
+        // 用途 × 轄區：國外額度不能拿來做增量抵換或環評承諾（氣候變遷因應法第 27 條）。
+        // 擋在這裡而不是只在介面提示——一張主張了不合法用途的憑證，比沒有憑證更糟。
+        IJurisdictions(registry).checkRetirePurpose(b.projectId, uint8(r.purpose));
+
+        // 註銷手續費：依核發國費率，向**憑證收件人**收取（池化路徑的呼叫者是池合約，它沒有錢，
+        // 而且拿到憑證的人才是這次代辦服務的受益人）。費率為 0 就什麼都不會發生。
+        if (feeSchedule != address(0)) {
+            (bytes2 country,) = IJurisdictions(registry).jurisdictionOfProject(b.projectId);
+            IFeeSchedule(feeSchedule).collectRetireFee(r.certificateTo, country, r.amountKg);
+        }
 
         _burn(r.holder, r.batchId, r.amountKg);
         b.retiredKg += r.amountKg;
 
-        certId = certificate.mint(r.certificateTo, _toCertificate(r));
+        certId = certificate.mint(r.certificateTo, _toCertificate(r, b.projectId));
         emit CreditRetired(r.batchId, r.holder, r.certificateTo, r.amountKg, certId);
     }
 
-    function _toCertificate(RetireRequest calldata r)
+    function _toCertificate(RetireRequest calldata r, uint256 projectId)
         internal
         view
         returns (RetirementCertificate.Certificate memory c)
     {
+        (bytes2 country, IJurisdictions.Jurisdiction memory j) = IJurisdictions(registry).jurisdictionOfProject(projectId);
+        c.country = country;
+        c.scheme = j.scheme;
         c.batchId = r.batchId;
         c.amountKg = r.amountKg;
         c.beneficiaryHash = r.beneficiaryHash;

@@ -2,8 +2,8 @@
 import { useEffect, useState } from "react";
 import { useReload } from "@/lib/client/useReload";
 import { useAccount } from "@/components/AccountProvider";
-import { Button, Card, Notice, fmtKg } from "@/components/ui";
-import { PURPOSE_LABEL, TIER_LABEL } from "@/lib/deployment";
+import { Button, Card, Field, Notice, fmtKg, inputCls } from "@/components/ui";
+import { PURPOSE_LABEL, TIER_LABEL, flagOf } from "@/lib/deployment";
 
 type KycReq = { id: string; account: string; tier: number; idNumberMasked: string; name: string; email: string; status: string; reason?: string; txHash?: string; createdAt: string; decidedBy?: string };
 type Cert = { certId: number; batchId: number; amountKg: number; beneficiary: string; purpose: number; retiredAt: number; owner: string; pdfHash: string | null; onchainHash: string | null; anchored: boolean };
@@ -15,7 +15,7 @@ type Gov = {
   timelock: { address: string; delay: number; proposer: boolean; executor: boolean; canceller: boolean; operations: { id: string; target: string; data: string; state: string; readyAt: number; txHash: string }[] };
 };
 
-const tabs = ["KYC 審核", "憑證文件", "治理狀態"] as const;
+const tabs = ["KYC 審核", "憑證文件", "費率設定", "治理狀態"] as const;
 
 /// 定義在元件內部的話，每次 render 都是一個新的元件型別，React 會把整棵子樹卸載重建。
 function Bool({ v }: { v: boolean | null }) {
@@ -24,12 +24,22 @@ function Bool({ v }: { v: boolean | null }) {
     : <span className={v ? "text-tide" : "font-semibold text-down"}>{v ? "✓" : "✗"}</span>;
 }
 
+type Fees = {
+  enabled: boolean;
+  defaultTradeBps: number;
+  defaultRetireFeePerTonne: string;
+  rows: { country: string; name: string; scheme: string; enabled: boolean; domestic: boolean; custom: boolean; tradeBps: number; retireFeePerTonne: string }[];
+};
+
 export default function AdminPage() {
   const { me } = useAccount();
   const [tab, setTab] = useState<(typeof tabs)[number]>("KYC 審核");
   const [kyc, setKyc] = useState<KycReq[]>([]);
   const [certs, setCerts] = useState<Cert[]>([]);
   const [gov, setGov] = useState<Gov | null>(null);
+  const [fees, setFees] = useState<Fees | null>(null);
+  /// 編輯中的費率（尚未送出）。key 為國別代碼，"__default" 為預設值。
+  const [draft, setDraft] = useState<Record<string, { tradeBps: string; retire: string }>>({});
   const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [reason, setReason] = useState<Record<string, string>>({});
@@ -39,11 +49,14 @@ export default function AdminPage() {
     if (!me.isAdmin) return;
     let ignore = false;
     (async () => {
-      const [k, c, g] = await Promise.all([fetch("/api/kyc/queue"), fetch("/api/certificates/all"), fetch("/api/governance")]);
+      const [k, c, g, f] = await Promise.all([
+        fetch("/api/kyc/queue"), fetch("/api/certificates/all"), fetch("/api/governance"), fetch("/api/fees"),
+      ]);
       if (ignore) return;
       if (k.ok) setKyc((await k.json()).requests ?? []);
       if (c.ok) setCerts((await c.json()).certificates ?? []);
       if (g.ok) setGov(await g.json());
+      if (f.ok) setFees(await f.json());
     })();
     return () => { ignore = true; };
   }, [me.isAdmin, reloadKey]);
@@ -115,6 +128,86 @@ export default function AdminPage() {
                 </tr>
               ))}</tbody>
             </table>
+          )}
+        </Card>
+      )}
+
+
+      {tab === "費率設定" && (
+        <Card title="各國交易與註銷手續費">
+          <p className="mb-3 text-xs leading-6 text-ink-300">
+            交易手續費按成交金額的比例（bps，上限 500 = 5%）收取，由賣方承擔；
+            註銷手續費按<b>每公噸固定金額</b>收取，向憑證收件人收取。
+            兩者單位不同是刻意的：註銷是代辦一次官方移轉與註銷申請，成本按件與按量算，跟當天市價無關。
+            沒有勾「專屬費率」的轄區走預設值。
+          </p>
+          {!fees?.enabled ? <p className="text-sm text-ink-300">這個部署沒有費率表合約。</p> : (
+            <>
+              <div className="mb-4 flex flex-wrap items-end gap-3 rounded-[--radius-card] border border-ink-500 bg-ink-800 p-3">
+                <div className="text-sm font-medium text-ink-50">預設費率</div>
+                <Field label="交易（bps）">
+                  <input className={`${inputCls} w-24`} type="number" min="0" max="500"
+                    value={draft.__default?.tradeBps ?? String(fees.defaultTradeBps)}
+                    onChange={(e) => setDraft({ ...draft, __default: { tradeBps: e.target.value, retire: draft.__default?.retire ?? String(Number(fees.defaultRetireFeePerTonne) / 1e6) } })} />
+                </Field>
+                <Field label="註銷（mTWD / 噸）">
+                  <input className={`${inputCls} w-28`} type="number" min="0" step="0.01"
+                    value={draft.__default?.retire ?? String(Number(fees.defaultRetireFeePerTonne) / 1e6)}
+                    onChange={(e) => setDraft({ ...draft, __default: { tradeBps: draft.__default?.tradeBps ?? String(fees.defaultTradeBps), retire: e.target.value } })} />
+                </Field>
+                <Button
+                  onClick={() => act("更新預設費率", () => post("/api/fees", {
+                    defaults: true,
+                    tradeBps: Number(draft.__default?.tradeBps ?? fees.defaultTradeBps),
+                    retireFeePerTonne: Number(draft.__default?.retire ?? Number(fees.defaultRetireFeePerTonne) / 1e6),
+                  }))}
+                  disabled={!!busy}
+                >儲存</Button>
+              </div>
+
+              <table className="w-full text-sm">
+                <thead className="text-left text-ink-300">
+                  <tr>
+                    <th className="py-1">轄區</th><th>機制</th><th>狀態</th>
+                    <th>交易（bps）</th><th>註銷（mTWD / 噸）</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fees.rows.map((r) => {
+                    const dft = draft[r.country] ?? { tradeBps: String(r.tradeBps), retire: String(Number(r.retireFeePerTonne) / 1e6) };
+                    const set = (patch: Partial<typeof dft>) => setDraft({ ...draft, [r.country]: { ...dft, ...patch } });
+                    return (
+                      <tr key={r.country} className="border-t border-ink-500" data-testid="fee-row">
+                        <td className="py-2 whitespace-nowrap">{flagOf(r.country)} {r.country}　{r.name}</td>
+                        <td>{r.scheme}</td>
+                        <td className={r.enabled ? "text-ink-200" : "text-warn"}>
+                          {r.enabled ? (r.domestic ? "國內" : "開放") : "暫不開放"}
+                          {r.custom && <span className="ml-1 text-xs text-tide">專屬</span>}
+                        </td>
+                        <td><input className={`${inputCls} w-20`} type="number" min="0" max="500" value={dft.tradeBps} onChange={(e) => set({ tradeBps: e.target.value })} /></td>
+                        <td><input className={`${inputCls} w-24`} type="number" min="0" step="0.01" value={dft.retire} onChange={(e) => set({ retire: e.target.value })} /></td>
+                        <td className="whitespace-nowrap text-right">
+                          <Button variant="secondary" onClick={() => act(`設定 ${r.country} 費率`, () => post("/api/fees", {
+                            country: r.country, custom: true, tradeBps: Number(dft.tradeBps), retireFeePerTonne: Number(dft.retire),
+                          }))} disabled={!!busy}>設為專屬</Button>
+                          {r.custom && (
+                            <span className="ml-2">
+                              <Button variant="ghost" onClick={() => act(`${r.country} 回到預設`, () => post("/api/fees", {
+                                country: r.country, custom: false, tradeBps: 0, retireFeePerTonne: 0,
+                              }))} disabled={!!busy}>回到預設</Button>
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <p className="mt-3 text-xs leading-6 text-ink-300">
+                費率變更由 PRICING_ROLE 的服務金鑰送交易上鏈，立刻生效並可在鏈上追溯。
+                治理角色（OPERATOR）在營運 Safe 手上，服務金鑰隨時可被撤銷。
+              </p>
+            </>
           )}
         </Card>
       )}

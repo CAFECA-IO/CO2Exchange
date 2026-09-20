@@ -3,7 +3,7 @@
 //   法人  ：KYC → 買下自然人的掛單 → 註銷 → 憑證 → 管理員產生 PDF 並回寫 → 下載
 // 自然人在官方制度裡開不了額度帳戶，所以只能買賣、不能註銷；最後用掉的一定是事業。
 // 前置：anvil 已跑 DemoFlow、next 在 :3000（KYC_AUTO_APPROVE=0）。執行：node e2e/flow.mjs
-import { BASE, adminApproveAllKyc, agreeAll, applyKyc, buyFromBook, createPasskeyAccount, launch, login, newUser, retireOnPage, sellOnBook, waitKycActive, waitOk } from "./lib.mjs";
+import { BASE, adminApproveAllKyc, applyKyc, buyFromBook, createPasskeyAccount, launch, login, marketBuy, newUser, retireOnPage, sellOnBook, waitKycActive, waitOk } from "./lib.mjs";
 
 const browser = await launch();
 const alice = await newUser(browser, "alice");
@@ -26,13 +26,10 @@ const page = alice.page;
 await page.goto(`${BASE}/trade`);
 await page.getByRole("button", { name: "領取測試用 mTWD" }).click();
 await page.locator('[data-testid="twd"]', { hasText: "100,000" }).waitFor({ timeout: 30_000 });
-await buyFromBook(page, { tonnes: 1 });
-// v4 流動性池收在「進階」摺疊區裡
-await page.locator("summary", { hasText: "流動性池" }).click();
-await agreeAll(page);
-await page.getByRole("button", { name: "以 passkey 簽章購買" }).click();
-await waitOk(page, "流動性池購買（2000 mTWD）完成");
-console.log("✔ 掛單 + v4 購買");
+await buyFromBook(page, { match: "屋頂太陽能", tonnes: 1 }); // 在地優先：明確買國內專案
+// 市價買進：成交後立刻拆解成具體批次，使用者看到的是碳權批次而不是中介代幣
+await marketBuy(page, { tonnes: 1 });
+console.log("✔ 掛單買進 + 市價買進");
 
 // 我的資產：買完之後看得到持有、成本與損益
 await page.goto(`${BASE}/portfolio`);
@@ -62,14 +59,15 @@ await waitKycActive(corp.page);
 await corp.page.goto(`${BASE}/trade`);
 await corp.page.getByRole("button", { name: "領取測試用 mTWD" }).click();
 await corp.page.locator('[data-testid="twd"]', { hasText: "100,000" }).waitFor({ timeout: 30_000 });
-await buyFromBook(corp.page, { tonnes: 1 });
+await buyFromBook(corp.page, { match: "屋頂太陽能", tonnes: 1 });
 console.log("✔ 法人買下自然人的掛單");
 
 const bought = (await corp.page.locator('[data-testid="batches"]').innerText()).match(/#(\d+)/)[1];
 // 註銷在另一頁；需先簽註銷暨移轉委任書
 await retireOnPage(corp.page, { beneficiary: "買方股份有限公司", tonnes: 1 });
 await waitOk(corp.page, `註銷批次 #${bought} 1 噸完成`);
-await corp.page.goto(`${BASE}/certificates`);
+// 憑證已併入「我的資產」頁
+await corp.page.goto(`${BASE}/portfolio`);
 await corp.page.locator("text=憑證 #").first().waitFor({ timeout: 30_000 });
 const n = await corp.page.locator("text=憑證 #").count();
 console.log("✔ 憑證數量", n);
@@ -84,13 +82,43 @@ await admin.page.locator('[data-testid="cert-row"]').first().getByRole("button",
 await waitOk(admin.page, "回寫 #");
 console.log("✔ 憑證 PDF 產生 + 回寫");
 
-await corp.page.goto(`${BASE}/certificates`);
+await corp.page.goto(`${BASE}/portfolio`);
 await corp.page.locator("text=下載 PDF").first().waitFor({ timeout: 30_000 });
 const firstTitle = (await corp.page.locator("text=憑證 #").first().textContent()).trim();
 const certId = Number(firstTitle.replace(/\D/g, ""));
 const pdfRes = await corp.page.request.get(`${BASE}/api/certificates/${certId}/pdf`);
 if (pdfRes.status() !== 200) throw new Error(`PDF 下載失敗 ${pdfRes.status()}`);
 console.log("✔ 使用者可下載 PDF，SHA-256", pdfRes.headers()["x-sha256"]);
+
+// 國外額度：買得到，但註銷用途受限（增量抵換在鏈上就被擋下）
+await corp.page.goto(`${BASE}/trade`);
+await buyFromBook(corp.page, { match: "北海道", tonnes: 1 });
+await corp.page.goto(`${BASE}/retire`);
+const targetSelect = corp.page.locator("select").first();
+const jpValue = await targetSelect.locator("option", { hasText: "北海道" }).first().getAttribute("value");
+await targetSelect.selectOption(jpValue);
+await corp.page.locator("text=這是國外減量額度").first().waitFor({ timeout: 30_000 });
+// 直接讀 DOM 的 disabled 屬性：option 的 isDisabled() 語意在不同版本不一致，不值得賭
+const offsetDisabled = await corp.page.locator("select").nth(1)
+  .evaluate((el) => [...el.options].find((o) => o.value === "2")?.disabled);
+if (!offsetDisabled) throw new Error("國外額度的增量抵換選項應該是停用的");
+console.log("✔ 國外額度買得到，增量抵換被擋下");
+
+// 託管揭露：公開頁面，不必登入
+await corp.page.goto(`${BASE}/custody`);
+await corp.page.locator("text=資產託管揭露").first().waitFor({ timeout: 30_000 });
+await corp.page.locator("text=託管總量").first().waitFor({ timeout: 30_000 });
+console.log("✔ 託管揭露頁");
+
+// 管理後台：各國費率獨立設定
+await admin.page.goto(`${BASE}/admin`);
+await admin.page.getByRole("button", { name: "費率設定" }).click();
+const jpRow = admin.page.locator('[data-testid="fee-row"]', { hasText: "JP" }).first();
+await jpRow.waitFor({ timeout: 30_000 });
+await jpRow.locator('input[type="number"]').first().fill("250");
+await jpRow.getByRole("button", { name: "設為專屬" }).click();
+await waitOk(admin.page, "設定 JP 費率完成");
+console.log("✔ 各國費率獨立設定");
 
 await browser.close();
 if (n < 1) { console.error("expected ≥1 certificate"); process.exit(1); }

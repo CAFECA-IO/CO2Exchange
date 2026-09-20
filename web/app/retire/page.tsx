@@ -7,7 +7,7 @@ import { AccountGate } from "@/components/AccountGate";
 import { AgreementCheck, useAgreementGate } from "@/components/AgreementGate";
 import { Button, Card, Field, Notice, fmtKg, inputCls } from "@/components/ui";
 import { creditAbi, poolAbi } from "@/lib/abis";
-import { PURPOSE_LABEL } from "@/lib/deployment";
+import { PURPOSE_LABEL, flagOf, purposeAllowed } from "@/lib/deployment";
 import { signAndRelay, type Call } from "@/lib/client/passkey";
 import { useReload } from "@/lib/client/useReload";
 
@@ -19,9 +19,14 @@ import { useReload } from "@/lib/client/useReload";
 /// 這一頁只做一件事：選批次、填受益人與用途、確認、簽章。確認單擋在前面，
 /// 因為註銷之後沒有回頭路。
 
-type Market = {
-  holdings: { twd: string; cct: string; batches: { batchId: number; kg: number; vintageYear: number; project: string }[] } | null;
-};
+type Batch = { batchId: number; kg: number; vintageYear: number; project: string; country: string; scheme: string };
+type Market = { holdings: { twd: string; cct: string; batches: Batch[] } | null };
+
+/// 國外額度的用途遮罩：只有扣除碳費與自願性碳中和。
+/// 這個常數要跟合約的 setJurisdiction 對齊——合約才是最後把關的地方，
+/// 這裡只是讓使用者在按下去之前就知道會被擋。
+const FOREIGN_MASK = 0b0011;
+const DOMESTIC_MASK = 0b1111;
 
 /// 主管機關於註銷次日起五個工作日內公開；公開後才可以對外宣告。
 function announceableFrom(from = new Date()) {
@@ -82,22 +87,32 @@ export default function RetirePage() {
   const batches = h?.batches ?? [];
   const cctKg = h ? Math.floor(Number(BigInt(h.cct) / 10n ** 15n)) : 0;
 
-  const options: { key: string; label: string; maxKg: number }[] = [
+  const options: { key: string; label: string; maxKg: number; country: string; scheme: string }[] = [
     ...batches.map((b) => ({
       key: `b${b.batchId}`,
-      label: `批次 #${b.batchId}　${b.project}　${b.vintageYear}　持有 ${fmtKg(b.kg)}`,
+      label: `${flagOf(b.country)} ${b.country}　批次 #${b.batchId}　${b.project}　${b.vintageYear}　持有 ${fmtKg(b.kg)}`,
       maxKg: b.kg,
+      country: b.country,
+      scheme: b.scheme,
     })),
-    ...(cctKg > 0 ? [{ key: "cct", label: `池化額度 CCT　持有 ${fmtKg(cctKg)}（依 FIFO 對應到具體批次）`, maxKg: cctKg }] : []),
+    ...(cctKg > 0
+      ? [{
+          key: "cct",
+          label: `${flagOf("TW")} TW　未指定批次的額度　持有 ${fmtKg(cctKg)}（註銷時依序對應到具體批次）`,
+          maxKg: cctKg, country: "TW", scheme: "TCER",
+        }]
+      : []),
   ];
   const sel = options.find((o) => o.key === (target ?? options[0]?.key)) ?? null;
   const kg = sel ? Math.min(sel.maxKg, Math.max(1, Math.round(Number(tonnes) * 1000))) : 0;
-  const ready = !!sel && kg > 0 && kg <= sel.maxKg && !!beneficiary.trim() && retireGate.ok && tier !== 1;
+  const mask = sel && sel.country !== "TW" ? FOREIGN_MASK : DOMESTIC_MASK;
+  const purposeOk = purposeAllowed(mask, purpose);
+  const ready = !!sel && kg > 0 && kg <= sel.maxKg && !!beneficiary.trim() && retireGate.ok && tier !== 1 && purposeOk;
 
   function doRetire() {
     if (!sel) return;
     if (sel.key === "cct") {
-      relay(`註銷池化額度 ${fmtKg(kg)}`, [{
+      relay(`註銷未指定批次額度 ${fmtKg(kg)}`, [{
         target: d.carbonPool, value: 0n,
         data: encodeFunctionData({ abi: poolAbi, functionName: "redeemAndRetire", args: [BigInt(kg), beneficiaryHash(), beneficiary, purpose, memo] }),
       }]);
@@ -122,7 +137,7 @@ export default function RetirePage() {
         </div>
         <div className="flex gap-2 text-sm">
           <Link href="/portfolio" className="rounded-[--radius-ctl] border border-ink-500 px-3 py-1.5 text-ink-200 transition hover:border-tide/60">我的資產</Link>
-          <Link href="/certificates" className="rounded-[--radius-ctl] border border-ink-500 px-3 py-1.5 text-ink-200 transition hover:border-tide/60">我的憑證</Link>
+          <Link href="/custody" className="rounded-[--radius-ctl] border border-ink-500 px-3 py-1.5 text-ink-200 transition hover:border-tide/60">託管揭露</Link>
         </div>
       </div>
 
@@ -180,9 +195,25 @@ export default function RetirePage() {
             </Field>
             <Field label="用途">
               <select className={inputCls} value={purpose} onChange={(e) => setPurpose(Number(e.target.value))}>
-                {PURPOSE_LABEL.map((l, i) => <option key={i} value={i}>{l}</option>)}
+                {PURPOSE_LABEL.map((l, i) => (
+                  <option key={i} value={i} disabled={!purposeAllowed(mask, i)}>
+                    {l}{purposeAllowed(mask, i) ? "" : "（國外額度不適用）"}
+                  </option>
+                ))}
               </select>
             </Field>
+            {sel && sel.country !== "TW" && (
+              <Notice kind="info">
+                <b>這是國外減量額度（{flagOf(sel.country)} {sel.country}．{sel.scheme}）。</b>
+                依氣候變遷因應法第 27 條，國外額度只能用於<b>扣除碳費排放量</b>（須經中央主管機關認可，
+                上限為收費排放量 5%，高碳洩漏風險事業不得使用）與抵銷超額量；
+                <b>不能</b>用於環評增量抵換或環評承諾事項，本站在鏈上就會擋下。
+                認可申請請自行向主管機關辦理——本站只負責交易與移轉，不代為申請。
+              </Notice>
+            )}
+            {!purposeOk && (
+              <Notice kind="error">目前選的用途不適用於這批額度，請改選其他用途或換一批額度。</Notice>
+            )}
             <Field label="備註">
               <input className={inputCls} value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="FY2025" />
             </Field>
@@ -196,8 +227,8 @@ export default function RetirePage() {
       <Card title="註銷前請確認">
         <div className="space-y-3">
           <p className="text-sm leading-7 text-ink-200">
-            註銷代表這批額度<b>永久退出流通，不可回復、不能再賣出</b>。額度平時登錄在專案方於環境部開立的額度帳戶內，
-            您按下註銷後，由本站代辦那唯一一次官方移轉（專案方 → 您的額度帳戶），再由您完成註銷。
+            註銷代表這批額度<b>永久退出流通，不可回復、不能再賣出</b>。額度平時託管在核發國政府的官方登錄簿帳戶內
+            （臺灣為環境部溫室氣體減量額度管理系統），您按下註銷後，由本站代辦那唯一一次官方移轉至您的額度帳戶，再由您完成註銷。
             依規定主管機關於註銷次日起五個工作日內公開，
             <b>公開後才可以對外做碳中和之類的宣告</b>；以今天送出計，可對外宣告日約為 {announceableFrom()}。
             憑證上會標示可對外宣告日與官方註銷文號。
@@ -215,7 +246,8 @@ export default function RetirePage() {
             <h2 className="font-display text-lg font-semibold text-ink-50">確認註銷</h2>
             <dl className="mt-4 divide-y divide-ink-500 text-sm">
               {([
-                ["標的", sel.label.split("　").slice(0, 2).join("　")],
+                ["標的", sel.label.split("　").slice(0, 3).join("　")],
+                ["核發國 / 機制", `${flagOf(sel.country)} ${sel.country}　${sel.scheme}`],
                 ["數量", fmtKg(kg)],
                 ["受益人", beneficiary],
                 ["用途", PURPOSE_LABEL[purpose]],

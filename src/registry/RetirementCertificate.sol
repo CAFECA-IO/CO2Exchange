@@ -41,6 +41,10 @@ contract RetirementCertificate is ERC721, AccessControl {
         ///      兩者都空 = 尚未完成官方程序，憑證上必須照實標示。
         string officialNo; // 環境部註銷編號
         uint64 officialAnnouncedAt; // 主管機關公開日（unix 秒）
+        /// @dev 額度的核發國／轄區（ISO 3166-1 alpha-2）與機制名稱。
+        ///      一張沒寫明「哪一國核發」的憑證，拿去申報時沒有人能判斷它合不合用。
+        bytes2 country;
+        string scheme;
     }
 
     uint256 public nextId = 1;
@@ -53,7 +57,8 @@ contract RetirementCertificate is ERC721, AccessControl {
         address owner,
         uint256 amountKg,
         bytes32 beneficiaryHash,
-        Purpose purpose
+        Purpose purpose,
+        bytes2 country
     );
     event DocumentHashSet(uint256 indexed certId, bytes32 documentHash);
     event OfficialRetirementSet(uint256 indexed certId, string officialNo, uint64 announcedAt);
@@ -74,7 +79,7 @@ contract RetirementCertificate is ERC721, AccessControl {
         certId = nextId++;
         _certs[certId] = c;
         _safeMint(to, certId);
-        emit Retired(certId, c.batchId, c.retiredBy, to, c.amountKg, c.beneficiaryHash, c.purpose);
+        emit Retired(certId, c.batchId, c.retiredBy, to, c.amountKg, c.beneficiaryHash, c.purpose, c.country);
     }
 
     function setDocumentHash(uint256 certId, bytes32 documentHash) external onlyRole(DOCUMENT_ROLE) {
@@ -111,7 +116,8 @@ contract RetirementCertificate is ERC721, AccessControl {
     function tokenURI(uint256 certId) public view override returns (string memory) {
         _requireOwned(certId);
         Certificate memory c = _certs[certId];
-        bytes memory json = abi.encodePacked(
+        // 分兩段組字串：一次 encodePacked 太多參數會 stack too deep。
+        bytes memory head = abi.encodePacked(
             '{"name":"Retirement Certificate #',
             Strings.toString(certId),
             '","description":"CO2Exchange carbon credit retirement certificate","attributes":[',
@@ -120,14 +126,20 @@ contract RetirementCertificate is ERC721, AccessControl {
             '"},{"trait_type":"amountKg","value":"',
             Strings.toString(c.amountKg),
             '"},{"trait_type":"purpose","value":"',
-            Strings.toString(uint256(c.purpose)),
+            Strings.toString(uint256(c.purpose))
+        );
+        bytes memory tail = abi.encodePacked(
+            '"},{"trait_type":"country","value":"',
+            string(abi.encodePacked(c.country)),
+            '"},{"trait_type":"scheme","value":"',
+            c.scheme,
             '"},{"trait_type":"retiredAt","value":"',
             Strings.toString(c.retiredAt),
             '"},{"trait_type":"beneficiaryHash","value":"',
             Strings.toHexString(uint256(c.beneficiaryHash), 32),
             '"}]}'
         );
-        return string(abi.encodePacked("data:application/json;base64,", Base64.encode(json)));
+        return string(abi.encodePacked("data:application/json;base64,", Base64.encode(abi.encodePacked(head, tail))));
     }
 
     function supportsInterface(bytes4 interfaceId) public view override(ERC721, AccessControl) returns (bool) {

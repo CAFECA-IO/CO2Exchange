@@ -20,7 +20,7 @@ await buyFromBook(u.page, { tonnes: 2 });
 
 for (const theme of ["dark", "light"]) {
   await u.page.evaluate((t) => { localStorage.setItem("co2x.theme", t); }, theme);
-  for (const [path, name] of [["/", "home"], ["/trade", "trade"], ["/portfolio", "portfolio"], ["/retire", "retire"]]) {
+  for (const [path, name] of [["/", "home"], ["/trade", "trade"], ["/portfolio", "portfolio"], ["/retire", "retire"], ["/custody", "custody"], ["/registry", "registry"]]) {
     await u.page.goto(`${BASE}${path}`);
     await u.page.waitForTimeout(2500);
     await u.page.screenshot({ path: `${OUT}/${name}-${theme}.png`, fullPage: true });

@@ -6,12 +6,16 @@ import { AccountGate } from "@/components/AccountGate";
 import { AreaChart, BarList, Donut, StatTile } from "@/components/charts";
 import { Card, Notice, fmtKg } from "@/components/ui";
 import { useReload } from "@/lib/client/useReload";
+import { PURPOSE_LABEL, flagOf } from "@/lib/deployment";
 import type { Movement, Portfolio } from "@/lib/server/portfolio";
 
 /// 我的資產。
 ///
 /// 使用者真正想知道的只有四件事：我有多少錢、我有多少碳權、我買的成本多少、
 /// 現在是賺是賠。所以這四個放最上面的數字磚，圖表在下面補脈絡，明細在最底下。
+///
+/// 註銷憑證也在這一頁。憑證是資產的一部分——是「已經用掉的那一部分」的收據；
+/// 把它放到另一個分頁，使用者就得記住兩個地方，而那兩個地方講的是同一件事。
 ///
 /// 損益拆成已實現與未實現兩個數字，不要合成一個「總損益」就算了——
 /// 賣掉賺的錢和帳面上的浮盈，性質完全不同。
@@ -21,9 +25,17 @@ const twd2 = (v: number) => (v / 1e6).toLocaleString("zh-TW", { maximumFractionD
 const signed = (v: number) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${twd2(Math.abs(v))}`;
 const KIND: Record<Movement["kind"], string> = { issue: "核發取得", buy: "買進", sell: "賣出", retire: "註銷" };
 
+type Cert = {
+  certId: number; batchId: number; amountKg: number; beneficiary: string; purpose: number; memo: string;
+  retiredBy: string; retiredAt: number; documentHash: string; txHash: string;
+  officialNo: string; officialAnnouncedAt: number; claimableFrom: number | null;
+  country: string; scheme: string;
+};
+
 export default function PortfolioPage() {
   const { credential, userId } = useAccount();
   const [p, setP] = useState<Portfolio | null>(null);
+  const [certs, setCerts] = useState<Cert[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [reloadKey] = useReload();
 
@@ -31,11 +43,16 @@ export default function PortfolioPage() {
     if (!credential) return;
     let ignore = false;
     (async () => {
-      const r = await fetch(`/api/portfolio?account=${credential.address}`);
+      const [r, rc] = await Promise.all([
+        fetch(`/api/portfolio?account=${credential.address}`),
+        fetch(`/api/certificates?account=${credential.address}`),
+      ]);
       const j = await r.json();
+      const jc = await rc.json();
       if (ignore) return;
       if (!r.ok) setErr(j.error ?? "讀取失敗");
       else { setP(j); setErr(null); }
+      setCerts(jc.certificates ?? []);
     })();
     return () => { ignore = true; };
   }, [credential, reloadKey]);
@@ -44,6 +61,13 @@ export default function PortfolioPage() {
 
   const totalPnl = p ? p.realisedPnl + (p.unrealisedPnl ?? 0) : 0;
   const pnlPct = p && p.costOfHolding > 0 && p.unrealisedPnl != null ? (p.unrealisedPnl / p.costOfHolding) * 100 : null;
+
+  // 依核發國彙總持有：國內／國外能做的事情不一樣，這個比例使用者該一眼看到
+  const byCountry = new Map<string, number>();
+  for (const b of p?.batches ?? []) byCountry.set(b.country, (byCountry.get(b.country) ?? 0) + b.kg);
+  const domesticKg = byCountry.get("TW") ?? 0;
+  const foreignKg = [...byCountry.entries()].filter(([c]) => c !== "TW").reduce((s, [, v]) => s + v, 0);
+  const retiredKg = (certs ?? []).reduce((s, c) => s + c.amountKg, 0);
 
   return (
     <div className="space-y-6">
@@ -63,7 +87,7 @@ export default function PortfolioPage() {
         <>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <StatTile label="資產總值" value={`${twd(p.totalValue)} mTWD`} sub="現金 + 碳權市值" />
-            <StatTile label="可用現金" value={`${twd(p.twd)} mTWD`} sub="結算幣餘額" />
+            <StatTile label="可用現金" value={`${twd(p.twd)} mTWD`} sub="存於信託專戶" />
             <StatTile
               label="持有碳權"
               value={fmtKg(p.holdingKg)}
@@ -130,18 +154,28 @@ export default function PortfolioPage() {
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
-            <Card title="持有明細">
+            <Card title="持有明細" action={<span className="text-xs text-ink-300">依核發國標示</span>}>
               <BarList
                 unit=" 噸"
-                rows={[
-                  ...p.batches.map((b) => ({
-                    label: `批次 #${b.batchId}　${b.project}`,
-                    value: b.kg / 1000,
-                    hint: `${b.vintageYear} 年份`,
-                  })),
-                  ...(p.cctKg > 0 ? [{ label: "池化額度 CCT", value: p.cctKg / 1000, hint: "註銷時依 FIFO 對應到具體批次" }] : []),
-                ]}
+                rows={p.batches.map((b) => ({
+                  label: `${flagOf(b.country)} ${b.country}　批次 #${b.batchId}　${b.project}`,
+                  value: b.kg / 1000,
+                  hint: `${b.scheme} · ${b.vintageYear} 年份`,
+                }))}
               />
+              {p.cctKg > 0 && (
+                <p className="mt-3 text-xs leading-6 text-ink-300">
+                  另有 {fmtKg(p.cctKg)} 尚未對應到具體批次（由舊流程或部分成交產生），
+                  註銷時會依序對應。市價買進已改為成交後立即拆解，不會再產生這種餘額。
+                </p>
+              )}
+              {foreignKg > 0 && (
+                <p className="mt-3 border-t border-ink-500 pt-3 text-xs leading-6 text-ink-300">
+                  您持有 {fmtKg(domesticKg)} 國內額度與 {fmtKg(foreignKg)} 國外額度。
+                  國外額度可用於自願性碳中和，或經中央主管機關認可後扣除碳費（上限收費排放量 5%，
+                  高碳洩漏風險事業不適用）；<b>不能</b>用於環評增量抵換。
+                </p>
+              )}
             </Card>
 
             <Card title="交易明細">
@@ -181,9 +215,64 @@ export default function PortfolioPage() {
             </Card>
           </div>
 
+          {/* ── 註銷憑證：已經用掉的那一部分 ───────────────────── */}
+          <div>
+            <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+              <h2 className="font-display text-lg font-semibold text-ink-50">
+                註銷憑證{certs && certs.length > 0 && <span className="ml-2 text-sm font-normal text-ink-300">{certs.length} 張 · 累計 {fmtKg(retiredKg)}</span>}
+              </h2>
+              <Link href="/retire" className="text-xs text-tide underline">去註銷</Link>
+            </div>
+            {!certs ? <p className="text-sm text-ink-300">讀取中…</p> : certs.length === 0 ? (
+              <Notice>
+                還沒有憑證。註銷代表把額度用掉並換得一張載明受益人與用途的憑證；
+                到<Link className="underline" href="/retire">註銷</Link>完成第一筆。
+              </Notice>
+            ) : (
+              <div className="grid gap-4 md:grid-cols-2">
+                {certs.map((c) => (
+                  <Card key={c.certId} title={`憑證 #${c.certId}`} action={
+                    <span className="rounded bg-ink-600 px-1.5 py-0.5 text-[10px] text-ink-200">
+                      {flagOf(c.country)} {c.country} {c.scheme}
+                    </span>
+                  }>
+                    <dl className="grid grid-cols-[6rem_1fr] gap-y-1 text-sm">
+                      <dt className="text-ink-300">數量</dt><dd data-testid="cert-kg">{fmtKg(c.amountKg)}</dd>
+                      <dt className="text-ink-300">批次</dt><dd>#{c.batchId}</dd>
+                      <dt className="text-ink-300">受益人</dt><dd>{c.beneficiary || "—"}</dd>
+                      <dt className="text-ink-300">用途</dt><dd>{PURPOSE_LABEL[c.purpose]}</dd>
+                      <dt className="text-ink-300">備註</dt><dd>{c.memo || "—"}</dd>
+                      <dt className="text-ink-300">註銷時間</dt><dd>{new Date(c.retiredAt * 1000).toLocaleString("zh-TW")}</dd>
+                      <dt className="text-ink-300">官方註銷</dt>
+                      <dd>
+                        {c.officialNo
+                          ? <>已完成 · <span className="font-mono text-xs">{c.officialNo}</span></>
+                          : <span className="text-warn">辦理中（鏈上已註銷，官方移轉與註銷由卡菲卡代辦）</span>}
+                      </dd>
+                      <dt className="text-ink-300">可對外宣告</dt>
+                      <dd>
+                        {c.claimableFrom
+                          ? <>{new Date(c.claimableFrom * 1000).toLocaleDateString("zh-TW")} 起</>
+                          : <span className="text-ink-300">待主管機關公開後起算五個工作日</span>}
+                      </dd>
+                      <dt className="text-ink-300">正式文件</dt>
+                      <dd className="font-mono text-xs break-all">
+                        {/^0x0+$/.test(c.documentHash)
+                          ? "待營運方回寫 PDF hash"
+                          : <><a className="underline" href={`/api/certificates/${c.certId}/pdf`} target="_blank">下載 PDF</a> · {c.documentHash.slice(0, 18)}…</>}
+                      </dd>
+                    </dl>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </div>
+
           <p className="text-xs leading-6 text-ink-300">
             損益以移動加權平均成本計算：賣出時認列已實現損益，剩下的部位以最近成交價估算未實現損益。
             註銷會把該部分成本從部位中扣除，但不計入損益——那是「用掉」，不是「賣掉」。
+            碳權託管於各國政府登錄簿帳戶、入金託管於信託專戶，對帳狀況見
+            <Link className="text-tide underline" href="/custody">託管揭露</Link>。
             Phase 0 的結算幣為測試代幣，數字不代表任何真實金額。
           </p>
         </>

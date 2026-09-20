@@ -25,7 +25,7 @@ export type AgreementMeta = {
 
 export type Agreement = AgreementMeta & { body: string };
 
-/// 四份契約的角色。順序就是使用者會遇到的順序。
+/// 五份文件（四份契約 + 服務流程說明書附件）的角色。順序就是使用者會遇到的順序。
 const ROLES: Record<string, string> = {
   "platform-terms": "所有使用者（建立帳戶時）",
   "service-flow": "所有使用者（平台使用約定書之附件，不另行簽署）",

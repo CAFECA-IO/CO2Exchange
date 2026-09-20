@@ -2,11 +2,13 @@ import "server-only";
 import { encodeAbiParameters, keccak256, encodePacked, type Address } from "viem";
 import { creditAbi, erc20Abi, listingAbi, poolAbi, poolManagerAbi, registryAbi } from "@/lib/abis";
 import { deployment, publicClient } from "./chain";
-import { hasV4 } from "@/lib/deployment";
+import { countryCode, hasV4 } from "@/lib/deployment";
 
 export type Order = {
   orderId: number; seller: Address; batchId: number; remainingKg: number; pricePerTonne: string; minFillKg: number;
   project: { name: string; methodology: string; location: string }; vintageYear: number;
+  /// 核發國（ISO 3166-1 alpha-2）與機制名稱。決定買到之後能拿來做什麼。
+  country: string; scheme: string; domestic: boolean;
 };
 
 /// SKIP_V4 部署時回 null —— 呼叫端據此隱藏 v4 相關 UI。
@@ -92,6 +94,7 @@ export async function listOrders(limit = 60, maxScan = 400): Promise<Order[]> {
         orderId: id, seller: o.seller, batchId: Number(o.batchId), remainingKg: Number(o.remainingKg),
         pricePerTonne: o.pricePerTonne.toString(), minFillKg: Number(o.minFillKg),
         project: { name: p.name, methodology: p.methodology, location: p.location }, vintageYear: b.vintageYear,
+        country: countryCode(p.country), scheme: p.scheme, domestic: countryCode(p.country) === "TW",
       });
     }
   }
@@ -112,7 +115,10 @@ export async function holdings(account: Address) {
       publicClient.readContract({ address: d.carbonCredit1155, abi: creditAbi, functionName: "batchOf", args: [id] }),
     ]);
     const p = await publicClient.readContract({ address: d.carbonRegistry, abi: registryAbi, functionName: "projectOf", args: [b.projectId] });
-    return { batchId: Number(id), kg: Number(bal), vintageYear: b.vintageYear, project: p.name };
+    return {
+      batchId: Number(id), kg: Number(bal), vintageYear: b.vintageYear, project: p.name,
+      country: countryCode(p.country), scheme: p.scheme,
+    };
   }));
   const pooled = await publicClient.readContract({ address: d.carbonPool, abi: poolAbi, functionName: "pooledKg", args: [1n] }).catch(() => 0n);
   return { twd: twd.toString(), cct: cct.toString(), batches: batches.filter((b) => b.kg > 0), pooledKgBatch1: pooled.toString() };

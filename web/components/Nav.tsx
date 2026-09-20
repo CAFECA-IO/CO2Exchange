@@ -11,8 +11,8 @@ const base = [
   ["/trade", "交易"],
   ["/portfolio", "我的資產"],
   ["/retire", "註銷"],
-  ["/certificates", "我的憑證"],
   ["/registry", "公告欄"],
+  ["/custody", "託管揭露"],
   ["/agreements", "契約"],
 ] as const;
 

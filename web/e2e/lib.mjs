@@ -94,6 +94,8 @@ export async function agreeAll(scope) {
 export async function buyFromBook(page, { match, tonnes = 1 } = {}) {
   const buyTab = page.locator('[data-testid="tab-buy"]');
   if (await buyTab.isVisible().catch(() => false)) await buyTab.click();
+  const limitTab = page.locator('[data-testid="mode-limit"]');
+  if (await limitTab.isVisible().catch(() => false)) await limitTab.click();
   const row = match
     ? page.locator("li button", { hasText: match }).first()
     : page.locator('li button[aria-pressed]').first();
@@ -112,6 +114,21 @@ export async function buyFromBook(page, { match, tonnes = 1 } = {}) {
   if (await ack.isVisible().catch(() => false)) await ack.check();
   await dialog.getByRole("button", { name: "以 passkey 簽章買進" }).click();
   await waitOk(page, `購買 ${tonnes.toLocaleString("zh-TW", { maximumFractionDigits: 3 })} 噸完成`);
+}
+
+/// 市價買進：切到市價 → 填數量 → 確認單。成交後會立刻拆解成具體批次。
+export async function marketBuy(page, { tonnes = 1 } = {}) {
+  await page.locator('[data-testid="tab-buy"]').click();
+  await page.locator('[data-testid="mode-market"]').click();
+  await page.locator('[data-testid="market-qty"]').fill(String(tonnes));
+  await page.locator('[data-testid="submit-market-buy"]').click();
+  const dialog = page.getByRole("dialog", { name: "確認市價買進" });
+  await dialog.waitFor({ timeout: 10_000 });
+  await agreeAll(dialog);
+  const ack = dialog.locator('[data-testid="natural-ack"]');
+  if (await ack.isVisible().catch(() => false)) await ack.check();
+  await dialog.getByRole("button", { name: "以 passkey 簽章買進" }).click();
+  await waitOk(page, `市價買進 ${tonnes.toLocaleString("zh-TW", { maximumFractionDigits: 3 })} 噸完成`);
 }
 
 /// 在交易頁上架賣出：切到「賣出」分頁 → 數量與單價 →（必要時）進階設定 → 確認單。

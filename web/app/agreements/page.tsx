@@ -5,14 +5,14 @@ import { Card, Notice } from "@/components/ui";
 
 /// 定型化契約專區（公開，不需登入）。
 ///
-/// 四份文件都放在版控的 markdown 裡，雜湊由檔案內容算出。介面顯示雜湊，
+/// 這些文件都放在版控的 markdown 裡，雜湊由檔案內容算出。介面顯示雜湊，
 /// 是為了讓使用者事後能證明「我當時同意的是哪一版」——條文改一個字，雜湊就不一樣。
 
 type Meta = { id: string; title: string; version: string; effectiveDate: string; summary: string; hash: string; parties: string };
 type Doc = Meta & { body: string };
 
 /// 極簡 markdown：這些條文只用到標題、粗體、清單、分隔線與表格，
-/// 為了四份靜態文件拉一套 markdown 套件不划算。
+/// 為了這幾份靜態文件拉一套 markdown 套件不划算。
 function render(md: string) {
   const lines = md.split(/\r?\n/);
   const out: React.ReactNode[] = [];
@@ -115,8 +115,14 @@ function AgreementsInner() {
         <p className="text-xs font-medium uppercase tracking-wider text-tide">契約條款</p>
         <h1 className="mt-1 font-display text-2xl font-bold tracking-tight text-ink-50">定型化契約</h1>
         <p className="mt-2 max-w-3xl text-sm leading-7 text-ink-200">
-          買賣雙方在本站的權利義務由下列四份契約界定。每一份都標示版本與內容雜湊；
-          您在操作時同意的是「當下那一版的雜湊」，條文改版後會再次請您確認，舊的同意不會被沿用。
+          買賣雙方在本站的權利義務由下列文件界定：四份契約，加上作為「平台使用約定書」附件、隨其生效的「服務流程說明書」。
+          每一份都標示版本與內容雜湊；您在操作時同意的是「當下那一版的雜湊」，條文改版後會再次請您確認，舊的同意不會被沿用。
+        </p>
+        <p className="mt-2 max-w-3xl text-sm leading-7 text-ink-200">
+          <b>適用範圍</b>：本站為國際運行平台，同時交易多個轄區核發的減量額度。這些文件規範的是
+          <b>本公司與用戶之間的平台服務關係</b>，依中華民國法律；<b>個別額度</b>的權利內容、移轉與註銷程序、
+          可用途徑與申報效力，則依該額度<b>核發國</b>的法規與該國官方登錄簿的規定，不因為在本站交易而改變。
+          兩者是不同層次。用戶並應自行遵守核發國與自身所在地／申報地的法規，本公司不提供法律意見。
         </p>
       </div>
 

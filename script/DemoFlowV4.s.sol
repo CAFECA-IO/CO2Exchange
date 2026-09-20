@@ -15,6 +15,11 @@ import {TrustedRouter} from "../src/v4/TrustedRouter.sol";
 /// 用法：forge script script/DemoFlowV4.s.sol --rpc-url anvil --broadcast --sig "demo()"
 contract DemoFlowV4 is DemoFlow, DeployV4 {
     // DemoFlow 與 DeployV4 都繼承自 Deploy，菱形繼承必須明示要用哪一支實作。
+    /// @dev DemoFlow 與 DeployV4 都繼承自 Deploy，多重繼承要明寫用哪一個。國外額度的種子在 DemoFlow。
+    function _seedImportedProjects() internal override(Deploy, DemoFlow) {
+        DemoFlow._seedImportedProjects();
+    }
+
     function _deployV4() internal override(Deploy, DeployV4) {
         DeployV4._deployV4();
     }

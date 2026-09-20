@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Card, Notice, fmtKg, fmtTwd } from "@/components/ui";
 import { useReload } from "@/lib/client/useReload";
+import { flagOf } from "@/lib/deployment";
 import type { Announcement, Bulletin } from "@/lib/server/bulletin";
 
 /// 公開資訊（公告欄）。
@@ -110,6 +111,7 @@ export default function RegistryPage() {
                       <tr className="border-b border-ink-500">
                         <th className="py-2 pr-3 font-medium">公告編號</th>
                         <th className="py-2 pr-3 font-medium">類別</th>
+                        <th className="py-2 pr-3 font-medium">轄區</th>
                         <th className="py-2 pr-3 font-medium">公告時間</th>
                         <th className="py-2 pr-3 font-medium">批次</th>
                         <th className="py-2 pr-3 text-right font-medium">數量</th>
@@ -121,6 +123,7 @@ export default function RegistryPage() {
                         <tr key={a.no} className="text-ink-200">
                           <td className="tnum py-2 pr-3 font-mono text-xs">{a.no}</td>
                           <td className="py-2 pr-3">{KIND_LABEL[a.kind]}</td>
+                          <td className="py-2 pr-3 whitespace-nowrap">{a.country ? `${flagOf(a.country)} ${a.country}` : "—"}</td>
                           <td className="py-2 pr-3 whitespace-nowrap text-ink-300">{fmtTime(a.ts)}</td>
                           <td className="tnum py-2 pr-3">#{a.batchId ?? "—"}</td>
                           <td className="tnum py-2 pr-3 text-right">{fmtKg(a.amountKg)}</td>

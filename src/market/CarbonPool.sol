@@ -11,6 +11,7 @@ import {
 } from "@openzeppelin/contracts-upgradeable/token/ERC1155/utils/ERC1155HolderUpgradeable.sol";
 import {IKYCRegistry} from "../interfaces/IKYCRegistry.sol";
 import {CarbonCredit1155} from "../registry/CarbonCredit1155.sol";
+import {IJurisdictions} from "../interfaces/IJurisdictions.sol";
 import {RetirementCertificate} from "../registry/RetirementCertificate.sol";
 import {CarbonCreditToken} from "./CarbonCreditToken.sol";
 
@@ -51,6 +52,7 @@ contract CarbonPool is
 
     error NotCorporate(address account);
     error NotActiveAccount(address account);
+    error NotDomestic(bytes2 country);
     error VintageMismatch(uint16 expected, uint16 actual);
     error BatchIsFrozen(uint256 batchId);
     error InsufficientPooled(uint256 batchId);
@@ -118,12 +120,18 @@ contract CarbonPool is
 
     function deposit(uint256 batchId, uint256 amountKg) external nonReentrant whenNotPaused {
         if (amountKg == 0) revert ZeroAmount();
-        if (kyc.tierOf(msg.sender) != IKYCRegistry.Tier.Corporate || !kyc.isActive(msg.sender)) {
-            revert NotCorporate(msg.sender);
-        }
+        // 存入不限法人。使用者按「市價賣出」時，介面做的就是 deposit + 換回結算幣；
+        // 自然人如果不能 deposit，他就只剩掛單一條路——而他本來就不能註銷，
+        // 把出場路徑再砍一條沒有道理。誰可以把額度轉出去仍由 checkTransfer 決定。
+        if (!kyc.isActive(msg.sender)) revert NotActiveAccount(msg.sender);
         CarbonCredit1155.Batch memory b = credit.batchOf(batchId);
         if (b.vintageYear != vintageYear) revert VintageMismatch(vintageYear, b.vintageYear);
         if (b.frozen) revert BatchIsFrozen(batchId);
+        // 池化只收國內額度。CCT 是同質代幣，混入國外額度之後 FIFO 贖回會隨機給出
+        // 一張「哪一國」的憑證——而國內與國外額度能做的用途根本不同，那張憑證就成了賭博。
+        (bytes2 c, IJurisdictions.Jurisdiction memory j) =
+            IJurisdictions(credit.registry()).jurisdictionOfProject(b.projectId);
+        if (!j.domestic) revert NotDomestic(c);
 
         if (pooledKg[batchId] == 0) _queue.push(batchId);
         pooledKg[batchId] += amountKg;
