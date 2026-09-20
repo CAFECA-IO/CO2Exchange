@@ -207,6 +207,18 @@ Apple / Google 登入：在 `.env.local` 設 `AUTH_GOOGLE_ID/SECRET`、`AUTH_APP
 `e2e/flow.mjs`（自然人：KYC 人工核准 → 購買 → 註銷 → 管理員產生 PDF 並回寫 → 下載）與
 `e2e/enterprise.mjs`（法人 KYC → 專案登錄 → 上傳報告 → 查驗核發 → 掛單 + 入池 → 另一自然人購買並註銷）。需 anvil + DemoFlowV4 + `KYC_AUTO_APPROVE=0` 的伺服器。
 
+### `AttestationExpired` / 部署腳本最後一筆交易失敗
+
+症狀：`forge script ... --broadcast` 模擬成功、前面上百筆交易都 ✅，然後在
+`kyc.register` 那筆 ❌，只花三萬 gas。原因是 **anvil 閒置太久**：
+
+forge 模擬時讀到的是鏈上**最後一個區塊**的時間戳，而 anvil 沒有新交易就不產生新區塊；
+等到真的送出交易，anvil 才用**現在的真實時間**打上時間戳。中間這段閒置如果超過簽章的
+有效期，attestation 送到鏈上就已經過期了，而錯誤訊息只有一句 `AttestationExpired`。
+
+解法：**重開 anvil**。demo 與種子腳本的簽章有效期已放寬到一年（`DEMO_SIG_TTL`），
+正常不會再遇到；正式環境的 attestation 由簽章服務即時簽發，短效期才是對的。
+
 ### 重新部署之後（`web/data/` 的舊紀錄）
 
 `web/data/` 裡的 KYC 申請、核發申請、passkey 對照都是用**帳戶地址**當鍵的，而地址是合約部署的產物。

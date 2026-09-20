@@ -113,6 +113,15 @@ contract SeedMarket is Script {
     }
 
     /// @dev 以身分驗證服務金鑰重簽一張新效期的憑證（覆寫既有的那張）。
+    /// @dev 簽章有效期刻意放很寬（一年）。
+    ///
+    ///      理由不是安全，是這個坑太難查：forge **模擬**時讀到的是鏈上最後一個區塊的時間戳，
+    ///      而 anvil 閒置時不會產生新區塊；等到**送出**交易，anvil 才用真實時間打上時間戳。
+    ///      anvil 只要閒置超過 deadline 的長度（原本是一小時），整批交易就會在第一筆
+    ///      kyc.register 全部失敗，訊息只有一句 Expired，看不出是時鐘的問題。
+    ///      正式環境的 attestation 由簽章服務即時簽發，短效期才是對的——那條路徑不走這裡。
+    uint256 internal constant DEMO_SIG_TTL = 365 days;
+
     function _reattest(address account, IKYCRegistry.Tier tier, bytes32 identityHash, uint64 expiry) internal {
         KYCRegistry.IdentityAttestation memory a = KYCRegistry.IdentityAttestation({
             account: account,
@@ -121,7 +130,7 @@ contract SeedMarket is Script {
             jurisdiction: bytes2("TW"),
             identityHash: identityHash,
             nonce: kyc.nonces(account),
-            deadline: block.timestamp + 1 hours
+            deadline: block.timestamp + DEMO_SIG_TTL
         });
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(PK_DEPLOYER, kyc.hashAttestation(a));
         vm.startBroadcast(PK_DEPLOYER);
@@ -138,7 +147,7 @@ contract SeedMarket is Script {
             serialHash: serial,
             reportHash: keccak256("ISO14064-3 seed report"),
             attestationId: 2,
-            deadline: block.timestamp + 1 days
+            deadline: block.timestamp + DEMO_SIG_TTL
         });
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(PK_DEPLOYER, registry.hashIssuance(a));
         vm.startBroadcast(PK_DEPLOYER);
