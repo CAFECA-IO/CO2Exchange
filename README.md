@@ -11,7 +11,7 @@
 
 架構決策、風險與分期紀錄於 Claude project `CO2Exchange › claude/architecture-decisions.md`。
 
-**要動手的人看這裡**：[營運手冊](#營運手冊) — [啟動](#啟動)、[建立模擬資料](#建立模擬資料)、[更新](#更新)、[日常營運](#日常營運)、[出事的時候](#出事的時候)。
+**要動手的人看這裡**：[營運手冊](#營運手冊) — [啟動（全新機器）](#啟動一台全新的機器)、[建立模擬資料](#建立模擬資料)、[更新](#更新)、[日常營運](#日常營運)、[持續運作](#持續運作展示機)、[出事的時候](#出事的時候)。
 其餘章節是設計說明：[分層](#分層)、[治理](#治理safe--timelock)、[安裝](#安裝)、[部署到私有鏈](#部署到既有的私有鏈)、
 [前端](#前端webnextjs-16--react-19)、[模擬市場](#模擬市場100-個有人格的帳戶)、[測試](#測試113)、[自我審查](#自我審查self-review--audit-prep)。
 
@@ -91,28 +91,37 @@ forge test
 
 ## 營運手冊
 
-四件事：**啟動**（從零到能用）、**建立模擬資料**（讓畫面上有東西可看）、**更新**（拉了新版之後要補做什麼）、
-**日常營運**（每天／每月固定要做的）。出事的時候看最後一段。
+五件事：**啟動**（從零到能用）、**建立模擬資料**（讓畫面上有東西可看）、**更新**（拉了新版之後要補做什麼）、
+**日常營運**（每天／每月固定要做的）、**持續運作**（讓一台展示機一直活著）。
+出事的時候看最後一段。
 
-### 啟動
+### 啟動：一台全新的機器
 
-第一次，或換一台機器：
+需要的東西只有三樣：git、Node 20+、curl。Foundry 由 `setup.sh` 自己裝。
 
 ```bash
-# 0. 合約：裝 Foundry、拉依賴、build、test（只有第一次要跑）
-bash setup.sh
+# 1. 取得程式碼與依賴。setup.sh 會裝 Foundry、取出釘死版本的 submodule、build、test
+git clone https://github.com/CAFECA-IO/CO2Exchange.git
+cd CO2Exchange && bash setup.sh
 
-# 1. 鏈。--prune-history 不是可選的，理由見「建立模擬資料」
-anvil --prune-history
+# 2. 前端的依賴與設定
+cd web && npm install && cp .env.example .env.local && cd ..
 
-# 2. 部署 + 走一次完整流程（另一個終端）
-forge script script/DemoFlowV4.s.sol --rpc-url anvil --broadcast --sig "demo()"
+# 3. 鏈 + 部署 + 一年份的市場資料（一道指令，約三到五分鐘）
+bash script/demo-box.sh rebuild
 
-# 3. 前端（第三個終端）
-cd web && cp .env.example .env.local && npm install && npm run dev
+# 4. 前端（另一個終端）
+cd web && npm run dev
 ```
 
-開 <http://localhost:3000>。`.env.local` 至少要確認三件事：
+開 <http://localhost:3000>，首頁的地球上應該有六個轄區亮著、旁邊清單有數字。
+
+> 只想把流程跑一次、不需要一年份的資料，第 3 步可以換成手動兩行：
+> `anvil --prune-history`，另一個終端
+> `forge script script/DemoFlowV4.s.sol --rpc-url anvil --broadcast --sig "demo()"`。
+> 差別是行情圖上只有一兩根 K 棒、地球上只有臺灣有柱子。
+
+`.env.local` 至少要確認三件事：
 
 | 變數 | 為什麼非看不可 |
 |---|---|
@@ -123,15 +132,17 @@ cd web && cp .env.example .env.local && npm install && npm run dev
 環境還在、只是關掉了（第二天開工）：
 
 ```bash
-anvil --prune-history                        # 鏈的狀態不留，要重跑第 2、3 步
+bash script/demo-box.sh rebuild     # 重新鋪一次（約三到五分鐘）
 cd web && npm run dev
 ```
 
-> Anvil 一關就忘光。想留住昨天的資料，用 `anvil --state anvil-state.json --prune-history`
-> （`--state` 是 `--load-state` 與 `--dump-state` 的別名：檔案在就載入，關掉時寫回，
-> 第一次跑檔案不存在也不會失敗）。這樣就不必每天重跑第 2、3 步，
-> 前端 `web/data/` 的申請紀錄也還對得上——那些紀錄是用**帳戶地址**當鍵的，
-> 鏈重開又重新部署就會對不上，機制與處理方式見下面「出事的時候」。
+> Anvil 一關就忘光，所以預設是重鋪。想留住昨天的鏈，給 `demo-box.sh` 一個
+> `STATE=~/anvil-state.json`，或自己開
+> `anvil --state ~/anvil-state.json --prune-history`（`--state` 是 `--load-state`
+> 與 `--dump-state` 的別名：檔案在就載入、關掉時寫回，第一次跑檔案不存在也不會失敗）。
+> 這樣就不必每天重跑部署，前端 `web/data/` 的申請紀錄也還對得上——
+> 那些紀錄是用**帳戶地址**當鍵的，鏈重開又重新部署就會對不上，
+> 機制與處理方式見下面「出事的時候」。
 
 **確認真的跑起來了**（三個都該有東西）：
 
@@ -232,7 +243,8 @@ npm run simulate                                      # 持續模式：依真實
 |---|---|
 | 只有前端（`web/app`、`web/components`） | `npm run dev` 熱更新就好 |
 | 前端依賴（`web/package.json`） | `cd web && npm install` |
-| 合約原始碼（`src/`） | `forge build && forge test` → `forge snapshot`（更新 gas 基準線）→ **重新部署** → `cd web && npm run data:reset` |
+| 合約原始碼（`src/`） | `forge build && forge test` → `forge snapshot`（更新 gas 基準線）→ `cd web && npm run gen:errors`（重產 error 對照表）→ **重新部署** → `npm run data:reset` |
+| 合約的自訂 error | `cd web && npm run gen:errors`。**漏了這步，前端的 revert 會退回顯示 `0x…` 四個位元組**——使用者看不出是沒簽契約還是餘額不足 |
 | 部署腳本或治理參數 | 重新部署 → `./script/govern.sh status` 確認角色都對 |
 | 合約依賴（`lib/`，git submodule） | `git submodule update --init --recursive` → `forge build` |
 | 契約條文（`web/contracts/*.md`） | 不必重部署，但**條文雜湊會變，既有同意紀錄失效、使用者要重簽**——這是預期行為 |
@@ -303,6 +315,69 @@ Phase 0 的營運動作分三種節奏。**誰做**那一欄很重要：營運�
 `timelock state` 查現在到哪一步。完整 SOP（緊急凍結、升級、簽章者管理、移轉驗收）
 見 project 文件「CO2Exchange 治理操作手冊」。
 
+### 持續運作（展示機）
+
+想讓一台機器一直開著、資料一直看起來是新的，有一件事必須先知道：
+
+> ⚠️ **持續模式跑大約一個小時，一年份的需求就用完了。**
+> 實測每輪成交約 1,590 噸，而非做市商的年度採購額度合計 95,408 噸——
+> 以 `--interval 60` 算，大約 60 輪、一小時就見底。之後買方全部收手
+> （年度預算是刻意設的，見「模擬市場」），只剩做市商還在掛單成交，
+> 畫面看起來像市場停了。要等到模擬世界的隔年一月，額度才會重置。
+
+所以展示機的作法**不是「跑一次然後放著」，而是每天重建一次**：
+
+```bash
+# 每天早上六點重鋪一年份的市場
+0 6 * * *  cd /path/to/CO2Exchange && bash script/demo-box.sh rebuild >> /tmp/demo-box.log 2>&1
+```
+
+重建是安全的：Anvil 從同一個部署者、同樣的 nonce 順序跑同一支腳本，
+**十七個合約地址一字不差**（只有部署檔裡的 `deployedAt` 會變）。
+前端的設定不用動，使用者的 passkey 地址也還是同一個——那是 CREATE2 從公鑰算出來的。
+
+只有 `web/data/` 需要注意：那裡的 KYC 與核發申請是用帳戶地址當鍵的，
+鏈上狀態歸零之後它們對不到任何東西，所以指紋檢查會擋下來並回 `503 DATA_STALE`。
+展示機請設 `KYC_AUTO_APPROVE=1`（申請直接核准，不留佇列），
+或在 rebuild 之後一併 `cd web && npm run data:reset`。
+
+**想在白天看到即時的成交**，重建之後再掛上持續模式：
+
+```bash
+bash script/demo-box.sh live -- --interval 60
+```
+
+它會依真實時間每分鐘跑一輪。跑滿一小時左右買方收手是預期的——
+隔天早上的 rebuild 會把一切重來。不要為了讓它撐久一點而調大 `--interval`：
+那只是把同樣的額度攤在更長的時間裡，市場反而更冷清。
+
+**讓它活過重開機。** 這三個行程要有人看著：anvil、Next.js、（可選的）模擬器。
+macOS 用 launchd，Linux 用 systemd；最省事的是讓 `demo-box.sh rebuild`
+在開機時跑一次，前端用 `npm run build && npm start`（不是 `npm run dev`）。
+
+```ini
+# /etc/systemd/system/co2x-web.service
+[Unit]
+After=network.target
+[Service]
+WorkingDirectory=/path/to/CO2Exchange/web
+Environment=KYC_AUTO_APPROVE=1
+ExecStart=/usr/bin/npm start
+Restart=always
+[Install]
+WantedBy=multi-user.target
+```
+
+**磁碟**：`--prune-history` 已經寫進 `demo-box.sh`，但每次重開 anvil 仍會在
+`~/.foundry/anvil/tmp/` 留一份；`rebuild` 每次都會先清掉那個資料夾，
+所以照這個流程走不會累積。手動開 anvil 的話要自己留意，見「建立模擬資料」。
+
+**確認它還活著**：
+
+```bash
+bash script/demo-box.sh status
+```
+
 ### 出事的時候
 
 | 症狀 | 多半是 |
@@ -313,7 +388,9 @@ Phase 0 的營運動作分三種節奏。**誰做**那一欄很重要：營運�
 | 部署腳本最後一筆 `AttestationExpired` | anvil 閒置太久，見下 |
 | 重新部署後畫面有資料但對不上鏈 | `web/data/` 的舊紀錄，見下 |
 | 磁碟莫名其妙滿了 | `~/.foundry/anvil/tmp/` 的歷史狀態，見「建立模擬資料」 |
-| 首頁地球轉但沒有柱子 | 鏈上還沒有核發資料，跑一次 `demo()` 或模擬器 |
+| 首頁地球轉但沒有柱子 | 鏈上還沒有核發資料，跑 `bash script/demo-box.sh rebuild` |
+| 前端報 `0x` 開頭的八位十六進位、看不出原因 | `web/lib/error-abi.ts` 沒跟上合約，`cd web && npm run gen:errors` |
+| 市場突然安靜、只剩零星成交 | 持續模式把年度需求跑完了，見「持續運作」 |
 
 #### `AttestationExpired`：部署腳本最後一筆交易失敗
 
