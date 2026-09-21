@@ -25,20 +25,30 @@ export type CountryRow = {
   retiredKg: number;
   tradedKg: number;
   trades: number;
+  avgPricePerTonne: number;
   listedKg: number;
   orders: number;
 };
 
-/// 一次只看一個量。三個量的數量級差很遠（核發是累計、交易是區間、掛單是當下），
+const t = (kg: number) => (kg / 1000).toLocaleString("zh-TW", { maximumFractionDigits: 0 });
+const money = (v: number) => v.toLocaleString("zh-TW", { maximumFractionDigits: 0 });
+
+/// 一次只看一個量。三個量的性質差很遠（核發是累計、交易是區間、價格是比率），
 /// 疊在同一張圖上就得畫兩把尺，而讀者無法從一根柱子判斷它用的是哪一把。
+///
+/// 第三個原本是「掛單量」——現在掛單簿上有幾噸。那個數字沒有回答任何人真正想問的
+/// 問題：它隨著誰剛好在掛單而跳動，多不代表便宜，少也不代表搶手。換成價格：
+/// 同樣一噸碳，在哪一國要花多少錢，這才是拿六個轄區並排比較的理由。
 const MEASURES = [
-  { key: "issuedKg", label: "核發量", hint: "各轄區累計核發的額度總量" },
-  { key: "tradedKg", label: "交易量", hint: "近一年在本站成交的數量" },
-  { key: "listedKg", label: "掛單量", hint: "目前掛單簿上待成交的數量" },
+  { key: "issuedKg", label: "核發量", hint: "各轄區累計核發的額度總量", unit: "噸", fmt: t },
+  { key: "tradedKg", label: "交易量", hint: "近一年在本站成交的數量", unit: "噸", fmt: t },
+  {
+    key: "avgPricePerTonne", label: "成交均價",
+    hint: "近一年在本站的成交均價，以成交量加權（沒有成交就沒有價格）",
+    unit: "mTWD / 噸", fmt: money,
+  },
 ] as const;
 type MeasureKey = (typeof MEASURES)[number]["key"];
-
-const t = (kg: number) => (kg / 1000).toLocaleString("zh-TW", { maximumFractionDigits: 0 });
 
 /// 國旗用區域指示符號組出來，不放圖檔：兩個字母就是一面旗，
 /// 而且沒有字型的平台會退回顯示 "TW" 這兩個字母，不會變成豆腐。
@@ -77,6 +87,8 @@ export default function GlobeHero() {
   }, []);
 
   const meta = MEASURES.find((m) => m.key === measure)!;
+  // 地球的繪圖 callback 把它當相依項，每次 render 換一個新函式就會重啟繪圖迴圈。
+  const formatValue = useMemo(() => (v: number) => `${meta.fmt(v)} ${meta.unit}`, [meta]);
   const sorted = useMemo(
     () => (rows ?? []).slice().sort((a, b) => b[measure] - a[measure] || a.country.localeCompare(b.country)),
     [rows, measure],
@@ -88,8 +100,16 @@ export default function GlobeHero() {
   );
 
   const totals = useMemo(() => {
-    const s = (k: MeasureKey) => sorted.reduce((a, r) => a + r[k], 0);
-    return { issued: s("issuedKg"), traded: s("tradedKg"), listed: s("listedKg"), open: sorted.filter((r) => r.enabled).length };
+    const s = (k: "issuedKg" | "tradedKg" | "listedKg") => sorted.reduce((a, r) => a + r[k], 0);
+    const traded = s("tradedKg");
+    // 全站均價同樣要用成交量加權：把各國的均價再平均一次，等於讓一筆成交的
+    // 泰國跟五百筆成交的臺灣一樣重。
+    const notional = sorted.reduce((a, r) => a + (r.tradedKg / 1000) * r.avgPricePerTonne, 0);
+    return {
+      issued: s("issuedKg"), traded, listed: s("listedKg"),
+      avgPrice: traded > 0 ? notional / (traded / 1000) : 0,
+      open: sorted.filter((r) => r.enabled).length,
+    };
   }, [sorted]);
 
   const sel = selected ? sorted.find((r) => r.country === selected) ?? null : null;
@@ -105,6 +125,7 @@ export default function GlobeHero() {
               selected={selected}
               onSelect={setSelected}
               measureLabel={meta.label}
+              formatValue={formatValue}
               className="h-full w-full"
             />
           ) : (
@@ -167,8 +188,8 @@ export default function GlobeHero() {
                       <span className="truncate text-sm text-ink-50">{r.name}</span>
                       <span className="shrink-0 text-[11px] text-ink-300">{r.scheme}</span>
                       <span className="ml-auto shrink-0 font-mono text-sm tabular-nums text-ink-50">
-                        {v > 0 ? t(v) : "—"}
-                        {v > 0 && <span className="ml-0.5 text-[10px] text-ink-300">噸</span>}
+                        {v > 0 ? meta.fmt(v) : "—"}
+                        {v > 0 && <span className="ml-0.5 text-[10px] text-ink-300">{meta.unit}</span>}
                       </span>
                     </div>
                     {/* 長條與數字都在，數字負責精確、長條負責一眼看出比例。
@@ -204,6 +225,7 @@ export default function GlobeHero() {
                 ["鏈上流通", `${t(sel.circulatingKg)} 噸`],
                 ["累計註銷", `${t(sel.retiredKg)} 噸`],
                 ["近一年成交", `${t(sel.tradedKg)} 噸 · ${sel.trades} 筆`],
+                ["成交均價", sel.avgPricePerTonne > 0 ? `${money(sel.avgPricePerTonne)} mTWD / 噸` : "—"],
                 ["掛單簿", `${t(sel.listedKg)} 噸 · ${sel.orders} 筆`],
               ].map(([k, v]) => (
                 <div key={k} className="flex items-baseline justify-between gap-3">
@@ -218,13 +240,13 @@ export default function GlobeHero() {
         {rows && rows.length > 0 && (
           <dl className="grid grid-cols-3 gap-2 border-t border-ink-500 pt-3 text-xs">
             {[
-              ["全站核發", t(totals.issued)],
-              ["近一年成交", t(totals.traded)],
-              ["掛單簿", t(totals.listed)],
-            ].map(([k, v]) => (
+              ["全站核發", t(totals.issued), "噸"],
+              ["近一年成交", t(totals.traded), "噸"],
+              ["成交均價", totals.avgPrice > 0 ? money(totals.avgPrice) : "—", "mTWD / 噸"],
+            ].map(([k, v, unit]) => (
               <div key={k}>
                 <dt className="text-ink-300">{k}</dt>
-                <dd className="font-mono text-sm tabular-nums text-ink-50">{v}<span className="ml-0.5 text-[10px] text-ink-300">噸</span></dd>
+                <dd className="font-mono text-sm tabular-nums text-ink-50">{v}<span className="ml-0.5 text-[10px] text-ink-300">{unit}</span></dd>
               </div>
             ))}
           </dl>

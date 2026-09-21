@@ -47,6 +47,14 @@ const browser = await launch();
   const pressed = await page.locator('[role=group] button[aria-pressed=true]').count();
   ok(pressed === 1, "三個量一次只選一個（一張圖只有一把尺）");
 
+  // 第三個量是價格，不是噸數。掛單量（掛單簿上有幾噸）隨著誰剛好在掛單而跳動，
+  // 多不代表便宜、少也不代表搶手——拿六個轄區並排比較時，能回答問題的是價格。
+  await page.getByRole("button", { name: "成交均價" }).click();
+  await page.waitForTimeout(500);
+  const priceRow = await rows.first().innerText();
+  ok(/mTWD \/ 噸/.test(priceRow), `成交均價的單位是 mTWD / 噸：${priceRow.split("\n")[0]}`);
+  ok(await page.getByRole("button", { name: "掛單量" }).count() === 0, "「掛單量」不再是可比較的量");
+
   ok(errs.length === 0, `沒有 console 例外${errs.length ? "：" + errs[0] : ""}`);
   await ctx.close();
 }

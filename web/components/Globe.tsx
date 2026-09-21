@@ -21,6 +21,9 @@ type Props = {
   onSelect: (code: string | null) => void;
   /// 目前畫的是哪一個量，用在 tooltip 的文字上。
   measureLabel: string;
+  /// 怎麼把數值寫成字（含單位）。地球畫的量不一定是噸——第三個量是價格，
+  /// 單位是 mTWD / 噸。把格式交給呼叫端，這裡就不必知道有哪些量。
+  formatValue: (v: number) => string;
   className?: string;
 };
 
@@ -66,12 +69,10 @@ function label(
   ctx: CanvasRenderingContext2D,
   pal: { ink: string; panel: string; border: string },
   x: number, y: number, rx: number,
-  name: string, value: number,
+  name: string, value: number, fmt: (v: number) => string,
 ) {
   const right = rx >= 0;
-  const text = value > 0
-    ? `${name}　${(value / 1000).toLocaleString("zh-TW", { maximumFractionDigits: 0 })} 噸`
-    : name;
+  const text = value > 0 ? `${name}　${fmt(value)}` : name;
   ctx.font = "500 12px ui-sans-serif, system-ui, sans-serif";
   const w = ctx.measureText(text).width;
   const pad = 7;
@@ -104,7 +105,7 @@ function label(
 const TILT = -0.32; // 北半球稍微轉向鏡頭：亞太在上半部，看起來才像地球不像圓盤
 const AUTO_SPEED = 0.055; // 弧度/秒。一圈約兩分鐘，夠慢到不會讓人分心
 
-export default function Globe({ countries, selected, onSelect, measureLabel, className }: Props) {
+export default function Globe({ countries, selected, onSelect, measureLabel, formatValue, className }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [dots, setDots] = useState<Dot[] | null>(null);
@@ -271,7 +272,7 @@ export default function Globe({ countries, selected, onSelect, measureLabel, cla
 
           // 只有選中的那一國在球上直接標數字。每一國都標會糊成一片，
           // 而標一個就等於回答了「我現在看的是誰、多少」，不必再回頭看清單。
-          if (k.country === selected) label(ctx, pal, x1, y1, r.x, k.name, k.value);
+          if (k.country === selected) label(ctx, pal, x1, y1, r.x, k.name, k.value, formatValue);
         } else {
           // 這個量是零的轄區只留一個空心點：它在地球上有位置，但沒有量。
           // 畫一根零高度的柱子會看起來像資料掉了。
@@ -280,11 +281,13 @@ export default function Globe({ countries, selected, onSelect, measureLabel, cla
           ctx.beginPath();
           ctx.arc(x0, y0, isSel ? 5 : 3.5, 0, Math.PI * 2);
           ctx.stroke();
-          if (k.country === selected) label(ctx, pal, x0, y0, r.x, k.name, 0);
+          if (k.country === selected) label(ctx, pal, x0, y0, r.x, k.name, 0, formatValue);
         }
       }
     },
-    [dots, countries, byCode, selected, hover, maxValue],
+    // formatValue 由呼叫端 useMemo 起來，所以放進相依陣列不會讓這個 callback
+    // 每次 render 都換一個新的（換了就等於重啟繪圖迴圈）。
+    [dots, countries, byCode, selected, hover, maxValue, formatValue],
   );
 
   useEffect(() => {
@@ -424,7 +427,7 @@ export default function Globe({ countries, selected, onSelect, measureLabel, cla
           <div className="font-medium text-ink-50">{tipCountry.name}</div>
           <div className="text-ink-300">
             {tipCountry.value > 0
-              ? `${measureLabel} ${(tipCountry.value / 1000).toLocaleString("zh-TW", { maximumFractionDigits: 0 })} 噸`
+              ? `${measureLabel} ${formatValue(tipCountry.value)}`
               : tipCountry.enabled ? `尚無${measureLabel}` : "未開放"}
           </div>
         </div>

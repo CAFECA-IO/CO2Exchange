@@ -36,6 +36,11 @@ export type CountryStat = {
   /// 區間內成交量與成交筆數
   tradedKg: number;
   trades: number;
+  /// 區間內的成交均價（mTWD / 噸，以成交量加權）。沒有成交就是 0。
+  ///
+  /// 為什麼是加權平均而不是最後一筆：最後一筆可能是某個人買 0.1 噸留下的，
+  /// 拿它代表一個轄區的價格，會被一筆小單帶著跑。
+  avgPricePerTonne: number;
   /// 目前掛單簿上的數量與筆數
   listedKg: number;
   orders: number;
@@ -77,13 +82,16 @@ export async function byCountry(rangeHours = 24 * 365): Promise<{
 
   // 成交要經過 orderId → batchId；Filled 事件本身只帶 orderId。
   const filledOrderIds = [...new Set(filled.map((l) => Number(l.args.orderId)))];
-  const orderBatch = new Map<number, number>(
+  // 價格也從這裡拿。掛單的單價在成立之後不會變，所以就算這張單已經吃完、
+  // 變成 inactive，orderOf 回來的 pricePerTonne 仍然是當時成交的價。
+  const orderInfo = new Map<number, { batchId: number; pricePerTonne: bigint }>(
     await Promise.all(
       filledOrderIds.map(async (id) => {
         const o = await publicClient.readContract({
           address: d.listing, abi: listingAbi, functionName: "orderOf", args: [BigInt(id)],
         });
-        return [id, Number(o.batchId)] as [number, number];
+        return [id, { batchId: Number(o.batchId), pricePerTonne: o.pricePerTonne }] as
+          [number, { batchId: number; pricePerTonne: bigint }];
       }),
     ),
   );
@@ -102,6 +110,7 @@ export async function byCountry(rangeHours = 24 * 365): Promise<{
 
   const blank = (): Omit<CountryStat, "country" | "name" | "scheme" | "registryName" | "enabled" | "lat" | "lon"> => ({
     issuedKg: 0, circulatingKg: 0, retiredKg: 0, tradedKg: 0, trades: 0, listedKg: 0, orders: 0,
+    avgPricePerTonne: 0,
   });
   const acc = new Map<string, ReturnType<typeof blank>>();
   const get = (c: string) => {
@@ -124,15 +133,24 @@ export async function byCountry(rangeHours = 24 * 365): Promise<{
     v.retiredKg += Number(l.args.amountKg);
     v.circulatingKg -= Number(l.args.amountKg);
   }
+  // 成交金額另外累加，最後再除以成交量得到加權均價——
+  // 不要把「每一筆的單價」平均起來，那會讓 0.1 噸的單跟 500 噸的單一樣重。
+  const notional = new Map<string, number>();
   for (const l of filled) {
     const t = blockTimes.get(l.blockNumber!) ?? 0;
     if (t < since) continue;
-    const b = orderBatch.get(Number(l.args.orderId));
-    const c = b == null ? undefined : countryOfBatch(b);
-    if (!c) continue;
+    const info = orderInfo.get(Number(l.args.orderId));
+    const c = info == null ? undefined : countryOfBatch(info.batchId);
+    if (!c || !info) continue;
     const v = get(c);
-    v.tradedKg += Number(l.args.amountKg);
+    const kg = Number(l.args.amountKg);
+    v.tradedKg += kg;
     v.trades += 1;
+    notional.set(c, (notional.get(c) ?? 0) + (kg / 1000) * (Number(info.pricePerTonne) / 1e6));
+  }
+  for (const [c, money] of notional) {
+    const v = get(c);
+    if (v.tradedKg > 0) v.avgPricePerTonne = money / (v.tradedKg / 1000);
   }
 
   // 掛單簿現況：逐筆讀，數量不大（示範規模）
