@@ -5,47 +5,85 @@
 /// 所以底圖只負責陸地輪廓，每個轄區另外用自己的密度取樣：大國疏、小國密，
 /// 每一國都是看得出形狀的一塊，而不是一個圓點。
 ///
-/// 底圖裡沒有座標。前端用同一條費波那契球面公式把索引還原成經緯度，
-/// GLOBE_MASK 只回答「第 i 點是不是陸地」——32000 個點因此只花 2856 個字元。
+/// 底圖是 0.6 度的經緯格點，一格一個位元，只回答「這一格是不是陸地」——
+/// 289×600 格因此只花 5740 個字元。座標不存，
+/// 前端用下面四個常數從索引算回經緯度。畫面上要幾個點是**顯示**的事，
+/// 在 lib/globe.ts 抽稀，不在這裡先砍掉——資料留全份，才對得上地圖。
 ///
-/// 來源：Natural Earth 1:50m 國界、GLOBE 地形陸海遮罩，皆為公有領域。
+/// 來源：0.6 度陸地格點（scripts/world-land-0.6deg.json.gz）、
+///       Natural Earth 1:50m 國界，皆為公有領域。
 
-export const GLOBE_POINTS = 32000;
+/// 底圖格線：第 (r, c) 格的中心是 (GLOBE_GRID_LAT0 + r×STEP, GLOBE_GRID_LON0 + c×STEP)。
+export const GLOBE_GRID_STEP = 0.6;
+export const GLOBE_GRID_LAT0 = -89.7;
+export const GLOBE_GRID_LON0 = -179.7;
+export const GLOBE_GRID_ROWS = 289;
+export const GLOBE_GRID_COLS = 600;
+
 export const GLOBE_TRACKED = ["TW", "JP", "KR", "TH", "ID", "AU", "CN", "IN", "SG"] as const;
 /// 每一國的點數，順序同 GLOBE_TRACKED；用來把 GLOBE_REGIONS 切成九段。
 export const GLOBE_REGION_COUNTS = [232, 284, 167, 202, 558, 510, 354, 316, 127];
 
-/// RLE + deflate + base64 的陸地位元圖。
-export const GLOBE_MASK_B64 =
-  "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";
+/// RLE + deflate + base64 的陸地位元圖，列優先（由南到北，每列由西到東）。
+export const GLOBE_GRID_B64 =
+  "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" +
+  "IlUV3Vwn6qkIlTliLnBKzfxrZL5M1SeernPtMqTEqcrpMRv7pd+IaMuVZLOxH/YKs/D8FTKcmbCwLKUbai6LdNSrpJa0mq7rZts7" +
+  "OjccU2H3sduNLh04gxT5MjNzdueuhA1TSS1eWVsiY0XZ4AllmulkN2oXAYF4hO4RLwUe9VTIG/DwVB0Rx670u1DkKupesvQtJh6Z" +
+  "cvSUFyU48HSvMU/RWsPYnbF3pKqnQygFTVPWtMBQTuFTF31QwTIjaemd9mNFp42K9j4f5sl04LoVOZQj+jO7ANHdkC/G+AYSyM0V" +
+  "Fgwk+J+Xcq0t5crpI9BKrDVFSl+pWBqUjzP5rayqPiKzn2UHdUYupcDeJKvXYdE7XQJbypGSUDTTCTwTc2y8RvxsPd+i/C2lGyBi" +
+  "4qUpVKvKkLtcORSvajLtItdKQVWtpIBh6rruQM/Qjm7B86DcFBQ4vLJgWP+lqwXMlSZ5qnjs5KZjOyFdqE5WZI3q+FXptAKxch5z" +
+  "rZQJQxf5efYhLnuaZsxU+WbM/oXrw1DUN4Jow2bp5o1NQFmMvPimBx7ijX68q4v3dPwyNd2XiPkWME9VHz4bAqrmqWbdH6UG+S1X" +
+  "EAbLE0QXyUpsKkdQTQ7FL1okTtL3FTJ/0RMcxS9zQSUkT1/tQvpkFNTJr5JzjtCb56Ip+zHXmK+rz80YyO2jEQgKXpYXMkAp3ctU" +
+  "Om1ABb7YgMajpBp8iDNeG/tkGT1ZJEAMKZ4IgpwR1A0yhD7s2mzn8qjQB84K3Ff3tXYWZnTpqiPXjNt5ScoPRA2E9EKJrAhf16dC" +
+  "dXtI3yaJX5miqJ1OjGRegW6iKePzKLAo6XVvSLfFY1/qgozP2nOZ7exES94xJ9/PwMp/QMZCZ4NmYlgi/NmTmE7yUjFKrQo7eMcX" +
+  "Uin8dSbU9oQLM+0wOWcrNSL40uTPh/8HsQlCww==";
 
 /// 各轄區的點，(lon, lat) 各量化到 1/100 度的 int16，小端序。
 export const GLOBE_REGIONS_B64 =

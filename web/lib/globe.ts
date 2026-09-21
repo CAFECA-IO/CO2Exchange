@@ -5,7 +5,8 @@
 /// 不會因為視距而變形，而且每個點的縮放係數都一樣，柱子的長度才有可比性。
 
 import {
-  GLOBE_MASK_B64, GLOBE_POINTS, GLOBE_REGIONS_B64, GLOBE_REGION_COUNTS, GLOBE_TRACKED,
+  GLOBE_GRID_B64, GLOBE_GRID_COLS, GLOBE_GRID_LAT0, GLOBE_GRID_LON0, GLOBE_GRID_ROWS,
+  GLOBE_GRID_STEP, GLOBE_REGIONS_B64, GLOBE_REGION_COUNTS, GLOBE_TRACKED,
 } from "./globe-mask";
 
 export type Dot = {
@@ -15,7 +16,17 @@ export type Dot = {
   region: number;
 };
 
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+/// 底圖抽稀：每 BASE_POOL 格取一個點。
+///
+/// 0.6 度的格子在赤道上約 67 公里，整顆球鋪滿是三萬六千個點——畫得出來，
+/// 但每一幀都要轉三萬六千次矩陣再畫三萬六千個圓，手機上就掉幀了。
+/// 取 2 得到 1.2 度（約 133 公里），九千多個點，跟抽稀前的形狀一樣認得出來。
+const BASE_POOL = 2;
+
+/// 一塊最多跨幾格經度。純按 1/cos(緯度) 放大，到了南極圈一塊會寬達兩百多度——
+/// 一個點代表半圈地球，放在哪裡都是錯的。極區因此比等面積該有的密一點，
+/// 那是刻意的：那裡本來就只是背景。
+const MAX_SPAN = 30;
 
 function b64ToBytes(b64: string): Uint8Array {
   if (typeof atob === "function") {
@@ -68,22 +79,44 @@ function lonLatToXyz(lonDeg: number, latDeg: number): [number, number, number] {
   return [c * Math.sin(lon), Math.sin(lat), c * Math.cos(lon)];
 }
 
-/// 解出整顆地球的點。底圖用費波那契球面還原座標，轄區用存下來的經緯度。
+/// 解出整顆地球的點。底圖是經緯格點抽稀後的結果，轄區用存下來的經緯度。
 export async function buildDots(): Promise<Dot[]> {
-  const [maskRaw, regionRaw] = await Promise.all([
-    inflate(b64ToBytes(GLOBE_MASK_B64)),
+  const [gridRaw, regionRaw] = await Promise.all([
+    inflate(b64ToBytes(GLOBE_GRID_B64)),
     inflate(b64ToBytes(GLOBE_REGIONS_B64)),
   ]);
-  const mask = rleDecode(maskRaw, GLOBE_POINTS);
+  const grid = rleDecode(gridRaw, GLOBE_GRID_ROWS * GLOBE_GRID_COLS);
 
   const dots: Dot[] = [];
-  for (let i = 0; i < GLOBE_POINTS; i++) {
-    if (!mask[i]) continue;
-    const z = 1 - (2 * i + 1) / GLOBE_POINTS;
-    const r = Math.sqrt(Math.max(0, 1 - z * z));
-    const theta = i * GOLDEN_ANGLE;
-    // 費波那契球面的 z 是「高度」，這裡對應到 y（北極朝上）
-    dots.push({ x: r * Math.cos(theta), y: z, z: r * Math.sin(theta), region: -1 });
+  for (let r = 0; r < GLOBE_GRID_ROWS; r += BASE_POOL) {
+    const rows = Math.min(BASE_POOL, GLOBE_GRID_ROWS - r);
+    const lat = GLOBE_GRID_LAT0 + (r + (rows - 1) / 2) * GLOBE_GRID_STEP;
+    // 等經度間距在高緯度會擠成一團——極區的一度只有赤道的幾十分之一寬。
+    // 除以 cos(緯度) 把經度方向拉開，點在**地表上**才是等距的。
+    const cos = Math.max(Math.cos((lat * Math.PI) / 180), 1e-3);
+    const span = Math.max(1, Math.min(MAX_SPAN, Math.round(BASE_POOL / cos)));
+    for (let c = 0; c < GLOBE_GRID_COLS; c += span) {
+      const cols = Math.min(span, GLOBE_GRID_COLS - c);
+      // 整塊裡只要有一格是陸地就留一個點，位置取塊內**離中心最近的那一格陸地**。
+      //
+      // 兩件事各有原因。只看每 span 格的那一格就丟掉其餘的話，日本、中美洲、
+      // 島鏈這種一格寬的地形會整段消失——地圖上不見一個國家，比密度不均難看得多。
+      // 而點放在塊的幾何中心、不管那裡是不是陸地的話，海岸線會往海裡糊出去半塊，
+      // 在極區（一塊很寬）甚至會把點放到外海。
+      let best = -1, bestD = Infinity;
+      const mid = (cols - 1) / 2;
+      for (let dc = 0; dc < cols; dc++) {
+        const d = Math.abs(dc - mid);
+        if (d >= bestD) continue;
+        for (let dr = 0; dr < rows; dr++) {
+          if (grid[(r + dr) * GLOBE_GRID_COLS + c + dc]) { best = dc; bestD = d; break; }
+        }
+      }
+      if (best < 0) continue;
+      const lon = GLOBE_GRID_LON0 + (c + best) * GLOBE_GRID_STEP;
+      const [x, y, z] = lonLatToXyz(lon, lat);
+      dots.push({ x, y, z, region: -1 });
+    }
   }
 
   const view = new DataView(regionRaw.buffer, regionRaw.byteOffset, regionRaw.byteLength);

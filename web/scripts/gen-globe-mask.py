@@ -7,17 +7,24 @@
 大國疏、小國密，每一國都拿到看得出形狀的一塊，而不是一個圓點。
 
 輸出兩個編碼字串：
-  GLOBE_MASK_B64    底圖。沒有座標——前端用同一條費波那契球面公式把索引還原成
-                    經緯度，這張表只回答第 i 點是不是陸地。RLE + deflate。
+  GLOBE_GRID_B64    底圖。0.6 度的經緯格點，每一格只回答「是不是陸地」。
+                    RLE + deflate，列優先（同一列相鄰的格子多半同為海或同為陸，
+                    行優先會把每一段都切斷，壓出來大三成）。
   GLOBE_REGIONS_B64 各轄區的點，經緯度量化到 1/100 度存成 int16。
 
-來源：Natural Earth 1:50m 國界、GLOBE 地形陸海遮罩，皆為公有領域。
-用法：python3 scripts/gen-globe-mask.py <world-atlas 目錄> > lib/globe-mask.ts
+底圖為什麼是格點而不是費波那契球面：費波那契點的位置是算出來的，
+海陸判斷交給程式庫（global_land_mask），實際畫出來的海岸線就是那個程式庫的解析度，
+沒辦法拿一份地圖去核對。格點的每一格都在檔案裡，要對照真實世界是一件可以做的事。
+
+來源：
+  scripts/world-land-0.6deg.json.gz  0.6 度陸地格點（底圖）
+  Natural Earth 1:50m 國界           各轄區的輪廓
+用法：python3 scripts/gen-globe-mask.py <world-atlas 目錄> \
+        [scripts/world-land-0.6deg.json.gz] > lib/globe-mask.ts
 """
-import sys, json, math, base64, zlib
+import sys, os, json, math, gzip, base64, zlib
 import numpy as np
 from matplotlib.path import Path
-from global_land_mask import globe as glm
 
 # 追蹤的轄區，順序要跟前端的 JURISDICTIONS 一致。
 # target = 希望這一國拿到幾個點：大到看得出形狀，小到不會糊成一塊。
@@ -26,7 +33,12 @@ TRACKED = [
     ("ID", 360, 340), ("AU", 36, 340), ("CN", 156, 340), ("IN", 356, 300),
     ("SG", 702, 90),
 ]
-N_BASE = 32000
+
+# 底圖格點。lat 由 LAT0 往北每 STEP 一列，lon 由 LON0 往東每 STEP 一行。
+GRID_STEP = 0.6
+GRID_LAT0, GRID_ROWS = -89.7, 289
+GRID_LON0, GRID_COLS = -179.7, 600
+DEFAULT_GRID = os.path.join(os.path.dirname(__file__), "world-land-0.6deg.json.gz")
 
 def topo_decode(topo, obj_name):
     tr = topo["transform"]; sx, sy = tr["scale"]; dx, dy = tr["translate"]
@@ -55,13 +67,27 @@ def topo_decode(topo, obj_name):
         out.setdefault(str(int(gid)), []).extend(rings)
     return out
 
-def fibonacci_sphere(n):
-    i = np.arange(n, dtype=np.float64)
-    z = 1.0 - (2.0 * i + 1.0) / n
-    lat = np.degrees(np.arcsin(z))
-    ga = math.pi * (3.0 - math.sqrt(5.0))
-    lon = np.degrees(((i * ga) % (2 * math.pi)) - math.pi)
-    return lat, lon
+def load_grid(path):
+    """把 [{lat, lng}, ...] 讀成 ROWS×COLS 的 0/1 陣列。
+
+    來源檔是一份「哪些 0.6 度格子是陸地」的清單，沒有順序也沒有結構；
+    落在格線以外的座標代表檔案跟這裡假設的格線不同，寧可停下來也不要默默四捨五入
+    ——那會讓海岸線整體偏移半格，而畫面上看起來只是「有點怪」。
+    """
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8") as f:
+        pts = json.load(f)
+    g = np.zeros((GRID_ROWS, GRID_COLS), np.uint8)
+    for p in pts:
+        fr = (p["lat"] - GRID_LAT0) / GRID_STEP
+        fc = (p["lng"] - GRID_LON0) / GRID_STEP
+        r, c = round(fr), round(fc)
+        if abs(fr - r) > 1e-6 or abs(fc - c) > 1e-6:
+            raise SystemExit(f"座標不在 {GRID_STEP} 度格線上：{p}")
+        if not (0 <= r < GRID_ROWS and 0 <= c < GRID_COLS):
+            raise SystemExit(f"座標超出格線範圍：{p}")
+        g[r, c] = 1
+    return g
 
 def sample_country(rings, target):
     """在多邊形內取樣到接近 target 個點。經度間距依緯度放大，讓點在地表上等距。"""
@@ -88,6 +114,30 @@ def sample_country(rings, target):
         step *= 0.78
     return best
 
+# 底圖自我檢查。格線對齊了不代表內容是對的——來源檔若南北顛倒或經度差 180 度，
+# 每一格都還是落在格線上，畫出來也還是一顆有大陸的球，只是那不是地球。
+# 各挑幾個一定是陸地、一定是海的地方，錯了就停下來。
+SPOT_LAND = [
+    ("臺北", 25.0, 121.5), ("東京", 35.7, 139.7), ("新加坡", 1.35, 103.8),
+    ("雪梨", -33.9, 151.2), ("開羅", 30.0, 31.2), ("聖保羅", -23.5, -46.6),
+    ("芝加哥", 41.9, -87.6), ("巴黎", 48.9, 2.35), ("南極點", -89.5, 0.0),
+]
+SPOT_SEA = [
+    ("北太平洋", 30.0, -160.0), ("南太平洋", -30.0, -120.0), ("南大西洋", -30.0, -20.0),
+    ("印度洋", -20.0, 80.0), ("北冰洋", 88.0, 0.0), ("孟加拉灣", 15.0, 88.0),
+]
+
+def check_grid(g):
+    def at(la, lo):
+        r = round((la - GRID_LAT0) / GRID_STEP); c = round((lo - GRID_LON0) / GRID_STEP)
+        r = min(max(r, 0), GRID_ROWS - 1); c = min(max(c, 0), GRID_COLS - 1)
+        # 容一格：0.6 度的格子放不下新加坡，城市座標落在隔壁格是正常的
+        return g[max(0, r-1):r+2, max(0, c-1):c+2].any()
+    bad = [f"{n} 應該是陸地" for n, la, lo in SPOT_LAND if not at(la, lo)]
+    bad += [f"{n} 應該是海" for n, la, lo in SPOT_SEA if at(la, lo)]
+    if bad:
+        raise SystemExit("底圖對不上真實世界：" + "、".join(bad))
+
 def rle_encode(vals):
     out = bytearray(); prev, run = vals[0], 0
     def flush(v, r):
@@ -108,10 +158,11 @@ def main():
     topo = json.load(open(f"{sys.argv[1]}/countries-50m.json"))
     polys = topo_decode(topo, "countries")
 
-    lat, lon = fibonacci_sphere(N_BASE)
-    land = glm.is_land(np.clip(lat, -89.9, 89.9), lon).astype(np.uint8)
-    mask_b64 = b64z(rle_encode(land.tolist()))
-    print(f"# 底圖陸地 {int(land.sum())}/{N_BASE}，{len(mask_b64)} 字元", file=sys.stderr)
+    grid = load_grid(sys.argv[2] if len(sys.argv) > 2 else DEFAULT_GRID)
+    check_grid(grid)
+    grid_b64 = b64z(rle_encode(grid.flatten().tolist()))
+    print(f"# 底圖 {GRID_ROWS}×{GRID_COLS} 格，陸地 {int(grid.sum())} 格，"
+          f"{len(grid_b64)} 字元", file=sys.stderr)
 
     counts, buf = [], bytearray()
     for code, iso, target in TRACKED:
@@ -136,19 +187,28 @@ def main():
 /// 所以底圖只負責陸地輪廓，每個轄區另外用自己的密度取樣：大國疏、小國密，
 /// 每一國都是看得出形狀的一塊，而不是一個圓點。
 ///
-/// 底圖裡沒有座標。前端用同一條費波那契球面公式把索引還原成經緯度，
-/// GLOBE_MASK 只回答「第 i 點是不是陸地」——{N_BASE} 個點因此只花 {len(mask_b64)} 個字元。
+/// 底圖是 {GRID_STEP} 度的經緯格點，一格一個位元，只回答「這一格是不是陸地」——
+/// {GRID_ROWS}×{GRID_COLS} 格因此只花 {len(grid_b64)} 個字元。座標不存，
+/// 前端用下面四個常數從索引算回經緯度。畫面上要幾個點是**顯示**的事，
+/// 在 lib/globe.ts 抽稀，不在這裡先砍掉——資料留全份，才對得上地圖。
 ///
-/// 來源：Natural Earth 1:50m 國界、GLOBE 地形陸海遮罩，皆為公有領域。
+/// 來源：0.6 度陸地格點（scripts/world-land-0.6deg.json.gz）、
+///       Natural Earth 1:50m 國界，皆為公有領域。
 
-export const GLOBE_POINTS = {N_BASE};
+/// 底圖格線：第 (r, c) 格的中心是 (GLOBE_GRID_LAT0 + r×STEP, GLOBE_GRID_LON0 + c×STEP)。
+export const GLOBE_GRID_STEP = {GRID_STEP};
+export const GLOBE_GRID_LAT0 = {GRID_LAT0};
+export const GLOBE_GRID_LON0 = {GRID_LON0};
+export const GLOBE_GRID_ROWS = {GRID_ROWS};
+export const GLOBE_GRID_COLS = {GRID_COLS};
+
 export const GLOBE_TRACKED = [{codes}] as const;
 /// 每一國的點數，順序同 GLOBE_TRACKED；用來把 GLOBE_REGIONS 切成九段。
 export const GLOBE_REGION_COUNTS = {counts};
 
-/// RLE + deflate + base64 的陸地位元圖。
-export const GLOBE_MASK_B64 =
-{wrap(mask_b64)};
+/// RLE + deflate + base64 的陸地位元圖，列優先（由南到北，每列由西到東）。
+export const GLOBE_GRID_B64 =
+{wrap(grid_b64)};
 
 /// 各轄區的點，(lon, lat) 各量化到 1/100 度的 int16，小端序。
 export const GLOBE_REGIONS_B64 =

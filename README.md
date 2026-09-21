@@ -256,7 +256,7 @@ npm run simulate                                      # 持續模式：依真實
 | 部署腳本或治理參數 | 重新部署 → `./script/govern.sh status` 確認角色都對 |
 | 合約依賴（`lib/`，git submodule） | `git submodule update --init --recursive` → `forge build` |
 | 契約條文（`web/contracts/*.md`） | 不必重部署，但**條文雜湊會變，既有同意紀錄失效、使用者要重簽**——這是預期行為 |
-| 地球的地理資料 | 只有要換底圖或加轄區才需要重跑 `scripts/gen-globe-mask.py`，產生出來的 `lib/globe-mask.ts` 已經在版控裡 |
+| 地球的地理資料 | 只有要換底圖或加轄區才需要重跑 `scripts/gen-globe-mask.py`（來源 `scripts/world-land-0.6deg.json.gz` 也在版控裡），產生出來的 `lib/globe-mask.ts` 已經在版控裡 |
 
 合約改了就一定要重新部署，重新部署就一定要處理 `web/data/`：
 
@@ -524,21 +524,31 @@ ISO 14064、額度能用在哪——連同 K 線與市場概況全部在 `/about
 每個點的縮放係數都一樣，柱子的長度才有可比性。深淺兩色都能上色（`--globe-ocean`／
 `--globe-land` 兩個變數），沒有 WebGL 的裝置照常運作。
 
-地理資料壓在 `web/lib/globe-mask.ts` 裡，約 14KB，由 `web/scripts/gen-globe-mask.py` 產生：
+地理資料壓在 `web/lib/globe-mask.ts` 裡，約 18KB，由 `web/scripts/gen-globe-mask.py` 產生：
 
 ```bash
 npm pack world-atlas@2 && tar xzf world-atlas-*.tgz
-pip install global-land-mask matplotlib numpy
+pip install matplotlib numpy
 python3 scripts/gen-globe-mask.py ./package > lib/globe-mask.ts
 ```
 
 分成兩層是有原因的。均勻取樣的球面點陣畫得出澳洲，畫不出臺灣——要讓臺灣拿到看得出
-形狀的點數，全球得鋪到六位數個點，那既跑不動也送不動。所以底圖只負責陸地輪廓
-（而且不存座標：前端用同一條費波那契球面公式把索引還原成經緯度，遮罩只回答第 i 點是不是
-陸地，32,000 個點因此只花 2,856 個字元），九個轄區另外用各自的密度取樣：大國疏、小國密，
-每一國都是看得出形狀的一塊，而不是一個圓點。
+形狀的點數，全球得鋪到六位數個點，那既跑不動也送不動。所以底圖只負責陸地輪廓，
+九個轄區另外用各自的密度取樣：大國疏、小國密，每一國都是看得出形狀的一塊，
+而不是一個圓點。
 
-來源是 Natural Earth 1:50m 國界與 GLOBE 地形陸海遮罩，皆為公有領域。
+底圖是 **0.6 度的經緯格點**（`web/scripts/world-land-0.6deg.json.gz`，59,443 格陸地），
+一格一個位元、列優先做 RLE + deflate，289×600 格只花 5,740 個字元；座標不存，前端從索引
+算回經緯度。格線的好處是可以拿一份地圖逐格核對——換成「算出點的位置、再問程式庫那裡是不是
+陸地」的做法，畫出來的海岸線就是那個程式庫的解析度，對不對只能用看的。
+
+畫面上不會把 59,443 格全部畫出來：`lib/globe.ts` 以 2×2 為一塊抽稀成約 9,500 個點
+（赤道間距約 133 公里），經度方向再除以 `cos(緯度)`，點在**地表上**才是等距的。抽稀是
+「整塊裡有一格是陸地就留一個點，位置取塊內離中心最近的那一格陸地」——只取每塊的固定
+那一格的話，日本、中美洲、島鏈這種一格寬的地形會整段消失。要更密或更疏改 `BASE_POOL`
+一個常數，資料不用重產。
+
+來源是 0.6 度陸地格點與 Natural Earth 1:50m 國界，皆為公有領域。
 
 `/trade` 的買進與賣出共用同一個下單面板，使用者只處理**數量**與**單價**；最小成交量與使用期限有預設值、收在「進階」裡。
 送出前一律跳出確認單，把成交條件、費用、對方與待簽的定型化契約攤開，按下去就是簽章上鏈。
