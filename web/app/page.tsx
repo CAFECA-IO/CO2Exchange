@@ -139,12 +139,6 @@ export default function Home() {
 
       {/* ── 地球：世界各國的核發量與交易量 ───────────────────────── */}
       <GlobeHero />
-
-      <p className="border-t border-ink-500 pt-6 text-xs leading-6 text-ink-300">
-        本站目前為 Phase 0 展示版本：身分驗證、查驗機構簽章與結算幣皆為模擬，額度不具法律效力，不得作為任何申報依據。
-        制度說明、各國機制與額度的可用途徑請見
-        <Link className="text-tide underline" href="/about">認識碳權</Link>。
-      </p>
     </div>
   );
 }

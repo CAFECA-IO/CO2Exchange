@@ -627,8 +627,11 @@ export default function About() {
           包括別人的，你可以自己核對；完整的做法與時程寫在
           <Link className="text-tide underline" href="/agreements/service-flow">服務流程說明書</Link>裡。
         </p>
+        {/*
+          Phase 0 聲明已經在每一頁的頁尾，這裡不再重複；留下的是頁尾沒有說、
+          而這一頁該說的那一句——正式營運缺的是什麼。
+        */}
         <p className="text-xs leading-6 text-ink-300">
-          本站目前為 Phase 0 展示版本：身分驗證、查驗機構簽章與結算幣皆為模擬，額度不具法律效力，不得作為任何申報依據。
           正式營運的前提是主管機關認可、查驗機構以自己的金鑰簽章，以及金融機構提供的結算工具。
         </p>
       </Section>
