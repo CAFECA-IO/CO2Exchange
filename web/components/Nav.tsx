@@ -3,6 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { useAccount } from "./AccountProvider";
+import { hasLogin } from "@/lib/login";
 import { LogoMark } from "./Logo";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -21,7 +22,7 @@ const base = [
 export function Nav() {
   const path = usePathname();
   const { data: session } = useSession();
-  const { credential, me, tier } = useAccount();
+  const { credential, me, tier, config } = useAccount();
   const links: readonly (readonly [string, string])[] = [
     ...base,
     ...(tier === 2 ? [["/enterprise", "企業"] as const] : []),
@@ -81,11 +82,14 @@ export function Nav() {
             >
               登出
             </button>
-          ) : (
+          ) : hasLogin(config?.providers) ? (
             /*
               登入只在首頁的 hero 裡有入口，從任何內頁都回不去——手機上尤其明顯，
               導覽列一換行，首頁的 hero 就在兩個捲動之外。這裡放一個常駐的入口，
               但不重做一套登入 UI：指到首頁的 #login，維持單一登入畫面。
+
+              站台沒開任何登入方式時不畫這顆：指到一個什麼都沒有的地方，
+              比沒有入口更難理解。
             */
             <Link
               href="/#login"
@@ -93,7 +97,7 @@ export function Nav() {
             >
               登入
             </Link>
-          )}
+          ) : null}
         </div>
       </div>
     </header>

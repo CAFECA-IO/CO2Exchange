@@ -89,6 +89,33 @@ const browser = await launch();
   await ctx.close();
 }
 
+// ── 一個登入方式都沒有的站台 ──────────────────────────────────────
+//
+// 登入供應商是環境變數開的：關掉 Google、production 又沒開 AUTH_DEV_LOGIN，
+// providers 就是空的。這一段擋的是那時候畫面**什麼都不說**——
+// 導覽列有「登入」、內頁叫人「回首頁登入」，回到首頁那裡空一塊，按鈕看起來就是壞的。
+{
+  const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 } });
+  const page = await ctx.newPage();
+  // 只改 providers，其餘照伺服器原本回的走——這裡要測的是畫面怎麼反應，不是設定怎麼讀。
+  await page.route("**/api/config", async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, providers: [] } });
+  });
+  await page.goto(BASE, { waitUntil: "networkidle" });
+  await page.waitForTimeout(1200);
+  console.log("沒有任何登入方式時");
+  ok(await page.locator('[data-testid="no-login"]').isVisible(), "首頁說明為什麼不能登入");
+  ok(await page.locator("header").getByRole("link", { name: "登入" }).count() === 0,
+    "導覽列不給一顆沒有去處的「登入」");
+  await page.goto(`${BASE}/trade`, { waitUntil: "networkidle" });
+  await page.waitForTimeout(1200);
+  ok(await page.locator('[data-testid="no-login"]').isVisible(), "內頁也說明，而不是叫人回首頁登入");
+  ok(await page.getByRole("button", { name: "回首頁登入" }).count() === 0, "不留死路的「回首頁登入」");
+  await ctx.close();
+}
+
 // ── /about：說明與圖表都搬過去了 ─────────────────────────────────
 {
   const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 } });

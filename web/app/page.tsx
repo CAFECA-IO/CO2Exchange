@@ -4,6 +4,7 @@ import { signIn, useSession } from "next-auth/react";
 import Link from "next/link";
 import { useAccount } from "@/components/AccountProvider";
 import { Button, Field, Notice, inputCls } from "@/components/ui";
+import { NO_LOGIN_BODY, NO_LOGIN_TITLE, hasLogin } from "@/lib/login";
 import GlobeHero from "@/components/GlobeHero";
 import { LogoMark } from "@/components/Logo";
 
@@ -49,6 +50,19 @@ function NextStep() {
               <button onClick={() => setShowDev((v) => !v)} className="text-xs text-ink-300 underline hover:text-ink-50">
                 開發用登入
               </button>
+            )}
+            {/*
+              一個供應商都沒有的時候，這個分支原本什麼都不畫——於是導覽列的「登入」
+              捲到這裡，畫面上空一塊，看起來就是按鈕壞了。要等 config 回來再說，
+              免得每次載入都先閃一句「沒有開放登入」。
+            */}
+            {config && !hasLogin(providers) && (
+              <div data-testid="no-login" className="max-w-xl">
+                <Notice>
+                  <b>{NO_LOGIN_TITLE}</b>
+                  <span className="mt-1 block text-ink-200">{NO_LOGIN_BODY}</span>
+                </Notice>
+              </div>
             )}
           </>
         ) : !credential ? (

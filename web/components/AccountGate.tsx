@@ -3,6 +3,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useAccount } from "./AccountProvider";
 import { Button, Card, Notice } from "./ui";
+import { NO_LOGIN_BODY, NO_LOGIN_TITLE, hasLogin } from "@/lib/login";
 
 /// 進入內頁前的門檻畫面。
 ///
@@ -23,6 +24,19 @@ export function AccountGate() {
 
   // ① 沒有 session
   if (!userId) {
+    // 站台根本沒開登入的時候，「回首頁登入」是一顆送人去空畫面的按鈕。
+    // 說清楚為什麼進不來，並指向不需要登入也看得到的東西。
+    if (config && !hasLogin(config.providers)) {
+      return (
+        <Card title={NO_LOGIN_TITLE}>
+          <p data-testid="no-login" className="text-sm leading-7 text-ink-200">{NO_LOGIN_BODY}</p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link href="/"><Button>看市場現況</Button></Link>
+            <Link href="/about"><Button variant="secondary">認識碳權</Button></Link>
+          </div>
+        </Card>
+      );
+    }
     return (
       <Card title="請先登入">
         <p className="text-sm leading-7 text-ink-200">
