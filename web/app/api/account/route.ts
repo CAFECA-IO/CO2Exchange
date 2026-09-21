@@ -1,7 +1,7 @@
 import { type Hex, isHex } from "viem";
 import { accountFactoryAbi } from "@/lib/abis";
 import { deployment, isAddress, publicClient, relayerClient } from "@/lib/server/chain";
-import { getAccount, putAccount } from "@/lib/server/accounts";
+import { accountsOf, getAccount, putAccount } from "@/lib/server/accounts";
 import { auth } from "@/auth";
 import { handle } from "@/lib/server/roles";
 
@@ -13,6 +13,14 @@ import { handle } from "@/lib/server/roles";
 export async function GET(req: Request) {
   try {
     const u = new URL(req.url);
+    // ?mine=1 → 這個登入帳號綁過的鏈上帳戶。沒有它的話，換一台裝置的人只會看到
+    // 「尚未建立鏈上帳戶」——一句伺服器其實知道不是真的的話。
+    if (u.searchParams.get("mine")) {
+      const session = await auth();
+      const id = session?.user?.id;
+      if (!id) return Response.json({ error: "unauthenticated" }, { status: 401 });
+      return Response.json({ accounts: accountsOf(id) });
+    }
     const address = u.searchParams.get("address");
     if (address) {
       if (!isAddress(address)) return Response.json({ error: "address" }, { status: 400 });
@@ -45,7 +53,12 @@ export async function POST(req: Request) {
     txHash = await relayerClient.writeContract({ address: d.accountFactory, abi: accountFactoryAbi, functionName: "createAccount", args: [qx, qy] });
     await publicClient.waitForTransactionReceipt({ hash: txHash });
   }
-  putAccount(credentialId, { publicKey: publicKey as Hex, address });
+  // 連同登入身分一起記下來。只有這樣，使用者換裝置之後伺服器才答得出
+  // 「你已經有一個帳戶」；否則就只剩 credentialId，而那個東西跟著瀏覽器走。
+  putAccount(credentialId, {
+    publicKey: publicKey as Hex, address,
+    userId: session.user.id, email: session.user.email ?? undefined,
+  });
   return Response.json({ address, deployed: !!txHash, txHash });
   } catch (e) { return handle(e); }
 }

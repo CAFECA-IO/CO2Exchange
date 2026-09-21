@@ -18,7 +18,7 @@ import { LogoMark } from "@/components/Logo";
 /// 都有了就直接去交易。一個頁面上只出現一個「下一步」，不要讓人自己挑。
 function NextStep() {
   const { data: session, status } = useSession();
-  const { credential, busy, createAccount, useExistingPasskey, config } = useAccount();
+  const { credential, busy, createAccount, useExistingPasskey, config, knownAccounts } = useAccount();
   const [email, setEmail] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const providers = config?.providers ?? [];
@@ -33,6 +33,10 @@ function NextStep() {
   };
 
   // 載入中的佔位也掛上 id：導覽列的 /#login 可能在 session 還沒回來時就跳過去了。
+  // 伺服器知道這個登入帳號綁過哪些鏈上帳戶。null = 還沒問到，這時候不要斷言任何一邊。
+  const hasAccount = (knownAccounts?.length ?? 0) > 0;
+  const firstAccount = knownAccounts?.[0]?.address;
+
   if (status === "loading") return <div id="login" className="h-10 scroll-mt-24" />;
 
   return (
@@ -66,10 +70,24 @@ function NextStep() {
             )}
           </>
         ) : !credential ? (
-          <>
-            <Button onClick={() => run(createAccount)} disabled={!!busy}>{busy ?? "建立鏈上帳戶（passkey）"}</Button>
-            <Button variant="secondary" onClick={() => run(useExistingPasskey)} disabled={!!busy}>我已有 passkey</Button>
-          </>
+          // 這個人**已經有**鏈上帳戶、只是這台裝置沒綁定的話，主要動作是「綁回來」，
+          // 不是「再建一個」。順序講的是我們認為你該做什麼，擺錯就是給錯建議。
+          hasAccount ? (
+            <>
+              <Button onClick={() => run(useExistingPasskey)} disabled={!!busy}>{busy ?? "用 passkey 綁定這台裝置"}</Button>
+              <Button variant="secondary" onClick={() => run(createAccount)} disabled={!!busy}>建立另一個帳戶</Button>
+              {/* 建第二個帳戶是合法的，但第一個帳戶裡的碳權不會跟過來——
+                  這句話要在按下去之前說，不是在之後。 */}
+              <span className="w-full text-xs text-ink-300">
+                建立另一個帳戶不會把原本帳戶裡的碳權帶過來，兩個帳戶各自獨立。
+              </span>
+            </>
+          ) : (
+            <>
+              <Button onClick={() => run(createAccount)} disabled={!!busy}>{busy ?? "建立鏈上帳戶（passkey）"}</Button>
+              <Button variant="secondary" onClick={() => run(useExistingPasskey)} disabled={!!busy}>我已有 passkey</Button>
+            </>
+          )
         ) : (
           <>
             <Link href="/trade"><Button>進入交易</Button></Link>
@@ -100,8 +118,19 @@ function NextStep() {
       )}
 
       {session?.user && !credential && (
+        // 「尚未建立鏈上帳戶」對換了裝置的人來說是錯的：帳戶好端端在鏈上，
+        // 只是這個瀏覽器沒有那把 passkey 的紀錄。知道了就要照實講。
         <p className="text-xs text-ink-300">
-          已登入 {session.user.email}。帳戶地址由 passkey 的公鑰決定，換裝置後同一把 passkey 仍對到同一個地址。
+          已登入 {session.user.email}。
+          {hasAccount ? (
+            <>
+              你已經有一個鏈上帳戶
+              {firstAccount && <> <span className="font-mono">{firstAccount.slice(0, 6)}…{firstAccount.slice(-4)}</span></>}
+              ，只是<b>這台裝置還沒綁定</b>——用當初那把 passkey 綁回來即可，地址不會變。
+            </>
+          ) : (
+            <>帳戶地址由 passkey 的公鑰決定，換裝置後同一把 passkey 仍對到同一個地址。</>
+          )}
         </p>
       )}
       {credential && (

@@ -22,7 +22,7 @@ const base = [
 export function Nav() {
   const path = usePathname();
   const { data: session } = useSession();
-  const { credential, me, tier, config } = useAccount();
+  const { credential, me, tier, config, knownAccounts } = useAccount();
   const links: readonly (readonly [string, string])[] = [
     ...base,
     ...(tier === 2 ? [["/enterprise", "企業"] as const] : []),
@@ -71,8 +71,11 @@ export function Nav() {
               {credential.address.slice(0, 6)}…{credential.address.slice(-4)}
             </span>
           ) : session?.user ? (
-            <Link href="/" className="rounded-[--radius-ctl] border border-warn/50 px-2 py-1 text-warn transition hover:border-warn">
-              尚未建立鏈上帳戶
+            // 「尚未建立鏈上帳戶」是一句我們不見得知道是真的話：使用者換了裝置、
+            // 或清掉瀏覽器資料時，帳戶還在鏈上，沒有的是**這台裝置的綁定**。
+            // 伺服器查得到他綁過帳戶時就照實講，查不到才說沒建立。
+            <Link href="/#login" className="rounded-[--radius-ctl] border border-warn/50 px-2 py-1 text-warn transition hover:border-warn">
+              {knownAccounts?.length ? "這台裝置未綁定帳戶" : "尚未建立鏈上帳戶"}
             </Link>
           ) : null}
           {session?.user ? (

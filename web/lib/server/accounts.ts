@@ -6,7 +6,11 @@ import { deploymentFingerprint } from "./fingerprint";
 
 /// Phase 0：credentialId → 帳戶 的對照放本機 JSON。
 /// 正式環境放營運資料庫，或改讀鏈上 AccountCreated 事件索引。
-type Row = { publicKey: Hex; address: Address; createdAt: string };
+/// userId / email 是**後來才加的**，舊資料沒有。加它們的理由：沒有這兩個欄位，
+/// 伺服器只能用 credentialId 查帳戶，而 credentialId 在使用者換一台裝置、
+/// 或清掉瀏覽器資料之後就沒了——於是畫面只能說「尚未建立鏈上帳戶」，
+/// 而那句話是錯的：帳戶好端端在鏈上，只是這台裝置不知道。
+type Row = { publicKey: Hex; address: Address; createdAt: string; userId?: string; email?: string };
 type Doc = { fingerprint: string; chainId: number; rows: Record<string, Row> };
 const FILE = process.env.ACCOUNTS_FILE ?? path.resolve(process.cwd(), "data", "accounts.json");
 
@@ -37,4 +41,20 @@ export function putAccount(credentialId: string, row: Omit<Row, "createdAt">) {
   doc.rows[credentialId] = { ...row, createdAt: new Date().toISOString() };
   fs.mkdirSync(path.dirname(FILE), { recursive: true });
   fs.writeFileSync(FILE, JSON.stringify(doc, null, 2));
+}
+
+/// 這個登入帳號綁過哪些鏈上帳戶（去重、最新的在前）。
+///
+/// 用來回答「我明明有帳戶，為什麼叫我重新建立」：使用者換裝置或清掉瀏覽器資料之後，
+/// 這台裝置沒有 credential，但伺服器知道這個人綁過什麼。知道了才講得出實話——
+/// 「帳戶在，這台裝置還沒綁定，用同一把 passkey 綁回來就好」。
+///
+/// 只回地址與時間。credentialId 與公鑰是拿來簽章與查詢的鍵，沒有必要送回瀏覽器。
+export function accountsOf(userId: string): { address: Address; createdAt: string }[] {
+  const seen = new Set<string>();
+  return Object.values(load().rows)
+    .filter((r) => r.userId === userId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .filter((r) => (seen.has(r.address.toLowerCase()) ? false : seen.add(r.address.toLowerCase())))
+    .map((r) => ({ address: r.address, createdAt: r.createdAt }));
 }

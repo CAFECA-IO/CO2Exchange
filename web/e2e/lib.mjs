@@ -46,8 +46,13 @@ export async function login(page, email) {
 }
 
 export async function createPasskeyAccount(page) {
-  await page.getByRole("button", { name: /建立(新|鏈上)帳戶/ }).waitFor({ timeout: 30_000 });
-  await page.getByRole("button", { name: /建立(新|鏈上)帳戶/ }).click();
+  // 「另一個」：伺服器已經記得這個登入帳號綁過帳戶時，主要按鈕會變成
+  // 「用 passkey 綁定這台裝置」，建立的那顆退成「建立另一個帳戶」。
+  // e2e 每次都是全新的 browser context ＝ 全新的虛擬 authenticator，
+  // 手上沒有舊的 passkey，所以要按的一直是「建立」那一顆。
+  const create = page.getByRole("button", { name: /建立(新|鏈上|另一個)帳戶/ });
+  await create.waitFor({ timeout: 30_000 });
+  await create.click();
   await page.locator('[data-testid="account-ready"]').waitFor({ timeout: 60_000 });
   return (await page.locator("dd.font-mono").first().textContent()).trim();
 }

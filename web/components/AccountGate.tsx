@@ -14,7 +14,9 @@ import { NO_LOGIN_BODY, NO_LOGIN_TITLE, hasLogin } from "@/lib/login";
 ///
 /// 現在原地說明兩者的差別，並且把該按的按鈕放在同一個畫面上。
 export function AccountGate() {
-  const { userId, credential, config, busy, unbound, createAccount, useExistingPasskey } = useAccount();
+  const { userId, credential, config, busy, unbound, knownAccounts, createAccount, useExistingPasskey } = useAccount();
+  const hasAccount = (knownAccounts?.length ?? 0) > 0;
+  const firstAccount = knownAccounts?.[0]?.address;
   const [err, setErr] = useState<string | null>(null);
 
   async function run(fn: () => Promise<void>) {
@@ -53,7 +55,7 @@ export function AccountGate() {
   // ② 有 session，但這台裝置沒有 passkey
   if (!credential) {
     return (
-      <Card title="這台裝置還沒有鏈上帳戶">
+      <Card title={hasAccount ? "這台裝置還沒綁定你的鏈上帳戶" : "這台裝置還沒有鏈上帳戶"}>
         <div className="space-y-3 text-sm leading-7 text-ink-200">
           <p>
             你<b>已經登入</b>了（右上角所以顯示「登出」），但登入和鏈上帳戶是兩件事：
@@ -69,13 +71,30 @@ export function AccountGate() {
             </Notice>
           ) : (
             <p className="text-ink-300">
-              第一次使用請選「建立新帳戶」；在別台裝置建過、或這台裝置清過資料，選「我已有 passkey」。
+              {hasAccount ? (
+                <>
+                  你已經有一個鏈上帳戶
+                  {firstAccount && <> <span className="font-mono">{firstAccount.slice(0, 6)}…{firstAccount.slice(-4)}</span></>}
+                  ，選「我已有 passkey」把這台裝置綁回去，地址不會變。
+                </>
+              ) : (
+                <>第一次使用請選「建立新帳戶」；在別台裝置建過、或這台裝置清過資料，選「我已有 passkey」。</>
+              )}
             </p>
           )}
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button onClick={() => run(createAccount)} disabled={!!busy}>{busy ?? "建立新帳戶（passkey）"}</Button>
-          <Button variant="secondary" onClick={() => run(useExistingPasskey)} disabled={!!busy}>我已有 passkey</Button>
+          {hasAccount ? (
+            <>
+              <Button onClick={() => run(useExistingPasskey)} disabled={!!busy}>{busy ?? "我已有 passkey"}</Button>
+              <Button variant="secondary" onClick={() => run(createAccount)} disabled={!!busy}>建立另一個帳戶</Button>
+            </>
+          ) : (
+            <>
+              <Button onClick={() => run(createAccount)} disabled={!!busy}>{busy ?? "建立新帳戶（passkey）"}</Button>
+              <Button variant="secondary" onClick={() => run(useExistingPasskey)} disabled={!!busy}>我已有 passkey</Button>
+            </>
+          )}
         </div>
         {err && <div className="mt-3"><Notice kind="error">{err}</Notice></div>}
       </Card>

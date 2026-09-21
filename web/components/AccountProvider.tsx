@@ -33,6 +33,10 @@ type Ctx = {
   /// 這個裝置原本綁著的帳戶，在目前的部署上不存在，自動重綁也失敗了，已解除綁定。
   /// 使用者沒做錯任何事，但畫面必須說出來 —— 否則就是「我明明有帳戶，怎麼叫我重建」。
   unbound: boolean;
+  /// 這個登入帳號在伺服器上綁過的鏈上帳戶。**這台裝置**沒有 credential 不代表
+  /// 這個人沒有帳戶——換裝置、清掉瀏覽器資料都會這樣。有它才講得出實話。
+  /// null = 還沒問到（不要在這時候斷言任何一邊）。
+  knownAccounts: { address: string; createdAt: string }[] | null;
   createAccount: () => Promise<void>;
   useExistingPasskey: () => Promise<void>;
   /// 送一筆交易。地址在**送出前**會先對現在這條鏈確認一次，過不了就用同一把
@@ -52,6 +56,7 @@ function Inner({ children }: { children: React.ReactNode }) {
   //（那是在 effect 裡同步改狀態），對不上就直接當未驗證。
   const [idFor, setIdFor] = useState<{ address: string; identity: Identity; at: number } | null>(null);
   const [unbound, setUnbound] = useState(false);
+  const [knownAccounts, setKnownAccounts] = useState<{ address: string; createdAt: string }[] | null>(null);
 
   // 憑證的真實來源是 localStorage，不是 React state：訂閱它，不要複製一份再想辦法同步。
   const stored = useSyncExternalStore(subscribeCredential, credentialSnapshot, credentialServerSnapshot);
@@ -60,6 +65,16 @@ function Inner({ children }: { children: React.ReactNode }) {
 
   useEffect(() => { fetch("/api/config").then((r) => r.json()).then(setConfig).catch(() => setConfig(null)); }, []);
   useEffect(() => { fetch("/api/me").then((r) => r.json()).then(setMe).catch(() => {}); }, [userId]);
+  // 綁過哪些帳戶。跟著 credential 一起重抓：剛建好帳戶時清單要立刻反映。
+  useEffect(() => {
+    if (!userId) { setKnownAccounts([]); return; }
+    let ignore = false;
+    fetch("/api/account?mine=1")
+      .then((r) => (r.ok ? r.json() : { accounts: [] }))
+      .then((j) => { if (!ignore) setKnownAccounts(j.accounts ?? []); })
+      .catch(() => { if (!ignore) setKnownAccounts([]); });
+    return () => { ignore = true; };
+  }, [userId, credential]);
   const [tierKey, refreshTier] = useReload();
   useEffect(() => {
     if (!credential) return;
@@ -175,8 +190,8 @@ function Inner({ children }: { children: React.ReactNode }) {
   const forget = useCallback(() => { clearCredential(); setUnbound(false); }, []);
 
   const value = useMemo(
-    () => ({ config, credential, userId, me, identity, identityAt, tier, refreshTier, busy, unbound, createAccount, useExistingPasskey, relay, forget }),
-    [config, credential, userId, me, identity, identityAt, tier, refreshTier, busy, unbound, createAccount, useExistingPasskey, relay, forget],
+    () => ({ config, credential, userId, me, identity, identityAt, tier, refreshTier, busy, unbound, knownAccounts, createAccount, useExistingPasskey, relay, forget }),
+    [config, credential, userId, me, identity, identityAt, tier, refreshTier, busy, unbound, knownAccounts, createAccount, useExistingPasskey, relay, forget],
   );
   return <AccountCtx.Provider value={value}>{children}</AccountCtx.Provider>;
 }

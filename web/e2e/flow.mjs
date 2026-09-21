@@ -100,6 +100,22 @@ const retireDisabled = await page.getByRole("button", { name: "註銷並取得�
 if (!retireDisabled) throw new Error("自然人的註銷按鈕應該是停用的");
 console.log("✔ 自然人被擋下註銷，且畫面有說明");
 
+// 換一台裝置（＝新的瀏覽器 context，localStorage 是空的）之後，畫面不可以說
+// 「尚未建立鏈上帳戶」——帳戶好端端在鏈上，沒有的是這台裝置的綁定。
+// 伺服器知道這個登入帳號綁過什麼，知道了就該照實講，並把「綁回來」放在主要位置。
+{
+  const other = await newUser(browser, "alice-2nd-device");
+  await login(other.page, "alice@example.com");
+  await other.page.goto(BASE);
+  await other.page.locator("text=你已經有一個鏈上帳戶").waitFor({ timeout: 30_000 });
+  const t = await other.page.locator("main").innerText();
+  if (t.includes("尚未建立鏈上帳戶")) throw new Error("換裝置卻說「尚未建立鏈上帳戶」");
+  const nav = await other.page.getByRole("banner").innerText();
+  if (!nav.includes("這台裝置未綁定帳戶")) throw new Error(`導覽列沒說是裝置未綁定：${nav}`);
+  console.log("✔ 換裝置時說的是「這台裝置未綁定」，不是「尚未建立帳戶」");
+  await other.context.close();
+}
+
 // 合約重新部署之後，這個裝置記住的地址上沒有合約。這一段把那個狀況做出來：
 // 把 localStorage 裡的地址換成一個不存在的，其餘（passkey id 與公鑰）不動。
 //
