@@ -74,13 +74,25 @@ export function Nav() {
               尚未建立鏈上帳戶
             </Link>
           ) : null}
-          {session?.user && (
+          {session?.user ? (
             <button
               onClick={() => signOut({ callbackUrl: "/" })}
               className="rounded-[--radius-ctl] border border-ink-500 px-2 py-1 transition hover:border-tide/60 hover:text-ink-50"
             >
               登出
             </button>
+          ) : (
+            /*
+              登入只在首頁的 hero 裡有入口，從任何內頁都回不去——手機上尤其明顯，
+              導覽列一換行，首頁的 hero 就在兩個捲動之外。這裡放一個常駐的入口，
+              但不重做一套登入 UI：指到首頁的 #login，維持單一登入畫面。
+            */
+            <Link
+              href="/#login"
+              className="rounded-[--radius-ctl] border border-tide/50 px-2 py-1 text-tide transition hover:border-tide hover:text-ink-50"
+            >
+              登入
+            </Link>
           )}
         </div>
       </div>

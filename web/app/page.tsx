@@ -31,10 +31,11 @@ function NextStep() {
     try { await fn(); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
   };
 
-  if (status === "loading") return <div className="h-10" />;
+  // 載入中的佔位也掛上 id：導覽列的 /#login 可能在 session 還沒回來時就跳過去了。
+  if (status === "loading") return <div id="login" className="h-10 scroll-mt-24" />;
 
   return (
-    <div className="space-y-3">
+    <div id="login" className="scroll-mt-24 space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         {!session?.user ? (
           <>
@@ -48,9 +49,6 @@ function NextStep() {
               <button onClick={() => setShowDev((v) => !v)} className="text-xs text-ink-300 underline hover:text-ink-50">
                 開發用登入
               </button>
-            )}
-            {providers.length === 0 && (
-              <p className="text-xs text-ink-300">在 .env.local 設定 AUTH_GOOGLE_ID / AUTH_APPLE_ID 後會出現 Google / Apple 登入。</p>
             )}
           </>
         ) : !credential ? (

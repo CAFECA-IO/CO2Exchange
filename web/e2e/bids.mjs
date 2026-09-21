@@ -29,11 +29,14 @@ await waitKycActive(buyer.page);
 await waitKycActive(seller.page);
 console.log("✔ 兩個法人帳戶就緒");
 
-// 賣方先從簿子上買一點貨，才有東西可以賣給買單
+// 賣方先從簿子上買一點貨，才有東西可以賣給買單。
+// 一定要買**國內**的：下面那張買單指名 TW，拿泰國的額度去成交會被合約擋下來
+// （CountryMismatch），畫面上那顆按鈕根本不會亮。不指名核發國的話，買到的是
+// 簿子上最便宜的一張，那是哪一國的每天都不一樣。
 await seller.page.goto(`${BASE}/trade`);
 await seller.page.getByRole("button", { name: "領取測試用 mTWD" }).click();
 await seller.page.locator('[data-testid="twd"]', { hasText: "100,000" }).waitFor({ timeout: 30_000 });
-await buyFromBook(seller.page, { tonnes: 3 });
+await buyFromBook(seller.page, { country: "TW", tonnes: 3 });
 console.log("✔ 賣方手上有貨了");
 
 // ── 掛買單 ────────────────────────────────────────────────

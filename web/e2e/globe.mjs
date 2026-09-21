@@ -76,6 +76,16 @@ const browser = await launch();
   const w = await page.evaluate(() => document.documentElement.scrollWidth);
   ok(w <= 390, `沒有水平捲動（scrollWidth ${w}）`);
   ok(await page.locator("canvas").isVisible(), "地球在手機上也畫得出來");
+
+  // 登入原本只有首頁 hero 裡那一個入口。手機上導覽列一換行，hero 就在兩個
+  // 捲動之外，從任何內頁都回不去——「找不到登入」就是這樣來的。
+  // 未登入時導覽列要有常駐入口，而且要能從內頁按到首頁的登入區。
+  await page.goto(`${BASE}/trade`, { waitUntil: "networkidle" });
+  const loginLink = page.locator("header").getByRole("link", { name: "登入" });
+  ok(await loginLink.count() === 1, "手機版導覽列有「登入」");
+  await loginLink.click();
+  await page.waitForURL("**/#login");
+  ok(await page.locator("#login").isVisible(), "按下去會落在首頁的登入區");
   await ctx.close();
 }
 

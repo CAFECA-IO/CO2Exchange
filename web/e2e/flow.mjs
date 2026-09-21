@@ -51,7 +51,7 @@ const page = alice.page;
 await page.goto(`${BASE}/trade`);
 await page.getByRole("button", { name: "領取測試用 mTWD" }).click();
 await page.locator('[data-testid="twd"]', { hasText: "100,000" }).waitFor({ timeout: 30_000 });
-await buyFromBook(page, { match: "屋頂太陽能", tonnes: 1 }); // 在地優先：明確買國內專案
+await buyFromBook(page, { country: "TW", tonnes: 1 }); // 在地優先：明確買國內核發的額度
 // 市價買進：成交後立刻拆解成具體批次，使用者看到的是碳權批次而不是中介代幣
 await marketBuy(page, { tonnes: 1 });
 // 5 噸：這個量會把這個 demo 池的價格推高約兩成。原本前端用「現貨 × 1.05」授權，
@@ -75,7 +75,7 @@ console.log("✔ 自然人被擋下註銷，且畫面有說明");
 
 // 自然人的出場方式是轉售：在交易頁上架
 await page.goto(`${BASE}/trade`);
-await sellOnBook(page, { tonnes: 1, price: 900 });
+const aliceBatch = await sellOnBook(page, { tonnes: 1, price: 900 });
 console.log("✔ 自然人轉售上架");
 
 // 法人買下自然人的掛單並註銷——官方端只有事業能做這件事
@@ -88,7 +88,9 @@ await waitKycActive(corp.page);
 await corp.page.goto(`${BASE}/trade`);
 await corp.page.getByRole("button", { name: "領取測試用 mTWD" }).click();
 await corp.page.locator('[data-testid="twd"]', { hasText: "100,000" }).waitFor({ timeout: 30_000 });
-await buyFromBook(corp.page, { match: "屋頂太陽能", tonnes: 1 });
+// 指名買 alice 剛上架的那一批：書上隨時有幾十張國內掛單，不指名就證明不了
+// 「法人買下**自然人**的掛單」這件事。
+await buyFromBook(corp.page, { country: "TW", match: `批次 #${aliceBatch}`, tonnes: 1 });
 console.log("✔ 法人買下自然人的掛單");
 
 // 買完之後持有量是**非同步**重抓的，成功通知出現的那一刻還不一定抓回來了。

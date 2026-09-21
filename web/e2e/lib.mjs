@@ -25,7 +25,9 @@ export async function waitOk(page, text, timeout = 90_000) {
   const errLoc = page.locator('[data-testid="notice-error"]').first();
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    if (await okLoc.isVisible().catch(() => false)) return;
+    // 回傳整段通知文字：像「上架批次 #123」這種通知裡帶著呼叫端要的編號，
+    // 讓它自己再去翻一次畫面只會多一個時間差。
+    if (await okLoc.isVisible().catch(() => false)) return (await okLoc.textContent())?.trim() ?? "";
     if (await errLoc.isVisible().catch(() => false)) throw new Error(`頁面錯誤：${(await errLoc.textContent()).trim()}`);
     await page.waitForTimeout(300);
   }
@@ -66,10 +68,18 @@ export async function adminApproveAllKyc(adminPage) {
   await adminPage.locator('[data-testid="kyc-row"]').first().waitFor({ timeout: 30_000 });
   for (let i = 0; i < 10; i++) {
     const rows = adminPage.locator('[data-testid="kyc-row"]');
-    if ((await rows.count()) === 0) break;
+    const before = await rows.count();
+    if (before === 0) break;
     await rows.first().getByRole("button", { name: "核准", exact: true }).click();
     await waitOk(adminPage, "核准完成");
-    await adminPage.waitForTimeout(300);
+    // 「核准完成」只代表 API 回來了，清單是之後才重抓的。固定睡 300ms 不夠——
+    // 慢的時候第二圈會按到同一列，伺服器回「已處理過」，測試就掛在一個
+    // **測試自己造成**的錯誤上。等列數真的變少再繼續。
+    await adminPage.waitForFunction(
+      (n) => document.querySelectorAll('[data-testid="kyc-row"]').length < n,
+      before,
+      { timeout: 30_000 },
+    );
   }
 }
 
@@ -91,11 +101,19 @@ export async function agreeAll(scope) {
 /// 交易所式掛單簿：先在左側點一筆掛單，右側「買進」面板填數量，
 /// 再在送出前的確認單上簽契約、按簽章。
 /// （2026-09-20 改版：數量改以噸為單位，下單前多一張確認單。）
-export async function buyFromBook(page, { match, tonnes = 1 } = {}) {
+/// country 用核發國篩選（例如 "TW" = 只看國內專案），比對專案名字可靠：
+/// 專案名是模擬器隨機生出來的，回填一整年之後書上有哪些名字每次都不一樣，
+/// 用固定字串去 match 等於在賭運氣——測試掛掉的時候查半天，發現功能是好的。
+export async function buyFromBook(page, { match, country, tonnes = 1 } = {}) {
   const buyTab = page.locator('[data-testid="tab-buy"]');
   if (await buyTab.isVisible().catch(() => false)) await buyTab.click();
   const limitTab = page.locator('[data-testid="mode-limit"]');
   if (await limitTab.isVisible().catch(() => false)) await limitTab.click();
+  if (country) {
+    const chip = page.locator(`[data-testid="filter-${country}"]`);
+    await chip.waitFor({ timeout: 30_000 });
+    await chip.click();
+  }
   const row = match
     ? page.locator("li button", { hasText: match }).first()
     : page.locator('li button[aria-pressed]').first();
@@ -150,7 +168,9 @@ export async function sellOnBook(page, { tonnes = 1, price, usageDeadline = "202
   await dialog.waitFor({ timeout: 10_000 });
   await agreeAll(dialog);
   await dialog.getByRole("button", { name: "以 passkey 簽章上架" }).click();
-  await waitOk(page, "上架批次 #");
+  const ok = await waitOk(page, "上架批次 #");
+  // 回傳批次編號：買方要**指名**買這一張掛單的時候，這是唯一穩定的鍵。
+  return Number(/#(\d+)/.exec(ok)?.[1]);
 }
 
 /// 註銷：在 /retire 選標的、填受益人與數量，再在確認單上簽章。

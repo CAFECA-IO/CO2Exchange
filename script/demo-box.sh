@@ -91,6 +91,13 @@ rebuild)
   grep -q "ONCHAIN EXECUTION COMPLETE" "$LOG/deploy.log" \
     || { echo "!! 部署失敗，看 $LOG/deploy.log"; exit 1; }
 
+  # 重新部署等於換了一條鏈：web/data/ 裡的 KYC 與憑證紀錄是用**舊**合約算出來的
+  # 帳戶地址當鍵的，在新鏈上對不到任何人。不清掉的話，前端每個讀鏈的端點都會
+  # 回 503「紀錄屬於另一次部署」——rebuild 是唯一保證會造成這個錯位的指令，
+  # 所以清理就放在這裡，不要留給人自己想起來。data-reset 是搬走不是刪掉。
+  echo ">> 清掉上一次部署的 web/data/（搬到 data.bak-<時間>）"
+  ( cd web && node scripts/data-reset.mjs ) | sed 's/^/   /'
+
   echo ">> 回填 $(days_ago $(( DAYS - 1 ))) → 現在（每輪 ${TICK}）"
   ( cd web && node scripts/simulate.mjs --from "$(days_ago $(( DAYS - 1 )))" --tick "$TICK" --quiet ) \
     | tail -3
