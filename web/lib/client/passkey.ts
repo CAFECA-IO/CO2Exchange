@@ -86,8 +86,11 @@ export async function signAndRelay(rpcUrl: string, cred: StoredCredential, calls
   const client = createPublicClient({ transport: http(rpcUrl) });
   if (!(await hasCode(rpcUrl, cred.address))) {
     throw new Error(
+      // 正常路徑不會走到這裡：AccountProvider.relay 在送出前就會確認並重綁。
+      // 會到這裡表示確認之後帳戶才消失（例如剛好在這中間重新部署），
+      // 所以不要再說「重新整理就會自動重綁」——那句話在這個時點是空頭支票。
       `這個裝置記住的帳戶（${cred.address.slice(0, 8)}…）在目前這條鏈上不存在，` +
-        `多半是合約重新部署過。重新整理頁面會自動用同一把 passkey 重新綁定；若仍失敗，請按「移除此裝置的帳戶紀錄」後重新建立。`,
+        `多半是剛剛重新部署過。請重新整理頁面；若仍失敗，按「移除此裝置的帳戶紀錄」後用同一把 passkey 重新建立。`,
     );
   }
   const nonce = await client.readContract({ address: cred.address, abi: passkeyAccountAbi, functionName: "nonce" });

@@ -9,7 +9,7 @@ import { AgreementCheck, useAgreementGate } from "@/components/AgreementGate";
 import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/components/ui";
 import { bidWriteAbi, erc1155ApprovalAbi, erc20Abi, listingAbi, listingWriteAbi, poolAbi, routerAbi } from "@/lib/abis";
 import { flagOf } from "@/lib/deployment";
-import { signAndRelay, type Call } from "@/lib/client/passkey";
+import { type Call } from "@/lib/client/passkey";
 
 /// 交易頁：買進與賣出同一頁，各自再分限價與市價。
 ///
@@ -63,9 +63,17 @@ function CountryTag({ code, scheme, className = "" }: { code: string; scheme?: s
 }
 
 export default function TradePage() {
-  const { credential, config, userId, tier } = useAccount();
+  const { credential, config, userId, tier, relay: send } = useAccount();
   const [m, setM] = useState<Market | null>(null);
-  const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  // 訊息連同「它講的是哪一個地址」一起存。
+  //
+  // 重新部署之後這個裝置的地址會被自動重綁，而畫面上那則錯誤講的是**舊**地址的事——
+  // 不綁在一起的話，重綁完成、其他東西都好了，使用者還盯著一個已經不成立的紅色錯誤。
+  // 用 effect 去清會變成「在 effect 裡同步 setState」，這裡直接讓它對不上就不顯示。
+  const [rawMsg, setRawMsg] = useState<{ kind: "ok" | "error"; text: string; addr?: string } | null>(null);
+  const addr = credential?.address;
+  const setMsg = (m: { kind: "ok" | "error"; text: string } | null) => setRawMsg(m && { ...m, addr });
+  const msg = rawMsg && rawMsg.addr === addr ? rawMsg : null;
   const [busy, setBusy] = useState<string | null>(null);
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [mode, setMode] = useState<"limit" | "market">("limit");
@@ -133,13 +141,15 @@ export default function TradePage() {
   async function relay(label: string, calls: Call[], after?: () => Promise<unknown>) {
     setBusy(label); setMsg(null); setConfirm(null);
     try {
-      const r = await signAndRelay(config!.rpcUrl, credential!, calls);
+      const r = await send(calls);
       if (after) await after();
       setMsg({ kind: "ok", text: `${label}完成 · tx ${r.txHash.slice(0, 10)}… · gas ${Number(r.gasUsed).toLocaleString()}（平台代付）` });
       reload();
     } catch (e) {
       console.error("relay failed", e);
-      setMsg({ kind: "error", text: e instanceof Error ? `${e.name}: ${e.message}` : String(e) });
+      // 不要前綴 e.name：這些訊息是寫給人看的，「Error:」只是雜訊，
+      // 而且會讓一個講得清楚的狀況看起來像當機。
+      setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) });
     } finally { setBusy(null); }
   }
 

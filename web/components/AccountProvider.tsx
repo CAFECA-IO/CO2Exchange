@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, u
 import { SessionProvider, useSession } from "next-auth/react";
 import type { Deployment } from "@/lib/deployment";
 import { useReload } from "@/lib/client/useReload";
-import { clearCredential, credentialServerSnapshot, credentialSnapshot, discoverPasskey, hasCode, registerPasskey, saveCredential, subscribeCredential, type StoredCredential } from "@/lib/client/passkey";
+import { clearCredential, credentialServerSnapshot, credentialSnapshot, discoverPasskey, hasCode, registerPasskey, saveCredential, signAndRelay, subscribeCredential, type Call, type StoredCredential } from "@/lib/client/passkey";
 
 type Config = { deployment: Deployment; rpcUrl: string; providers: string[] };
 export type Me = { email: string | null; isAdmin: boolean; isVerifier: boolean };
@@ -32,6 +32,9 @@ type Ctx = {
   unbound: boolean;
   createAccount: () => Promise<void>;
   useExistingPasskey: () => Promise<void>;
+  /// 送一筆交易。地址在**送出前**會先對現在這條鏈確認一次，過不了就用同一把
+  /// passkey 重綁再送——這是每一筆交易的唯一入口，各頁不要自己叫 signAndRelay。
+  relay: (calls: Call[]) => Promise<{ txHash: `0x${string}`; status: string; gasUsed: string }>;
   forget: () => void;
 };
 const AccountCtx = createContext<Ctx | null>(null);
@@ -85,12 +88,15 @@ function Inner({ children }: { children: React.ReactNode }) {
   const identity = mine?.identity ?? null;
   const identityAt = mine?.at ?? 0;
   const tier = !identity || identity.frozen || identity.expiry * 1000 < identityAt ? 0 : identity.tier;
-  const bind = useCallback(async (id: string, publicKey: `0x${string}`) => {
+  // 回傳新的憑證而不是只寫進 storage：呼叫端常常**當下就要用**那個新地址，
+  // 而 useSyncExternalStore 的更新要等下一次 render 才看得到。
+  const bind = useCallback(async (id: string, publicKey: `0x${string}`): Promise<StoredCredential> => {
     const res = await fetch("/api/account", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ credentialId: id, publicKey }) });
     const j = await res.json();
     if (!res.ok) throw new Error(j.error ?? "account failed");
     const c: StoredCredential = { id, publicKey, address: j.address, userId: userId! };
     saveCredential(c); setUnbound(false);
+    return c;
   }, [userId]);
 
   // 合約重新部署後，factory 位址會變，同一把 passkey 推出來的帳戶地址也跟著變，
@@ -142,11 +148,32 @@ function Inner({ children }: { children: React.ReactNode }) {
     } finally { setBusy(null); }
   }, [userId]);
 
+  // 每一筆交易都走這裡。
+  //
+  // 為什麼不是各頁直接叫 signAndRelay：重新部署之後，這個裝置記住的地址上沒有合約，
+  // 上面那個 effect 會自動重綁——但它是**非同步**的，而畫面在它跑完之前就已經
+  // 可以按了。在那個空窗按下去，送出的是舊地址，使用者看到「這個裝置記住的帳戶
+  // 在目前這條鏈上不存在」——一個他沒做錯任何事、而且系統自己幾百毫秒後就修好了的錯誤。
+  //
+  // 所以在送出前再確認一次。passkey 才是身分，地址只是推導結果：確認不過就當場
+  // 用同一把公鑰重綁，拿新地址送出去。使用者不需要知道發生過什麼事。
+  const relay = useCallback(async (calls: Call[]) => {
+    if (!config || !credential) throw new Error("尚未建立鏈上帳戶");
+    let cred = credential;
+    if (!(await hasCode(config.rpcUrl, cred.address))) {
+      setBusy("合約已更新，重新綁定帳戶…");
+      try { cred = await bind(cred.id, cred.publicKey); }
+      catch { clearCredential(); setUnbound(true); throw new Error("這個裝置的帳戶在目前這條鏈上不存在，且無法用同一把 passkey 重新綁定。請重新建立帳戶。"); }
+      finally { setBusy(null); }
+    }
+    return signAndRelay(config.rpcUrl, cred, calls);
+  }, [config, credential, bind]);
+
   const forget = useCallback(() => { clearCredential(); setUnbound(false); }, []);
 
   const value = useMemo(
-    () => ({ config, credential, userId, me, identity, identityAt, tier, refreshTier, busy, unbound, createAccount, useExistingPasskey, forget }),
-    [config, credential, userId, me, identity, identityAt, tier, refreshTier, busy, unbound, createAccount, useExistingPasskey, forget],
+    () => ({ config, credential, userId, me, identity, identityAt, tier, refreshTier, busy, unbound, createAccount, useExistingPasskey, relay, forget }),
+    [config, credential, userId, me, identity, identityAt, tier, refreshTier, busy, unbound, createAccount, useExistingPasskey, relay, forget],
   );
   return <AccountCtx.Provider value={value}>{children}</AccountCtx.Provider>;
 }

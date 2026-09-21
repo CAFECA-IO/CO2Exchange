@@ -100,6 +100,38 @@ const retireDisabled = await page.getByRole("button", { name: "註銷並取得�
 if (!retireDisabled) throw new Error("自然人的註銷按鈕應該是停用的");
 console.log("✔ 自然人被擋下註銷，且畫面有說明");
 
+// 合約重新部署之後，這個裝置記住的地址上沒有合約。這一段把那個狀況做出來：
+// 把 localStorage 裡的地址換成一個不存在的，其餘（passkey id 與公鑰）不動。
+//
+// 期待的行為是**什麼都不用做**——送出前會確認地址、發現不對就用同一把 passkey
+// 重綁，然後照常送出。以前這裡會噴「這個裝置記住的帳戶在目前這條鏈上不存在」，
+// 而且系統自己幾百毫秒後就修好了，那則紅色錯誤卻會一直留在畫面上。
+{
+  const real = await page.evaluate(() => {
+    const c = JSON.parse(localStorage.getItem("co2x.credential"));
+    const was = c.address;
+    c.address = "0x00000000000000000000000000000000dEaD0001";
+    localStorage.setItem("co2x.credential", JSON.stringify(c));
+    return was;
+  });
+  // 用「掛買單」當那筆交易：它會走同一條 relay 路徑，但不消耗持有的批次，
+  // 不會影響後面「自然人轉售、法人買下那一批」的步驟。
+  await page.goto(`${BASE}/trade`);
+  await page.locator('[data-testid="tab-buy"]').click();
+  await page.locator('[data-testid="mode-limit"]').click();
+  await page.locator('[data-testid="place-bid-form"]').waitFor({ timeout: 30_000 });
+  await page.locator('[data-testid="bid-country"]').selectOption("TW");
+  await page.locator('[data-testid="bid-tonnes"]').fill("0.5");
+  await page.locator('[data-testid="bid-price"]').fill("11");
+  await page.locator('[data-testid="submit-bid"]').click();
+  await waitOk(page, "掛買單");
+  const back = await page.evaluate(() => JSON.parse(localStorage.getItem("co2x.credential")).address);
+  if (back.toLowerCase() !== real.toLowerCase()) throw new Error(`沒有綁回原本的地址：${back} ≠ ${real}`);
+  const body = await page.locator("main").innerText();
+  if (body.includes("在目前這條鏈上不存在")) throw new Error("重綁成功了，畫面上卻還留著那則錯誤");
+  console.log("✔ 地址失效時自動重綁，交易照常送出且畫面不留錯誤");
+}
+
 // 自然人的出場方式是轉售：在交易頁上架
 await page.goto(`${BASE}/trade`);
 const aliceBatch = await sellOnBook(page, { tonnes: 1, price: 900 });

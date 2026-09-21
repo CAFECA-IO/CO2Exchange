@@ -8,7 +8,7 @@ import { AccountGate } from "@/components/AccountGate";
 import { AgreementCheck, useAgreementGate } from "@/components/AgreementGate";
 import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/components/ui";
 import { erc1155ApprovalAbi, listingWriteAbi, poolWriteAbi, registryWriteAbi } from "@/lib/abis";
-import { signAndRelay, type Call } from "@/lib/client/passkey";
+import { type Call } from "@/lib/client/passkey";
 
 type Project = { projectId: number; name: string; methodology: string; location: string; active: boolean };
 type Issuance = { id: string; projectId: number; projectName: string; monitoringStart: string; monitoringEnd: string; amountKg: number; reportName: string; reportHash: string; reportFile: string; status: string; reason?: string; batchId?: number; txHash?: string; createdAt: string };
@@ -16,12 +16,20 @@ type Holding = { batchId: number; kg: number; vintageYear: number; project: stri
 type Order = { orderId: number; seller: string; batchId: number; remainingKg: number; pricePerTonne: string; project: { name: string } };
 
 export default function EnterprisePage() {
-  const { credential, config, userId, tier } = useAccount();
+  const { credential, config, userId, tier, relay: send } = useAccount();
   const [projects, setProjects] = useState<Project[]>([]);
   const [issuances, setIssuances] = useState<Issuance[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  // 訊息連同「它講的是哪一個地址」一起存。
+  //
+  // 重新部署之後這個裝置的地址會被自動重綁，而畫面上那則錯誤講的是**舊**地址的事——
+  // 不綁在一起的話，重綁完成、其他東西都好了，使用者還盯著一個已經不成立的紅色錯誤。
+  // 用 effect 去清會變成「在 effect 裡同步 setState」，這裡直接讓它對不上就不顯示。
+  const [rawMsg, setRawMsg] = useState<{ kind: "ok" | "error"; text: string; addr?: string } | null>(null);
+  const addr = credential?.address;
+  const setMsg = (m: { kind: "ok" | "error"; text: string } | null) => setRawMsg(m && { ...m, addr });
+  const msg = rawMsg && rawMsg.addr === addr ? rawMsg : null;
   const [busy, setBusy] = useState<string | null>(null);
   const [pf, setPf] = useState({ name: "", methodology: "ISO 14064-2", location: "", metadataURI: "" });
   const [rf, setRf] = useState({ projectId: "", monitoringStart: "2025-01-01", monitoringEnd: "2025-12-31", amountTonnes: "100", note: "" });
@@ -59,7 +67,7 @@ export default function EnterprisePage() {
   async function relay(label: string, calls: Call[], after?: () => Promise<unknown>) {
     setBusy(label); setMsg(null);
     try {
-      const r = await signAndRelay(config!.rpcUrl, credential!, calls);
+      const r = await send(calls);
       if (after) await after();
       setMsg({ kind: "ok", text: `${label}完成 · tx ${r.txHash.slice(0, 10)}…` });
       reload();
