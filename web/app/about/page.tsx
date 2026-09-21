@@ -625,7 +625,7 @@ export default function About() {
           同時賣方會失去上架資格、被追繳先前減免的代辦費。
           另外，每一筆核發、上架、移轉、註銷都會即時出現在<Link className="text-tide underline" href="/registry">公告欄</Link>，
           包括別人的，你可以自己核對；完整的做法與時程寫在
-          <Link className="text-tide underline" href="/agreements?id=service-flow">服務流程說明書</Link>裡。
+          <Link className="text-tide underline" href="/agreements/service-flow">服務流程說明書</Link>裡。
         </p>
         <p className="text-xs leading-6 text-ink-300">
           本站目前為 Phase 0 展示版本：身分驗證、查驗機構簽章與結算幣皆為模擬，額度不具法律效力，不得作為任何申報依據。

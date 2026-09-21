@@ -12,6 +12,11 @@ import { all, insert, type WithId } from "./store";
 
 const DIR = process.env.AGREEMENTS_DIR ?? path.resolve(process.cwd(), "contracts");
 
+/// contract = 要簽的定型化契約；policy = 站台的條款與政策，看了就適用，不另行簽署。
+/// 兩者放在同一個資料夾、同一套雜湊機制，但在畫面上要分開——把隱私權政策
+/// 混進「您已同意下列契約」的清單裡，會讓人以為它也是一份要簽的東西。
+export type AgreementKind = "contract" | "policy";
+
 export type AgreementMeta = {
   id: string;
   title: string;
@@ -21,19 +26,30 @@ export type AgreementMeta = {
   hash: `0x${string}`;
   /// 誰要簽這份
   parties: string;
+  kind: AgreementKind;
 };
 
 export type Agreement = AgreementMeta & { body: string };
 
-/// 五份文件（四份契約 + 服務流程說明書附件）的角色。順序就是使用者會遇到的順序。
+/// 七份文件的角色。順序就是使用者會遇到的順序：先是用到才要簽的契約，
+/// 再是一進站就適用、不必簽的條款與政策。
 const ROLES: Record<string, string> = {
   "platform-terms": "所有使用者（建立帳戶時）",
   "service-flow": "所有使用者（平台使用約定書之附件，不另行簽署）",
   "service-fee": "專案開發者 / 賣方（委託代辦時）",
   "trade-agreement": "買方與賣方（每筆交易）",
   "retirement-mandate": "註銷人（每次註銷，限具額度帳戶之事業）",
+  "terms-of-service": "所有訪客（瀏覽本站即適用，不另行簽署）",
+  "privacy-policy": "所有訪客（瀏覽本站即適用，不另行簽署）",
 };
-export const AGREEMENT_ORDER = ["platform-terms", "service-flow", "service-fee", "trade-agreement", "retirement-mandate"] as const;
+const KINDS: Record<string, AgreementKind> = {
+  "terms-of-service": "policy",
+  "privacy-policy": "policy",
+};
+export const AGREEMENT_ORDER = [
+  "platform-terms", "service-flow", "service-fee", "trade-agreement", "retirement-mandate",
+  "terms-of-service", "privacy-policy",
+] as const;
 
 /// 極簡 frontmatter 解析。條文檔是我們自己寫的，格式固定，不值得為它拉一個 YAML 相依。
 function parse(file: string): Agreement {
@@ -53,10 +69,16 @@ function parse(file: string): Agreement {
     effectiveDate: meta.effectiveDate ?? "",
     summary: meta.summary ?? "",
     parties: ROLES[id] ?? "",
+    kind: KINDS[id] ?? "contract",
     // 雜湊算整個檔案（含 frontmatter）：版本號改了、內容沒改，也算不同版本。
     hash: keccak256(toBytes(raw)),
     body: m[2],
   };
+}
+
+function order(id: string): number {
+  const i = AGREEMENT_ORDER.indexOf(id as never);
+  return i < 0 ? AGREEMENT_ORDER.length : i;
 }
 
 let cache: { mtimes: string; value: Agreement[] } | undefined;
@@ -67,7 +89,9 @@ export function agreements(): Agreement[] {
   if (cache?.mtimes === key) return cache.value;
   const value = files
     .map((f) => parse(path.join(DIR, f)))
-    .sort((a, b) => AGREEMENT_ORDER.indexOf(a.id as never) - AGREEMENT_ORDER.indexOf(b.id as never));
+    // indexOf 找不到會回 -1，直接相減會把「沒列進 ORDER 的新檔案」排到最前面——
+    // 放一份新 markdown 進資料夾，它就跳到平台使用約定書前面。沒列的排最後。
+    .sort((a, b) => order(a.id) - order(b.id));
   cache = { mtimes: key, value };
   return value;
 }

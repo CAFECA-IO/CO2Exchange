@@ -500,7 +500,7 @@ forge script script/Deploy.s.sol   --rpc-url chain --broadcast  # 鏈沒有 EIP-
 | 角色 | 頁面 | 內容 |
 |---|---|---|
 | 自然人 / 法人 | `/`、`/kyc`、`/trade`、`/portfolio`、`/retire` | 首頁＝市場現況（地球＋各轄區清單）→ 登入 → passkey 建帳戶 → 身分驗證申請 → 交易（買賣同頁、限價與市價、下單前確認單）→ 我的資產（持有、成本、損益、**註銷憑證**）→ 註銷 |
-| 任何人（免登入） | `/about`、`/registry`、`/custody`、`/agreements` | 認識碳權（制度說明與行情圖表）、公告欄（TCER 五分頁 + 轄區）、託管與稽核揭露（每月 5 日）、定型化契約全文 |
+| 任何人（免登入） | `/about`、`/registry`、`/custody`、`/agreements`、`/agreements/<id>` | 認識碳權（制度說明與行情圖表）、公告欄（TCER 五分頁 + 轄區）、託管與稽核揭露（每月 5 日）、七份契約與條款全文（五份定型化契約 + 網站服務條款 + 隱私權政策，每份一個網址） |
 | 法人 | `/enterprise` | 登錄專案、上傳 ISO 14064-3 查驗報告申請核發、批次掛單 / 入池、取消掛單 |
 | 查驗機構（`VERIFIER_EMAILS`） | `/verifier` | 待查驗佇列：檢視報告與雜湊 → 簽署 IssuanceAttestation 核發，或退回 |
 | 管理員（`ADMIN_EMAILS`） | `/admin` | KYC 審核佇列（核准 = 簽 attestation 上鏈）、憑證 PDF 產生與 `documentHash` 回寫、**各國費率設定**、治理狀態（角色矩陣、Safe、Timelock 排程） |

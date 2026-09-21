@@ -98,7 +98,7 @@ export function AgreementCheck({ gate }: { gate: Gate }) {
               <span className="text-ink-200">
                 我已閱讀並同意
                 <Link
-                  href={`/agreements?id=${m.id}`}
+                  href={`/agreements/${m.id}`}
                   target="_blank"
                   onClick={() => gate.markOpened(m.id)}
                   className="mx-1 text-tide underline"

@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { AccountProvider } from "@/components/AccountProvider";
 import { Nav } from "@/components/Nav";
+import { Footer } from "@/components/Footer";
 
 export const metadata: Metadata = {
   title: { default: "TideBit-DeFi 碳權交易所", template: "%s｜TideBit-DeFi 碳權交易所" },
@@ -57,10 +58,15 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           }}
         />
       </head>
-      <body className="min-h-full bg-ink-800 font-sans text-ink-50">
+      {/*
+        flex 直欄 + main flex-1：內容短的頁（例如 404、或還在讀取的內頁）也要讓頁尾
+        沉到視窗底部，而不是浮在畫面中間、下面一片空白。
+      */}
+      <body className="flex min-h-full flex-col bg-ink-800 font-sans text-ink-50">
         <AccountProvider>
           <Nav />
-          <main className="mx-auto max-w-6xl px-4 py-8">{children}</main>
+          <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">{children}</main>
+          <Footer />
         </AccountProvider>
       </body>
     </html>

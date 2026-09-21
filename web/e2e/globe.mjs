@@ -116,6 +116,46 @@ const browser = await launch();
   await ctx.close();
 }
 
+// ── 契約與條款：每一份都有自己的網址 ─────────────────────────────
+//
+// 法律文件會被引用、被存證、被貼進 email；連結點開必須就是那一份。
+// 這一段同時擋住「新增一份 markdown 卻忘了掛進清單」與「舊的 ?id= 連結變 404」。
+{
+  const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 } });
+  const page = await ctx.newPage();
+  await page.goto(`${BASE}/agreements`, { waitUntil: "networkidle" });
+  console.log("契約與條款");
+
+  const DOCS = [
+    "platform-terms", "service-flow", "service-fee", "trade-agreement",
+    "retirement-mandate", "terms-of-service", "privacy-policy",
+  ];
+  for (const id of DOCS) {
+    ok(await page.locator(`[data-testid="doc-${id}"]`).count() === 1, `清單上有 ${id}`);
+  }
+
+  // 直接開網址就要看到全文，不能只是清單頁再靠 JS 撈——法律文件要能「另存新檔」。
+  for (const id of ["privacy-policy", "terms-of-service"]) {
+    const res = await page.goto(`${BASE}/agreements/${id}`, { waitUntil: "domcontentloaded" });
+    const html = await res.text();
+    ok(html.includes("內容雜湊"), `${id} 的條文是伺服器端就渲染好的`);
+    ok(html.includes("contact@tidebit-defi.com"), `${id} 寫出聯絡窗口`);
+  }
+
+  // 舊連結不能死
+  await page.goto(`${BASE}/agreements?id=service-flow`, { waitUntil: "domcontentloaded" });
+  ok(page.url().endsWith("/agreements/service-flow"), "舊的 ?id= 連結會轉到新網址");
+
+  // 頁尾：這兩份文件的慣例位置，而且每一頁都要有
+  for (const path of ["/", "/trade", "/agreements/privacy-policy"]) {
+    await page.goto(`${BASE}${path}`, { waitUntil: "networkidle" });
+    const foot = page.locator("footer");
+    ok(await foot.getByRole("link", { name: "隱私權政策" }).count() === 1, `${path} 的頁尾有隱私權政策`);
+    ok(await foot.getByRole("link", { name: "服務條款" }).count() === 1, `${path} 的頁尾有服務條款`);
+  }
+  await ctx.close();
+}
+
 // ── /about：說明與圖表都搬過去了 ─────────────────────────────────
 {
   const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 } });
