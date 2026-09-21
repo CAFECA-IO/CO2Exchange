@@ -1,8 +1,7 @@
 "use client";
 import { createWebAuthnCredential, toWebAuthnAccount } from "viem/account-abstraction";
 import { bytesToBigInt, encodeAbiParameters, hexToBytes, type Address, type Hex } from "viem";
-import { passkeyAccountAbi, webAuthnAuthType } from "@/lib/abis";
-import { createPublicClient, http } from "viem";
+import { webAuthnAuthType } from "@/lib/abis";
 
 export type StoredCredential = { id: string; publicKey: Hex; address: Address; userId: string };
 const KEY = "co2x.credential";
@@ -67,24 +66,33 @@ export async function discoverPasskey(): Promise<string> {
 
 export type Call = { target: Address; value: bigint; data: Hex };
 
-/// 這個地址上有沒有合約。
+const wire = (calls: Call[]) => calls.map((c) => ({ ...c, value: c.value.toString() }));
+
+/// 這個地址上有沒有合約——問後端，不是自己連節點。
 ///
 /// PasskeyAccount 的地址是由 factory 以 CREATE2 從公鑰推出來的，所以 factory 一換
 /// （重新部署、換一條鏈），同一把 passkey 會對到不同地址。localStorage 裡存的舊地址
-/// 就成了空地址，任何 read 都回 "0x"。呼叫端據此重新綁定。
-export async function hasCode(rpcUrl: string, address: Address): Promise<boolean> {
+/// 就成了空地址。呼叫端據此重新綁定。
+export async function hasCode(address: Address): Promise<boolean> {
   try {
-    const code = await createPublicClient({ transport: http(rpcUrl) }).getCode({ address });
-    return !!code && code !== "0x";
+    const r = await fetch(`/api/account?address=${address}`);
+    if (!r.ok) return true; // 問不到是另一回事，別誤判成帳戶不存在
+    return !!(await r.json()).exists;
   } catch {
-    return true; // 連不上節點是另一回事，別誤判成帳戶不存在
+    return true;
   }
 }
 
-/// 讀鏈上 digest → passkey 簽 → 編成合約要的 WebAuthnAuth → 交給 relayer
-export async function signAndRelay(rpcUrl: string, cred: StoredCredential, calls: Call[]) {
-  const client = createPublicClient({ transport: http(rpcUrl) });
-  if (!(await hasCode(rpcUrl, cred.address))) {
+/// 後端算 digest → passkey 在這台裝置上簽 → 編成合約要的 WebAuthnAuth → 交給 relayer。
+///
+/// 只有**簽章**留在瀏覽器，因為私鑰在裝置的安全元件裡，它非留不可。
+/// 要簽什麼、簽完送到哪，都由後端決定：前端不直接跟區塊鏈說話。
+export async function signAndRelay(cred: StoredCredential, calls: Call[]) {
+  const prep = await fetch("/api/relay/prepare", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ account: cred.address, calls: wire(calls) }),
+  });
+  if (prep.status === 409) {
     throw new Error(
       // 正常路徑不會走到這裡：AccountProvider.relay 在送出前就會確認並重綁。
       // 會到這裡表示確認之後帳戶才消失（例如剛好在這中間重新部署），
@@ -93,8 +101,9 @@ export async function signAndRelay(rpcUrl: string, cred: StoredCredential, calls
         `多半是剛剛重新部署過。請重新整理頁面；若仍失敗，按「移除此裝置的帳戶紀錄」後用同一把 passkey 重新建立。`,
     );
   }
-  const nonce = await client.readContract({ address: cred.address, abi: passkeyAccountAbi, functionName: "nonce" });
-  const digest = await client.readContract({ address: cred.address, abi: passkeyAccountAbi, functionName: "getDigest", args: [calls, nonce] });
+  const prepJson = await prep.json();
+  if (!prep.ok) throw new Error(prepJson.error ?? "prepare failed");
+  const digest = prepJson.digest as Hex;
 
   const account = toWebAuthnAccount({ credential: { id: cred.id, publicKey: cred.publicKey } });
   const { signature, webauthn } = await account.sign({ hash: digest });
@@ -111,7 +120,7 @@ export async function signAndRelay(rpcUrl: string, cred: StoredCredential, calls
 
   const res = await fetch("/api/relay", {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ account: cred.address, calls: calls.map((c) => ({ ...c, value: c.value.toString() })), signature: encoded }),
+    body: JSON.stringify({ account: cred.address, calls: wire(calls), signature: encoded }),
   });
   const json = await res.json();
   if (!res.ok) throw new Error(json.error ?? "relay failed");

@@ -5,7 +5,10 @@ import type { Deployment } from "@/lib/deployment";
 import { useReload } from "@/lib/client/useReload";
 import { clearCredential, credentialServerSnapshot, credentialSnapshot, discoverPasskey, hasCode, registerPasskey, saveCredential, signAndRelay, subscribeCredential, type Call, type StoredCredential } from "@/lib/client/passkey";
 
-type Config = { deployment: Deployment; rpcUrl: string; providers: string[] };
+// rpcUrl 不在這裡，也不該在這裡：**前端不直接跟區塊鏈說話**。
+// 節點位址發給每一個訪客，等於把它暴露在公開網路上；而且瀏覽器連得到的節點
+// 跟伺服器連得到的節點不一定是同一個，兩邊各讀一次就會各看到一條鏈。
+type Config = { deployment: Deployment; providers: string[] };
 export type Me = { email: string | null; isAdmin: boolean; isVerifier: boolean };
 /// 鏈上身分 + 本機的申請紀錄。`/api/kyc` 回的就是這個形狀。
 export type Identity = {
@@ -107,7 +110,7 @@ function Inner({ children }: { children: React.ReactNode }) {
     if (!credential || !config || !userId) return;
     let live = true;
     (async () => {
-      if (await hasCode(config.rpcUrl, credential.address)) return;
+      if (await hasCode(credential.address)) return;
       if (!live) return;
       setBusy("合約已更新，重新綁定帳戶…");
       try {
@@ -160,13 +163,13 @@ function Inner({ children }: { children: React.ReactNode }) {
   const relay = useCallback(async (calls: Call[]) => {
     if (!config || !credential) throw new Error("尚未建立鏈上帳戶");
     let cred = credential;
-    if (!(await hasCode(config.rpcUrl, cred.address))) {
+    if (!(await hasCode(cred.address))) {
       setBusy("合約已更新，重新綁定帳戶…");
       try { cred = await bind(cred.id, cred.publicKey); }
       catch { clearCredential(); setUnbound(true); throw new Error("這個裝置的帳戶在目前這條鏈上不存在，且無法用同一把 passkey 重新綁定。請重新建立帳戶。"); }
       finally { setBusy(null); }
     }
-    return signAndRelay(config.rpcUrl, cred, calls);
+    return signAndRelay(cred, calls);
   }, [config, credential, bind]);
 
   const forget = useCallback(() => { clearCredential(); setUnbound(false); }, []);

@@ -1,14 +1,25 @@
 import { type Hex, isHex } from "viem";
 import { accountFactoryAbi } from "@/lib/abis";
-import { deployment, publicClient, relayerClient } from "@/lib/server/chain";
+import { deployment, isAddress, publicClient, relayerClient } from "@/lib/server/chain";
 import { getAccount, putAccount } from "@/lib/server/accounts";
 import { auth } from "@/auth";
 import { handle } from "@/lib/server/roles";
 
 /// GET ?credentialId= → 既有帳戶
+/// GET ?address=      → 這個地址在目前這條鏈上有沒有合約
+///
+/// 後者是給前端問「我記住的地址還算數嗎」用的。**前端不直接跟區塊鏈說話**，
+/// 所以 eth_getCode 也走這裡，而不是讓瀏覽器自己開一條 RPC。
 export async function GET(req: Request) {
   try {
-    const id = new URL(req.url).searchParams.get("credentialId") ?? "";
+    const u = new URL(req.url);
+    const address = u.searchParams.get("address");
+    if (address) {
+      if (!isAddress(address)) return Response.json({ error: "address" }, { status: 400 });
+      const code = await publicClient.getCode({ address });
+      return Response.json({ address, exists: !!code && code !== "0x" });
+    }
+    const id = u.searchParams.get("credentialId") ?? "";
     const row = getAccount(id);
     return row ? Response.json(row) : Response.json({ error: "unknown credential" }, { status: 404 });
   } catch (e) { return handle(e); }

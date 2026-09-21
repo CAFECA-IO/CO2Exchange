@@ -495,6 +495,29 @@ forge script script/Deploy.s.sol   --rpc-url chain --broadcast  # 鏈沒有 EIP-
 
 ## 前端（web/，Next.js 16 + React 19）
 
+### 前端不直接跟區塊鏈說話
+
+瀏覽器裡**沒有**任何一條連到節點的 RPC 連線。所有鏈上讀寫都經過 `web/app/api/*`，
+由伺服器端的 `publicClient`（`lib/server/chain.ts`）執行。`/api/config` 也不回傳
+RPC 位址——前端根本不知道節點在哪。
+
+這條界線的實際差別：
+
+- **節點不必公開。** 位址一旦發給瀏覽器就等於公開，任何人都能拿它對節點發請求。
+- **只有一條鏈。** 瀏覽器連得到的節點與伺服器連得到的節點不一定是同一個（內網節點、
+  IP 白名單、公司防火牆），兩邊各讀一次就會各看到一份狀態，而畫面不會告訴你這件事。
+- **ABI 只有一份。** 合約改版時不必擔心某個使用者的瀏覽器還快取著舊的那一份。
+
+唯一留在瀏覽器的鏈相關動作是 **passkey 簽章**——私鑰在裝置的安全元件裡，非在本機簽不可。
+但「要簽什麼」仍由後端算：`POST /api/relay/prepare` 回 `nonce` 與 `digest`，
+瀏覽器簽完再 `POST /api/relay` 交給 relayer 送出。
+
+`npm run check:boundary`（已併進 `npm run e2e`）會掃過所有會進瀏覽器的檔案，
+擋下 `createPublicClient`、指向節點的 `http()`、`rpcUrl` 與 `@/lib/server/*` 的值匯入。
+這條規則很容易在某次「先動起來再說」的修改裡被破掉，而破掉時不會有任何測試變紅。
+
+### 頁面
+
 四種角色、十一個頁面：
 
 | 角色 | 頁面 | 內容 |
