@@ -3,6 +3,16 @@ import { chromium } from "playwright";
 
 export const BASE = process.env.BASE_URL ?? "http://localhost:10010";
 
+/// 每一次執行給一般使用者一組新的 email。
+///
+/// 伺服器現在記得「這個 email 綁過哪個鏈上帳戶」，並在登入時自動還原。
+/// 固定 email 因此等於跨執行共用同一個帳戶：第二次跑的 alice 會帶著上一次的
+/// 餘額與持倉開始，於是「領取 mTWD 之後餘額是 100,000」這種檢查就會爆掉——
+/// 爆的不是功能，是測試自己留下的狀態。
+/// 管理員與查驗機構不能這樣做：它們的權限是 ADMIN_EMAILS / VERIFIER_EMAILS 白名單。
+const RUN = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+export const who = (name) => `${name}-${RUN}@example.com`;
+
 export async function launch() {
   return chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 }
@@ -46,15 +56,22 @@ export async function login(page, email) {
 }
 
 export async function createPasskeyAccount(page) {
-  // 「另一個」：伺服器已經記得這個登入帳號綁過帳戶時，主要按鈕會變成
-  // 「用 passkey 綁定這台裝置」，建立的那顆退成「建立另一個帳戶」。
-  // e2e 每次都是全新的 browser context ＝ 全新的虛擬 authenticator，
-  // 手上沒有舊的 passkey，所以要按的一直是「建立」那一顆。
+  const ready = page.locator('[data-testid="account-ready"]');
+  // 這個 email 之前綁過帳戶的話，登入當下就已經自動還原，畫面直接是「帳戶已就緒」，
+  // 根本沒有「建立」那顆按鈕可以按。e2e 重跑第二次就是這個情況（accounts.json
+  // 只在 rebuild 時才清）。兩種狀態都要能往下走，否則測到的只是第一次的路徑。
   const create = page.getByRole("button", { name: /建立(新|鏈上|另一個)帳戶/ });
-  await create.waitFor({ timeout: 30_000 });
-  await create.click();
-  await page.locator('[data-testid="account-ready"]').waitFor({ timeout: 60_000 });
-  return (await page.locator("dd.font-mono").first().textContent()).trim();
+  await Promise.race([
+    ready.waitFor({ timeout: 30_000 }),
+    create.waitFor({ timeout: 30_000 }),
+  ]);
+  if (!(await ready.isVisible().catch(() => false))) await create.click();
+  await ready.waitFor({ timeout: 60_000 });
+  // 從「帳戶已就緒 · 0x…」裡取地址。原本抓的是 `dd.font-mono`，那是旁邊統計面板的
+  // 第一個等寬數字——所以這個函式一直回傳「239,293噸」之類的東西，
+  // 而 flow.mjs 第一行就把它印成「✔ 登入 + 帳戶 239,293噸」。沒人看出來，
+  // 是因為沒有任何一個檢查真的拿它跟地址比對過。
+  return /0x[0-9a-fA-F]{40}/.exec(await ready.innerText())?.[0] ?? "";
 }
 
 /// 送出 KYC 申請；tier: "individual" | "corporate"

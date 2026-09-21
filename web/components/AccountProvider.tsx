@@ -8,6 +8,12 @@ import { clearCredential, credentialServerSnapshot, credentialSnapshot, discover
 // rpcUrl 不在這裡，也不該在這裡：**前端不直接跟區塊鏈說話**。
 // 節點位址發給每一個訪客，等於把它暴露在公開網路上；而且瀏覽器連得到的節點
 // 跟伺服器連得到的節點不一定是同一個，兩邊各讀一次就會各看到一條鏈。
+/// credentialId 與公鑰都是公開值：公鑰本來就公開，credentialId 只是識別碼。
+/// 拿到它們簽不了任何東西——簽章需要 authenticator 裡的私鑰。帶回前端是為了能
+/// **無聲地**把綁定還原，使用者重新登入之後不必再回答一次「要不要建立帳戶」。
+export type KnownAccount = { address: string; createdAt: string; credentialId: string; publicKey: `0x${string}` };
+const EMPTY: KnownAccount[] = [];
+
 type Config = { deployment: Deployment; providers: string[] };
 export type Me = { email: string | null; isAdmin: boolean; isVerifier: boolean };
 /// 鏈上身分 + 本機的申請紀錄。`/api/kyc` 回的就是這個形狀。
@@ -34,9 +40,9 @@ type Ctx = {
   /// 使用者沒做錯任何事，但畫面必須說出來 —— 否則就是「我明明有帳戶，怎麼叫我重建」。
   unbound: boolean;
   /// 這個登入帳號在伺服器上綁過的鏈上帳戶。**這台裝置**沒有 credential 不代表
-  /// 這個人沒有帳戶——換裝置、清掉瀏覽器資料都會這樣。有它才講得出實話。
+  /// 這個人沒有帳戶——換裝置、清掉瀏覽器資料、換個登入方式都會這樣。
   /// null = 還沒問到（不要在這時候斷言任何一邊）。
-  knownAccounts: { address: string; createdAt: string }[] | null;
+  knownAccounts: KnownAccount[] | null;
   createAccount: () => Promise<void>;
   useExistingPasskey: () => Promise<void>;
   /// 送一筆交易。地址在**送出前**會先對現在這條鏈確認一次，過不了就用同一把
@@ -56,7 +62,9 @@ function Inner({ children }: { children: React.ReactNode }) {
   //（那是在 effect 裡同步改狀態），對不上就直接當未驗證。
   const [idFor, setIdFor] = useState<{ address: string; identity: Identity; at: number } | null>(null);
   const [unbound, setUnbound] = useState(false);
-  const [knownAccounts, setKnownAccounts] = useState<{ address: string; createdAt: string }[] | null>(null);
+  // 連同「這份清單是誰的」一起存，跟 idFor 同一個做法：換帳號時不必在 effect 裡
+  // 先同步清空（那正是 set-state-in-effect 規則要擋的東西），對不上就當作還沒問到。
+  const [knownFor, setKnownFor] = useState<{ userId: string; accounts: KnownAccount[] } | null>(null);
 
   // 憑證的真實來源是 localStorage，不是 React state：訂閱它，不要複製一份再想辦法同步。
   const stored = useSyncExternalStore(subscribeCredential, credentialSnapshot, credentialServerSnapshot);
@@ -67,14 +75,37 @@ function Inner({ children }: { children: React.ReactNode }) {
   useEffect(() => { fetch("/api/me").then((r) => r.json()).then(setMe).catch(() => {}); }, [userId]);
   // 綁過哪些帳戶。跟著 credential 一起重抓：剛建好帳戶時清單要立刻反映。
   useEffect(() => {
-    if (!userId) { setKnownAccounts([]); return; }
+    if (!userId) return;
     let ignore = false;
     fetch("/api/account?mine=1")
       .then((r) => (r.ok ? r.json() : { accounts: [] }))
-      .then((j) => { if (!ignore) setKnownAccounts(j.accounts ?? []); })
-      .catch(() => { if (!ignore) setKnownAccounts([]); });
+      .then((j) => { if (!ignore) setKnownFor({ userId, accounts: j.accounts ?? [] }); })
+      .catch(() => { if (!ignore) setKnownFor({ userId, accounts: [] }); });
     return () => { ignore = true; };
   }, [userId, credential]);
+  // useMemo 讓「沒登入 → []」這個空陣列每次都是同一個參考，否則下面的 effect
+  // 與 context value 會因為每次 render 都拿到新陣列而白跑。
+  const knownAccounts = useMemo<KnownAccount[] | null>(
+    () => (!userId ? EMPTY : knownFor?.userId === userId ? knownFor.accounts : null),
+    [userId, knownFor],
+  );
+  // 登入之後，把帳戶還給他。
+  //
+  // 這是「登入」之所以有意義的地方。原本帳戶只活在這個瀏覽器的 localStorage 裡：
+  // 清掉、換裝置、或改用另一種方式登入（Google 與開發用登入的 userId 不同），
+  // 畫面就當作你沒有帳戶，要你重建一個——而重建出來的是**另一個**帳戶，
+  // 舊帳戶裡的碳權不會跟過來。
+  //
+  // 伺服器知道這個人綁過什麼，所以這裡直接還原，不問、也不跳 passkey 視窗：
+  // 還原的只是「你的帳戶是哪一個」這個公開事實。真正需要 passkey 的是簽章，
+  // 到那一步才會跳系統的驗證視窗。
+  useEffect(() => {
+    if (!userId || credential || !knownAccounts?.length) return;
+    const a = knownAccounts[0];
+    if (!a.credentialId || !a.publicKey) return; // 舊資料沒有這兩個欄位
+    saveCredential({ id: a.credentialId, publicKey: a.publicKey, address: a.address as `0x${string}`, userId });
+  }, [userId, credential, knownAccounts]);
+
   const [tierKey, refreshTier] = useReload();
   useEffect(() => {
     if (!credential) return;

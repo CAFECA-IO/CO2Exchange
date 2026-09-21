@@ -19,7 +19,7 @@ export async function GET(req: Request) {
       const session = await auth();
       const id = session?.user?.id;
       if (!id) return Response.json({ error: "unauthenticated" }, { status: 401 });
-      return Response.json({ accounts: accountsOf(id) });
+      return Response.json({ accounts: accountsOf(id, session?.user?.email) });
     }
     const address = u.searchParams.get("address");
     if (address) {

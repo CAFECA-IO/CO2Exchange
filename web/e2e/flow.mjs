@@ -3,13 +3,15 @@
 //   法人  ：KYC → 買下自然人的掛單 → 註銷 → 憑證 → 管理員產生 PDF 並回寫 → 下載
 // 自然人在官方制度裡開不了額度帳戶，所以只能買賣、不能註銷；最後用掉的一定是事業。
 // 前置：anvil 已跑 DemoFlow、next 在 :10010（KYC_AUTO_APPROVE=0）。執行：node e2e/flow.mjs
-import { BASE, adminApproveAllKyc, applyKyc, buyFromBook, createPasskeyAccount, launch, login, marketBuy, newUser, retireOnPage, sellOnBook, waitKycActive, waitOk } from "./lib.mjs";
+import {
+  BASE, adminApproveAllKyc, applyKyc, buyFromBook, createPasskeyAccount, launch, login, marketBuy, newUser, retireOnPage, sellOnBook, waitKycActive, waitOk, who,
+} from "./lib.mjs";
 
 const browser = await launch();
 const alice = await newUser(browser, "alice");
 const admin = await newUser(browser, "admin");
 
-await login(alice.page, "alice@example.com");
+await login(alice.page, who("alice"));
 const address = await createPasskeyAccount(alice.page);
 console.log("✔ 登入 + 帳戶", address);
 
@@ -105,14 +107,16 @@ console.log("✔ 自然人被擋下註銷，且畫面有說明");
 // 伺服器知道這個登入帳號綁過什麼，知道了就該照實講，並把「綁回來」放在主要位置。
 {
   const other = await newUser(browser, "alice-2nd-device");
-  await login(other.page, "alice@example.com");
+  await login(other.page, who("alice"));
   await other.page.goto(BASE);
-  await other.page.locator("text=你已經有一個鏈上帳戶").waitFor({ timeout: 30_000 });
+  // 登入就該把帳戶還給他：不必按任何按鈕、不跳 passkey 視窗，直接就緒，
+  // 而且是**同一個**地址。這就是登入的意義；做不到的話，登入只是換了個地方
+  // 問「要不要建立帳戶」，而重建出來的是另一個帳戶。
+  await other.page.locator('[data-testid="account-ready"]').waitFor({ timeout: 30_000 });
   const t = await other.page.locator("main").innerText();
-  if (t.includes("尚未建立鏈上帳戶")) throw new Error("換裝置卻說「尚未建立鏈上帳戶」");
-  const nav = await other.page.getByRole("banner").innerText();
-  if (!nav.includes("這台裝置未綁定帳戶")) throw new Error(`導覽列沒說是裝置未綁定：${nav}`);
-  console.log("✔ 換裝置時說的是「這台裝置未綁定」，不是「尚未建立帳戶」");
+  if (t.includes("尚未建立鏈上帳戶")) throw new Error("重新登入卻說「尚未建立鏈上帳戶」");
+  if (!t.includes(address)) throw new Error(`還原到的不是同一個地址，畫面上是：${t.slice(0, 200)}`);
+  console.log("✔ 重新登入（或換裝置）自動還原同一個帳戶，不必重建");
   await other.context.close();
 }
 
@@ -155,7 +159,7 @@ console.log("✔ 自然人轉售上架");
 
 // 法人買下自然人的掛單並註銷——官方端只有事業能做這件事
 const corp = await newUser(browser, "corp");
-await login(corp.page, "corp-buyer@example.com");
+await login(corp.page, who("corp-buyer"));
 await createPasskeyAccount(corp.page);
 await applyKyc(corp.page, "corporate", "12345678", "買方股份有限公司");
 await adminApproveAllKyc(admin.page);

@@ -3,8 +3,7 @@
 // 買單這一側跟賣單是對稱的，但有一個賣單沒有的風險：**錢鎖在合約裡**。
 // 所以取消退款這一段一定要測——沒有那顆按鈕，使用者的錢就拿不回來。
 import {
-  BASE, adminApproveAllKyc, agreeAll, applyKyc, buyFromBook, createPasskeyAccount,
-  launch, login, newUser, waitKycActive, waitOk,
+  BASE, adminApproveAllKyc, agreeAll, applyKyc, buyFromBook, createPasskeyAccount, launch, login, newUser, waitKycActive, waitOk, who,
 } from "./lib.mjs";
 
 const ok = (c, m) => { if (!c) throw new Error(m); console.log("  ✓", m); };
@@ -15,11 +14,11 @@ const buyer = await newUser(browser, "buyer");
 const seller = await newUser(browser, "seller");
 const admin = await newUser(browser, "admin");
 
-await login(buyer.page, "bidbuyer@example.com");
+await login(buyer.page, who("bidbuyer"));
 await createPasskeyAccount(buyer.page);
 await applyKyc(buyer.page, "corporate", "11111111", "出價股份有限公司");
 
-await login(seller.page, "bidseller@example.com");
+await login(seller.page, who("bidseller"));
 await createPasskeyAccount(seller.page);
 await applyKyc(seller.page, "corporate", "22222222", "供貨股份有限公司");
 

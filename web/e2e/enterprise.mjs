@@ -1,7 +1,9 @@
 // 企業流程：法人 KYC → 登錄專案 → 上傳查驗報告申請核發 → 查驗機構簽章核發 → 掛單 + 入池 → 自然人從新掛單購買
 // 執行：node e2e/enterprise.mjs（需先跑過 flow.mjs 或至少有 admin 可核准）
 import fs from "node:fs";
-import { BASE, adminApproveAllKyc, agreeAll, applyKyc, buyFromBook, createPasskeyAccount, launch, login, newUser, retireOnPage, sellOnBook, waitKycActive, waitOk } from "./lib.mjs";
+import {
+  BASE, adminApproveAllKyc, agreeAll, applyKyc, buyFromBook, createPasskeyAccount, launch, login, newUser, retireOnPage, sellOnBook, waitKycActive, waitOk, who,
+} from "./lib.mjs";
 
 const browser = await launch();
 const corp = await newUser(browser, "corp");
@@ -9,7 +11,7 @@ const verifier = await newUser(browser, "verifier");
 const admin = await newUser(browser, "admin");
 const bob = await newUser(browser, "bob");
 
-await login(corp.page, "greenco@example.com");
+await login(corp.page, who("greenco"));
 const corpAddr = await createPasskeyAccount(corp.page);
 await applyKyc(corp.page, "corporate", "24681357", "綠能股份有限公司");
 await login(admin.page, "admin@example.com");
@@ -68,7 +70,7 @@ await corp.page.locator("text=掛單 #").first().waitFor();
 console.log("✔ 掛單 + 入池");
 
 // 法人 bob 從新掛單購買並註銷（自然人不能註銷，那條路徑在 flow.mjs 驗）
-await login(bob.page, "bob@example.com");
+await login(bob.page, who("bob"));
 await createPasskeyAccount(bob.page);
 await applyKyc(bob.page, "corporate", "87654321", "林氏股份有限公司");
 await adminApproveAllKyc(admin.page);

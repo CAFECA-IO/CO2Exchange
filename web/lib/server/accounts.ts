@@ -45,16 +45,23 @@ export function putAccount(credentialId: string, row: Omit<Row, "createdAt">) {
 
 /// 這個登入帳號綁過哪些鏈上帳戶（去重、最新的在前）。
 ///
-/// 用來回答「我明明有帳戶，為什麼叫我重新建立」：使用者換裝置或清掉瀏覽器資料之後，
-/// 這台裝置沒有 credential，但伺服器知道這個人綁過什麼。知道了才講得出實話——
-/// 「帳戶在，這台裝置還沒綁定，用同一把 passkey 綁回來就好」。
+/// 這是「登入」之所以有意義的地方：登入告訴我們你是誰，我們就該把你的帳戶還給你，
+/// 而不是每次都問「要不要建立帳戶」。沒有這個查詢，帳戶等於只存在於某一個瀏覽器的
+/// localStorage 裡——清掉、換裝置、換個登入方式，就像沒有過。
 ///
-/// 只回地址與時間。credentialId 與公鑰是拿來簽章與查詢的鍵，沒有必要送回瀏覽器。
-export function accountsOf(userId: string): { address: Address; createdAt: string }[] {
+/// **同時比對 userId 與 email**：userId 是登入供應商給的（Google 一組、開發用登入
+/// 另一組），同一個人用不同方式登入會拿到不同的 userId。而這個系統其他地方
+/// （ADMIN_EMAILS、VERIFIER_EMAILS、KYC 紀錄）本來就以 email 認人，這裡跟著一致。
+///
+/// 回傳含 credentialId 與公鑰，讓前端能**無聲地**把綁定還原回來。這兩個都是公開值：
+/// 公鑰本來就是公開的，credentialId 只是一個識別碼；拿到它們也簽不了任何東西，
+/// 簽章需要 authenticator 裡的私鑰。而呼叫者已經是通過驗證的本人。
+export function accountsOf(userId: string, email?: string | null) {
+  const mail = email?.toLowerCase();
   const seen = new Set<string>();
-  return Object.values(load().rows)
-    .filter((r) => r.userId === userId)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .filter((r) => (seen.has(r.address.toLowerCase()) ? false : seen.add(r.address.toLowerCase())))
-    .map((r) => ({ address: r.address, createdAt: r.createdAt }));
+  return Object.entries(load().rows)
+    .filter(([, r]) => r.userId === userId || (!!mail && r.email?.toLowerCase() === mail))
+    .sort(([, a], [, b]) => b.createdAt.localeCompare(a.createdAt))
+    .filter(([, r]) => (seen.has(r.address.toLowerCase()) ? false : seen.add(r.address.toLowerCase())))
+    .map(([credentialId, r]) => ({ address: r.address, createdAt: r.createdAt, credentialId, publicKey: r.publicKey }));
 }
