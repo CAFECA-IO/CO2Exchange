@@ -1,6 +1,7 @@
 import "server-only";
 import { encodeAbiParameters, keccak256, encodePacked, type Address, type Hex } from "viem";
-import { creditAbi, erc20Abi, listingAbi, poolAbi, poolManagerAbi, registryAbi, routerAbi } from "@/lib/abis";
+import { creditAbi, erc20Abi, kycRegistryAbi, listingAbi, poolAbi, poolManagerAbi, registryAbi, routerAbi } from "@/lib/abis";
+import { errorAbi } from "@/lib/error-abi";
 import { deployment, publicClient } from "./chain";
 import { countryCode, hasV4 } from "@/lib/deployment";
 
@@ -182,17 +183,35 @@ export async function holdings(account: Address) {
 ///
 /// 做法是 eth_call 模擬 `TrustedRouter.swap`，並用 state override 暫時給足餘額與授權
 /// （只存在於這一次模擬，不上鏈）。回傳的 BalanceDelta 就是真正的進出金額。
-export async function quoteMarket(
-  account: Address,
-  kg: bigint,
-  side: "buy" | "sell",
-): Promise<{ twd: number; perTonne: number; spot: number | null } | null> {
+/// 報不出價時**為什麼**報不出來。
+///
+/// 以前這裡回 null，前端一律說「流動性不足」。那句話在最常見的情況下是錯的：
+/// 池子有貨，是這個帳戶還沒通過身分驗證（或驗證過期、被凍結），hook 的 beforeSwap
+/// 直接 revert。使用者看著一個明明有幾十噸的池子，被告知「這個數量吃不下」，
+/// 然後去把數量從 1 噸改成 0.5 噸——再失敗一次。診斷錯了，指引就一定錯。
+export type QuoteFail =
+  /// 這個部署沒有 v4 池子（SKIP_V4）
+  | { ok: false; reason: "no-pool" }
+  /// 沒通過身分驗證、驗證過期，或被凍結
+  | { ok: false; reason: "not-verified" }
+  /// 超過該身分等級的單日交易上限
+  | { ok: false; reason: "daily-limit" }
+  /// 真的是池子吃不下。maxTonnes 是還吃得下多少（粗估，二分搜出來的）
+  | { ok: false; reason: "liquidity"; maxTonnes: number };
+
+export type QuoteOk = { ok: true; twd: number; perTonne: number; spot: number | null };
+export type MarketQuote = QuoteOk | QuoteFail;
+
+/// routerAbi 併上全站的自訂 error，viem 才解得開 hook 丟出來的東西；
+/// 少了它，回來的只是一個四位元組的 selector，分不出是身分還是流動性。
+const SWAP_ABI = [...routerAbi, ...errorAbi] as unknown as typeof routerAbi;
+
+/// 單純跑一次模擬，成功回 BalanceDelta，失敗把錯誤丟出來。
+async function simulateSwap(account: Address, kg: bigint, side: "buy" | "sell") {
   const d = deployment();
-  const key = poolKey();
-  if (!key) return null; // SKIP_V4 部署沒有池子
+  const key = poolKey()!;
   const cct = kg * 10n ** 15n;
   const twdIsCurrency0 = key.currency0.toLowerCase() === d.settlementToken.toLowerCase();
-  // 買 = 精準輸出（要拿到正好這麼多 CCT）；賣 = 精準輸入（正好投入這麼多 CCT）
   const zeroForOne = side === "buy" ? twdIsCurrency0 : !twdIsCurrency0;
   const amountSpecified = side === "buy" ? cct : -cct;
 
@@ -213,25 +232,71 @@ export async function quoteMarket(
     ],
   }];
 
+  const { result } = await publicClient.simulateContract({
+    address: d.router, abi: SWAP_ABI, functionName: "swap", account,
+    args: [key, { zeroForOne, amountSpecified, sqrtPriceLimitX96: zeroForOne ? MIN_SQRT + 1n : MAX_SQRT - 1n },
+      0n, BigInt(Math.floor(Date.now() / 1000) + 600)],
+    stateOverride: overrides,
+  });
+  const packed = BigInt(result as bigint);
+  const amount0 = BigInt.asIntN(128, packed >> 128n);
+  const amount1 = BigInt.asIntN(128, packed & ((1n << 128n) - 1n));
+  return { amount0, amount1, twdIsCurrency0 };
+}
+
+/// 池子還吃得下幾噸。只在真的因為流動性失敗時才跑——十幾次 eth_call，
+/// 換一句「最多還能買 X 噸」，比叫使用者自己一路往下猜數字划算。
+///
+/// 上界不能直接用「他輸入的數量」：有人輸入十萬噸、實際上限三十噸，
+/// 十次二分從十萬噸只降到九十幾噸，結果會是 0——訊息裡就少了那個數字。
+/// 先用 PoolManager 手上的 CCT 餘額把上界壓到物理極限（任何 swap 都不可能
+/// 吐出比它更多），再二分。
+async function maxFillableTonnes(account: Address, side: "buy" | "sell", failedKg: bigint): Promise<number> {
+  const d = deployment();
+  const held = await publicClient.readContract({
+    address: side === "buy" ? d.cct : d.settlementToken, abi: erc20Abi,
+    functionName: "balanceOf", args: [d.poolManager],
+  }).catch(() => 0n) as bigint;
+  // CCT 是 18 位小數、1 噸 = 1e18；kg 是 1e15
+  const heldKg = side === "buy" ? held / 10n ** 15n : failedKg;
+  let lo = 0n, hi = failedKg < heldKg ? failedKg : heldKg;
+  if (hi <= 0n) return 0;
+  for (let i = 0; i < 14 && hi - lo > 1n; i++) {
+    const mid = (lo + hi) / 2n;
+    if (mid <= 0n) break;
+    try { await simulateSwap(account, mid, side); lo = mid; } catch { hi = mid; }
+  }
+  return Number(lo) / 1000;
+}
+
+export async function quoteMarket(
+  account: Address,
+  kg: bigint,
+  side: "buy" | "sell",
+): Promise<MarketQuote> {
+  const d = deployment();
+  const key = poolKey();
+  if (!key) return { ok: false, reason: "no-pool" }; // SKIP_V4 部署沒有池子
+  // 先問身分，再問池子。這一個 eth_call 就把「最常見的失敗原因」跟
+  // 「真的沒貨」分開了——而且它是**可以直接回答**的，不必從 revert 反推。
+  const active = await publicClient.readContract({
+    address: d.kycRegistry, abi: kycRegistryAbi, functionName: "isActive", args: [account],
+  }).catch(() => false);
+  if (!active) return { ok: false, reason: "not-verified" };
+
   try {
-    const { result } = await publicClient.simulateContract({
-      address: d.router, abi: routerAbi, functionName: "swap", account,
-      args: [key, { zeroForOne, amountSpecified, sqrtPriceLimitX96: zeroForOne ? MIN_SQRT + 1n : MAX_SQRT - 1n },
-        0n, BigInt(Math.floor(Date.now() / 1000) + 600)],
-      stateOverride: overrides,
-    });
     // BalanceDelta 是 int128 amount0（高位）| int128 amount1（低位）
-    const packed = BigInt(result as bigint);
-    const amount0 = BigInt.asIntN(128, packed >> 128n);
-    const amount1 = BigInt.asIntN(128, packed & ((1n << 128n) - 1n));
+    const { amount0, amount1, twdIsCurrency0 } = await simulateSwap(account, kg, side);
     const twdRaw = twdIsCurrency0 ? amount0 : amount1;
     // 買進時 delta 是負的（錢出去），賣出時是正的
     const twd = Number(side === "buy" ? -twdRaw : twdRaw) / 1e6;
     const tonnes = Number(kg) / 1000;
     const spot = await poolSpotPricePerTonne().catch(() => null);
-    return { twd, perTonne: tonnes > 0 ? twd / tonnes : 0, spot };
-  } catch {
-    // 流動性不足、或這個帳戶過不了 hook 的身分檢查
-    return null;
+    return { ok: true, twd, perTonne: tonnes > 0 ? twd / tonnes : 0, spot };
+  } catch (e) {
+    // 身分已經排除了，剩下的常態是池子吃不下。單日上限另外認一下——
+    // 目前部署沒有設上限（dailyLimit 預設 0 就不檢查），但設了之後這裡要說對話。
+    if (/DailyLimitExceeded/.test(String(e))) return { ok: false, reason: "daily-limit" };
+    return { ok: false, reason: "liquidity", maxTonnes: await maxFillableTonnes(account, side, kg) };
   }
 }

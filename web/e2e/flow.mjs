@@ -13,6 +13,20 @@ await login(alice.page, "alice@example.com");
 const address = await createPasskeyAccount(alice.page);
 console.log("✔ 登入 + 帳戶", address);
 
+// 還沒驗證身分就去交易頁，畫面要說「去辦身分驗證」，不是說「流動性不足」。
+//
+// 這裡擋的是一個真的發生過的誤診：v4 hook 的 beforeSwap 對未驗證帳戶 revert，
+// 而報價端把**所有**失敗都當成池子沒貨。使用者輸入 1 噸（池子裡還有三十幾噸），
+// 被告知「這個數量吃不下」，於是把數量改小、再失敗——永遠走不到身分驗證那一步。
+{
+  await alice.page.goto(`${BASE}/trade`);
+  await alice.page.locator('[data-testid="need-kyc"]').waitFor({ timeout: 30_000 });
+  const text = await alice.page.locator("main").innerText();
+  if (!text.includes("身分驗證")) throw new Error("未驗證時交易頁沒有指向身分驗證");
+  if (text.includes("流動性不足")) throw new Error("未驗證卻說流動性不足——診斷錯了，指引就會錯");
+  console.log("✔ 未驗證時交易頁說的是身分驗證，不是流動性");
+}
+
 await applyKyc(alice.page, "individual", "A123456789", "Alice Chen");
 await alice.page.locator('[data-testid="kyc-application"]', { hasText: "審核中" }).waitFor();
 console.log("✔ KYC 申請（審核中）");
@@ -59,6 +73,19 @@ await marketBuy(page, { tonnes: 1 });
 // 顯示的是一個使用者根本不會付到的數字。授權改成從實際報價算之後才過得了。
 await marketBuy(page, { tonnes: 5 });
 console.log("✔ 掛單買進 + 市價買進");
+
+// 量真的太大時，訊息要說「流動性不足」**並且給出還吃得下多少**。
+// 只說「吃不下」等於叫人自己一路往下猜數字。
+{
+  await page.locator('[data-testid="tab-buy"]').click();
+  await page.locator('[data-testid="mode-market"]').click();
+  await page.locator('[data-testid="market-qty"]').fill("100000");
+  await page.locator("text=流動性不足").first().waitFor({ timeout: 30_000 });
+  const t = (await page.locator("main").innerText()).replace(/\s+/g, "");
+  if (!/池子目前最多約[\d,.]+噸/.test(t)) throw new Error("沒有給出池子還吃得下多少");
+  console.log("✔ 量太大時說流動性不足，並給出上限");
+  await page.locator('[data-testid="market-qty"]').fill("1");
+}
 
 // 我的資產：買完之後看得到持有、成本與損益
 await page.goto(`${BASE}/portfolio`);

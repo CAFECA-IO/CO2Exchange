@@ -11,10 +11,9 @@ export async function GET(req: Request) {
     const kg = BigInt(u.searchParams.get("kg") ?? "0");
     const side = u.searchParams.get("side") === "sell" ? "sell" : "buy";
     if (!isAddress(account) || kg <= 0n) return Response.json({ error: "bad request" }, { status: 400 });
-    const q = await quoteMarket(account, kg, side);
-    // 報不出價＝流動性不足（或這個帳戶過不了身分檢查）。這是正常回應，不是錯誤：
-    // 前端要據此把按鈕關掉並說明原因，而不是讓使用者送出去撞 revert。
-    return Response.json(q ?? { unavailable: true });
+    // 報不出價是正常回應，不是錯誤：前端要據此把按鈕關掉並**說對原因**。
+    // reason 一定要帶回去——「報不出價」有好幾種原因，猜錯了給的指引就是錯的。
+    return Response.json(await quoteMarket(account, kg, side));
   } catch (e) {
     return handle(e);
   }

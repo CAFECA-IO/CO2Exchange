@@ -83,7 +83,11 @@ export default function TradePage() {
   // 報價連同「它是對哪一組輸入報的」一起存。這樣切換模式或改數量時，
   // 舊的報價自然就對不上而失效，不必在 effect 裡同步 setState 清空它
   //（那會觸發連鎖 render，而且 hooks 的順序也不允許放在早退之後）。
-  type Quote = { twd: number; perTonne: number; spot: number | null } | "none";
+  // 報價要嘛成功，要嘛**帶著原因**失敗。以前失敗一律是 "none"，畫面一律說
+  // 「流動性不足」——而最常見的原因其實是身分驗證，池子裡明明還有幾十噸。
+  type Quote =
+    | { ok: true; twd: number; perTonne: number; spot: number | null }
+    | { ok: false; reason: "no-pool" | "not-verified" | "daily-limit" | "liquidity"; maxTonnes?: number };
   const [quoted, setQuoted] = useState<{ key: string; value: Quote } | null>(null);
   const [filter, setFilter] = useState<string>("ALL");
   const [advanced, setAdvanced] = useState(false);
@@ -115,9 +119,9 @@ export default function TradePage() {
     const id = setTimeout(async () => {
       try {
         const r = await fetch(`/api/market/quote?account=${address}&kg=${kg}&side=buy`);
-        const j = await r.json();
-        if (!ignore) setQuoted({ key: quoteKey, value: j.unavailable ? "none" : j });
-      } catch { if (!ignore) setQuoted({ key: quoteKey, value: "none" }); }
+        const j = (await r.json()) as Quote;
+        if (!ignore) setQuoted({ key: quoteKey, value: j });
+      } catch { if (!ignore) setQuoted({ key: quoteKey, value: { ok: false, reason: "liquidity" } }); }
     }, 350);
     return () => { ignore = true; clearTimeout(id); };
   }, [quoteKey]);
@@ -217,7 +221,7 @@ export default function TradePage() {
     // 授權金額**從報價來**。原本是「現貨 × 數量 × 1.05」——那不是成交價，
     // 池子薄的時候差兩成以上，於是授權必定不夠，交易必定失敗。
     // 報價是對當下池況模擬出來的實際金額，再加一點緩衝吸收這段期間的價格變動。
-    const quoted = typeof quote === "object" && quote ? quote.twd : tonnes * m.spotPricePerTonne;
+    const quoted = priced ? priced.twd : tonnes * m.spotPricePerTonne;
     const maxSpend = BigInt(Math.ceil(quoted * (1 + SLIPPAGE) * 1e6));
     const zeroForOne = m.poolKey.currency0.toLowerCase() === d.settlementToken.toLowerCase();
     relay(`市價買進 ${fmtKg(Number(kg))}`, [
@@ -284,16 +288,16 @@ export default function TradePage() {
   const sellFee = (sellProceeds * (m?.listingFeeBps ?? 0)) / 10_000;
 
 
-  const mBuyCost = typeof quote === "object" && quote ? quote.twd : spot ? Number(marketTonnes) * spot : 0;
-  const impact = typeof quote === "object" && quote && quote.spot ? quote.perTonne / quote.spot - 1 : null;
+  const priced = quote?.ok ? quote : null;
+  const mBuyCost = priced ? priced.twd : spot ? Number(marketTonnes) * spot : 0;
+  const impact = priced && priced.spot ? priced.perTonne / priced.spot - 1 : null;
   const mSellProceeds = sf && spot ? Number(sf.tonnes) * spot : 0;
 
   const buyReady = !!selected && !!qtyKg && Number(qtyKg) >= (selected.minFillKg || 1) && !notEnough;
   const sellReady = !!sb && !!sf && Number(sf.tonnes) > 0 && Number(sf.price) > 0 && Number(sf.tonnes) * 1000 <= sb.kg;
   // 報不出價就不讓送出。讓使用者按下去撞 revert，等於把「流動性不足」
   // 這個本來就知道的事實，包裝成一個看不懂的錯誤丟回他臉上。
-  const mBuyReady = hasMarket && Number(marketTonnes) > 0 && quote !== "none"
-    && typeof quote === "object" && quote !== null && mBuyCost <= balance;
+  const mBuyReady = hasMarket && Number(marketTonnes) > 0 && !!priced && mBuyCost <= balance;
   const mSellReady = hasMarket && !!sb && !!sf && sb.country === "TW" && Number(sf.tonnes) > 0 && Number(sf.tonnes) * 1000 <= sb.kg;
 
   return (
@@ -461,6 +465,18 @@ export default function TradePage() {
             >市價（即時成交）</button>
           </div>
 
+          {/*
+            身分驗證擋在買賣**兩側**之前。原本只有賣出側說「尚未完成身分驗證，不能買賣」，
+            買進側什麼都沒說——於是未驗證的人在市價分頁輸入 1 噸，看到的是
+            「流動性不足」（v4 hook 的 beforeSwap revert 被當成沒貨），
+            然後去把數量調小，再失敗一次。話說錯了，人就往錯的方向走。
+          */}
+          {tier === 0 ? (
+            <p className="text-sm leading-7 text-ink-200" data-testid="need-kyc">
+              尚未完成身分驗證，不能買賣。請先到<Link className="text-tide underline" href="/kyc">身分驗證</Link>辦理。
+            </p>
+          ) : <>
+
           {/* 買進 · 限價 */}
           {side === "buy" && mode === "limit" && (
             !selected ? (
@@ -566,26 +582,40 @@ export default function TradePage() {
                 <div className="flex justify-between"><dt className="text-ink-300">目前市價</dt><dd className="tnum text-ink-50">{spot ? twd2(spot) : "—"} mTWD / 噸</dd></div>
                 {quote === null ? (
                   <div className="flex justify-between"><dt className="text-ink-300">試算中…</dt><dd className="tnum text-ink-300">—</dd></div>
-                ) : quote === "none" ? null : (
+                ) : !priced ? null : (
                   <>
-                    <div className="flex justify-between"><dt className="text-ink-300">實際成交價</dt><dd className="tnum text-ink-50">{twd2(quote.perTonne)} mTWD / 噸</dd></div>
-                    <div className="flex justify-between"><dt className="text-ink-300">應付金額</dt><dd className="tnum font-medium text-ink-50" data-testid="mbuy-cost">{twd2(quote.twd)} mTWD</dd></div>
+                    <div className="flex justify-between"><dt className="text-ink-300">實際成交價</dt><dd className="tnum text-ink-50">{twd2(priced.perTonne)} mTWD / 噸</dd></div>
+                    <div className="flex justify-between"><dt className="text-ink-300">應付金額</dt><dd className="tnum font-medium text-ink-50" data-testid="mbuy-cost">{twd2(priced.twd)} mTWD</dd></div>
                     {impact !== null && (
                       <div className="flex justify-between">
                         <dt className="text-ink-300">價格影響</dt>
                         <dd className={`tnum ${impact > 0.05 ? "text-warn" : "text-ink-200"}`}>{(impact * 100).toFixed(1)}%</dd>
                       </div>
                     )}
-                    <div className="flex justify-between"><dt className="text-ink-300">最高支付</dt><dd className="tnum text-ink-200">{twd2(quote.twd * (1 + SLIPPAGE))} mTWD</dd></div>
+                    <div className="flex justify-between"><dt className="text-ink-300">最高支付</dt><dd className="tnum text-ink-200">{twd2(priced.twd * (1 + SLIPPAGE))} mTWD</dd></div>
                   </>
                 )}
               </dl>
-              {/* 報不出價就是池子吃不下這個量。與其讓他送出去撞一個看不懂的 revert，
-                  不如現在就說清楚，並指回掛單簿——那裡的量體大得多。 */}
-              {quote === "none" && (
+              {/* 報不出價的原因不只一種，說錯了指引就是錯的：叫一個沒驗證身分的人
+                  「把數量調小」，他調小再失敗一次，仍然不知道要去辦身分驗證。 */}
+              {quote && !quote.ok && (
                 <Notice kind="error">
-                  流動性不足，這個數量吃不下。市價池是即時成交用的，量體有限；
-                  大額請改用<b>限價</b>從掛單簿買，或把數量調小。
+                  {quote.reason === "not-verified" ? (
+                    <>身分驗證未通過或已過期，市價池不受理。請先到<Link className="underline" href="/kyc">身分驗證</Link>辦理或重新驗證。</>
+                  ) : quote.reason === "daily-limit" ? (
+                    <>超過你這個身分等級的單日交易上限，今天不能再買這麼多。把數量調小，或明天再來。</>
+                  ) : quote.reason === "no-pool" ? (
+                    <>這個部署沒有市價池。請改用<b>限價</b>從掛單簿買。</>
+                  ) : (
+                    <>
+                      流動性不足，這個數量吃不下
+                      {quote.maxTonnes && quote.maxTonnes > 0
+                        ? <>——池子目前最多約 <b>{quote.maxTonnes.toLocaleString("zh-TW", { maximumFractionDigits: 3 })} 噸</b>，
+                            而且越接近這個上限，每噸價格越貴（曲線在末端會陡到不合理）</>
+                        : null}。
+                      市價池是即時成交用的，量體有限；大額請改用<b>限價</b>從掛單簿買，或把數量調小。
+                    </>
+                  )}
                 </Notice>
               )}
               {impact !== null && impact > 0.05 && (
@@ -601,11 +631,7 @@ export default function TradePage() {
 
           {/* 賣出（限價與市價共用批次選擇） */}
           {side === "sell" && (
-            tier === 0 ? (
-              <p className="text-sm leading-7 text-ink-200">
-                尚未完成身分驗證，不能買賣。請先到<Link className="text-tide underline" href="/kyc">身分驗證</Link>辦理。
-              </p>
-            ) : myBatches.length === 0 ? (
+            myBatches.length === 0 ? (
               <p className="text-sm text-ink-300">目前沒有可賣出的碳權。</p>
             ) : (
               <div className="space-y-3" data-testid="sell-row">
@@ -705,6 +731,8 @@ export default function TradePage() {
               </div>
             )
           )}
+
+          </>}
         </Card>
       </div>
 
