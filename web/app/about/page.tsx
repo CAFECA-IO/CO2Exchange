@@ -28,13 +28,13 @@ const LIFECYCLE = [
 /// 而各國登錄簿的類別表長得不一樣（臺灣是 B-1 到 B-14 的產業別）。
 /// 兩套分類對不齊，正是申請時第一個會撞到的東西，所以這張表兩邊都列。
 ///
-/// `catch` 欄不是湊字數：每一類真正會卡住的地方都不同，而那通常不是技術問題，
-/// 是外加性、基線或監測設計的問題。寫在這裡，讓人在寫計畫書之前就知道要準備什麼。
+/// `catch` 欄不是湊字數：每一類真正會被退件的地方都不同，而那通常不是技術問題，
+/// 是外加性、基線或監測沒設計好。寫在這裡，讓人在動筆寫計畫書之前就知道要準備什麼。
 const METHOD_FAMILIES = [
   {
     key: "sink",
     title: "自然碳匯與碳移除",
-    lead: "把已經排到大氣裡的碳抓回來、存起來——靠植物、土壤、海岸濕地，或工程封存。",
+    lead: "把已經排到大氣裡的碳抓回來存住——靠植物、土壤、海岸濕地，或打進地層。",
     examples: "造林與再造林、森林經營改善、土壤有機碳、紅樹林與海草的藍碳復育、CCS 地質封存",
     tw: "B-14 造林與植林",
     au: "Plantation forestry、Reforestation by environmental or mallee plantings FullCAM 2024、Improved forest management in multiple-use public native forests、Savanna fire management、Tidal restoration of blue carbon ecosystems、Carbon capture and storage",
@@ -48,7 +48,7 @@ const METHOD_FAMILIES = [
   {
     key: "industry",
     title: "工業與高溫製程減碳",
-    lead: "鍋爐、加熱爐、熔煉、窯爐——把燃料換掉、把廢熱撿回來，或改變製程本身。",
+    lead: "鍋爐、加熱爐、熔煉、窯爐——換燃料、把廢熱撿回來用，或直接改製程。",
     examples: "燃料轉換（重油→天然氣）、廢熱回收、高效率設備汰換、製程改善、含氟氣體與 N₂O 削減",
     tw: "B-4 製造工業、B-5 化學製造業、B-9 金屬製造業、B-3 能源需求業、B-11 來自鹵化物及氟硫化物製造和使用之逸散",
     au: "Industrial and commercial emissions reduction、Industrial equipment upgrade",
@@ -61,7 +61,7 @@ const METHOD_FAMILIES = [
   {
     key: "renewable",
     title: "再生能源與能源結構轉型",
-    lead: "用不排碳的電或熱，取代排碳的那一份。",
+    lead: "用不排碳的電或熱，把原本排碳的那一份換掉。",
     examples: "太陽光電、風力、小水力、地熱、生質能鍋爐、沼氣發電、自用型再生能源熱能",
     tw: "B-1 能源工業（含再生能源/非再生能源）、B-2 能源輸配業",
     au: "（ACCU 機制目前不以再生能源發電為主要方法類別，相關減量多由電力市場機制處理）",
@@ -74,7 +74,7 @@ const METHOD_FAMILIES = [
   {
     key: "agriculture",
     title: "農業與甲烷抑制",
-    lead: "反芻動物的腸道發酵、糞尿處理、水稻田的間歇灌溉、肥料管理。",
+    lead: "牛打嗝、糞尿堆置、水稻田淹水、氮肥——這些都會放出甲烷或氧化亞氮。",
     examples: "畜牧糞尿厭氧消化與沼氣回收、飼料添加劑降低腸道甲烷、水稻田間歇灌溉（AWD）、氮肥管理",
     tw: "臺灣的類別表**沒有獨立的農業類**（B-1 到 B-14 裡最接近的是 B-13 廢棄物處理及棄置）",
     au: "Animal effluent management、Estimating soil organic carbon sequestration using measurement and models",
@@ -87,7 +87,7 @@ const METHOD_FAMILIES = [
   {
     key: "waste",
     title: "廢棄物管理與資源循環",
-    lead: "不讓有機物在無氧環境裡爛掉變成甲烷，或讓材料少走一次高耗能的製程。",
+    lead: "別讓有機物悶在土裡爛成甲烷，或讓材料少走一次高耗能的製程。",
     examples: "掩埋場沼氣收集與發電、廚餘厭氧消化、堆肥、廢水處理的甲烷回收、材料回收與再生粒料",
     tw: "B-13 廢棄物處理及棄置",
     au: "Reducing methane emissions from landfill gas method 2025",
@@ -437,107 +437,135 @@ export default function About() {
       </Section>
 
       {/* ── 怎麼把減量做成可以賣的額度 ─────────────────────────────── */}
-      <Section id="mint" eyebrow="從減量到額度：實際怎麼申請" title="方法學是入場券：ISO 14064-2 框架下的申請路徑">
+      <Section id="mint" eyebrow="賣方指南" title="怎麼在世界各地拿到碳權，然後在這裡賣">
         <p>
-          上一節的九個階段講的是<b>會發生什麼</b>，這一節講<b>你要交什麼給誰</b>。
-          先講最容易誤解的一件事：<b>減量額度不是「算出來」的，是「照某一套已經被政府審定過的算法算出來」的。</b>
-          你不能自己發明公式，也不能拿顧問公司的估算去申請——第一步永遠是從主管機關公告的
-          <b>減量方法（方法學）</b>清單裡挑一個適用的。挑不到，才有提案新方法的路（見下）。
+          這一節是寫給<b>手上有減碳成果、想把它變成收入</b>的人。從你把鍋爐換掉，到有人在這裡向你買，
+          中間隔著一個政府。整條路只有兩段：
         </p>
-
-        <h3 className="pt-1 font-display text-base font-semibold text-ink-50">ISO 14064-2 與各國辦法的分工</h3>
-        <p>
-          兩者不是二選一，是上下層的關係，各自回答不同的問題：
-        </p>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
-            <thead className="text-left text-xs uppercase tracking-wider text-ink-300">
-              <tr className="border-b border-ink-500">
-                <th className="py-2 pr-3 font-medium">誰</th>
-                <th className="py-2 pr-3 font-medium">回答什麼問題</th>
-                <th className="py-2 font-medium">具體是什麼</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-ink-500">
-              <tr className="text-ink-200">
-                <td className="whitespace-nowrap py-2 pr-3 text-ink-50">ISO 14064-2:2019</td>
-                <td className="py-2 pr-3">一個專案的量化<b>要包含什麼</b>才算完整</td>
-                <td className="py-2">規範專案層級溫室氣體活動的量化、監測與報告：排放源與匯的鑑別、基線情境、資料品質管理、專案績效的文件化</td>
-              </tr>
-              <tr className="text-ink-200">
-                <td className="whitespace-nowrap py-2 pr-3 text-ink-50">ISO 14064-3:2019</td>
-                <td className="py-2 pr-3">這些聲明<b>要怎麼被查</b></td>
-                <td className="py-2">確證與查證的原則與要求：查驗機構查什麼、查到什麼程度、怎麼出具聲明</td>
-              </tr>
-              <tr className="text-ink-200">
-                <td className="whitespace-nowrap py-2 pr-3 text-ink-50">各國自願減量辦法</td>
-                <td className="py-2 pr-3">在<b>這個國家</b>，交給誰、用哪一套算法、額度發給誰</td>
-                <td className="py-2">審定並公告可用的減量方法、規定申請文件與審查程序、指定哪些查驗機構有資格、核發並登錄額度</td>
-              </tr>
-            </tbody>
-          </table>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="rounded-[--radius-card] border border-ink-500 bg-ink-700 p-4">
+            <p className="text-xs font-medium tracking-wider text-tide">第一段・在核發國</p>
+            <p className="mt-1 font-display text-sm font-semibold text-ink-50">讓某一國政府發碳權給你</p>
+            <p className="mt-2 text-sm leading-6 text-ink-300">
+              選一套政府認可的算法 → 寫計畫 → 找查驗機構查 → 政府核發，額度進你在那個國家的官方帳戶。
+              這一段本站幫不上忙，也不該幫得上忙——發碳權是政府的權力。
+            </p>
+          </div>
+          <div className="rounded-[--radius-card] border border-tide/50 bg-tide/10 p-4">
+            <p className="text-xs font-medium tracking-wider text-tide">第二段・在本站</p>
+            <p className="mt-1 font-display text-sm font-semibold text-ink-50">把它掛出來賣</p>
+            <p className="mt-2 text-sm leading-6 text-ink-200">
+              驗證身分 → 登錄專案 → 上傳查驗報告 → 鏈上核發 → 掛單。
+              額度本身<b>不會離開政府的登錄簿</b>，這裡買賣的是對它的請求權。
+            </p>
+          </div>
         </div>
         <p className="text-ink-300">
-          換句話說：<b>ISO 給的是「怎麼做才算做對」，國家給的是「做對了要怎麼換到額度」。</b>
-          只符合 ISO 14064-2 不會產生任何可交易的額度——那份報告要進到某一國的機制裡，
-          由該國認可的查驗機構確證與查證，再由該國主管機關核發，才會有序號、才會進登錄簿、才交易得了。
+          最常見的誤解先講掉：<b>碳權不是你自己算出來的。</b>
+          顧問公司算給你的減碳量、廠商的節能保證、自己用 Excel 推的數字，都不能拿去申請。
+          你必須從那個國家<b>已經公告的算法清單</b>裡挑一套來用。這套算法叫<b>方法學</b>
+          （各國正式名稱不同，臺灣叫「減量方法」）。清單裡找不到適用的，還有提案新算法的路，但那是另一條時間軸。
         </p>
 
-        <h3 className="pt-1 font-display text-base font-semibold text-ink-50">各轄區的方法學清單在哪裡</h3>
+        {/* ── 第一段 ───────────────────────────────────────────── */}
+        <h3 className="pt-2 font-display text-base font-semibold text-ink-50">第一段：讓政府發碳權給你</h3>
         <p>
-          每個機制各有一套自己審定的方法學，彼此<b>不通用</b>：同一座鍋爐改燒天然氣，在臺灣走 TCER 的方法、
-          在日本走 J-Credit 的方法論，兩邊的基線設定、監測頻率與保守性參數都可能不同。
-          選在哪一國申請，第一個要看的就是那一國有沒有你這個減量類型的方法。
+          下面以<b>臺灣</b>為例，括號裡是<b>溫室氣體自願減量專案管理辦法</b>的條號。
+          其他國家的名詞不同，但骨架一樣：<b>挑算法 → 寫計畫 → 開工前被審 → 註冊 → 邊做邊記錄 → 完工後被查 → 發額度</b>。
         </p>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-sm">
-            <thead className="text-left text-xs uppercase tracking-wider text-ink-300">
-              <tr className="border-b border-ink-500">
-                <th className="py-2 pr-3 font-medium">轄區</th>
-                <th className="py-2 pr-3 font-medium">方法學叫什麼</th>
-                <th className="py-2 font-medium">由誰審定、公告在哪</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-ink-500">
-              {[
-                ["🇹🇼 臺灣", "溫室氣體減量方法", "環境部審定後公開於指定資訊平台（自願減量專案管理辦法第 12 條）"],
-                ["🇯🇵 日本", "方法論（methodology）", "經產・環境・農水三省的 J-Credit 制度委員會，公告於 J-Credit 官網"],
-                ["🇰🇷 韓國", "외부사업 방법론", "環境部溫室氣體綜合資訊中心（GIR）核可，公告於抵換登錄系統"],
-                ["🇹🇭 泰國", "T-VER methodology", "TGO 審定並公告於 T-VER 網站"],
-                ["🇮🇩 印尼", "metodologi SPE-GRK", "環境部依 SRN PPI 的機制文件核可"],
-                ["🇦🇺 澳洲", "method determination", "Clean Energy Regulator：「一套在 ACCU 機制下執行專案的要求與規則」，明定可做哪些活動、如何量測減量、以及監測與紀錄義務"],
-              ].map(([c, m, who]) => (
-                <tr key={c} className="text-ink-200">
-                  <td className="whitespace-nowrap py-2 pr-3 text-ink-50">{c}</td>
-                  <td className="whitespace-nowrap py-2 pr-3">{m}</td>
-                  <td className="py-2">{who}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <p className="text-ink-300">
-          方法學清單<b>會增修</b>——新方法會被審定、舊方法會被停用或改版。
-          所以這裡刻意不列數量：請以各該登錄簿當時公告的版本為準，
-          並注意你註冊時採用的是<b>哪一版</b>，那會跟著專案一路走到查證。
-          臺灣的查詢系統另外註明，減量方法的版次「依據 CDM 網頁最新公告版為準」。
-        </p>
+        <ol className="space-y-3 border-l-2 border-ink-500 pl-4">
+          <li>
+            <b>① 先確認你有資格</b>
+            <span className="ml-1 text-xs text-ink-300">（第 3、6 條）</span>
+            <p className="mt-1 text-ink-200">
+              申請人必須是<b>公司、行號、工廠、機構或政府機關</b>——<b>個人不行</b>。
+              可以幾家一起做，但要推一個代表、附上全體簽名<b>經過公證</b>的合約，
+              而且<b>誰分幾噸要在一開始就寫進計畫書</b>，之後不能看行情再改。
+            </p>
+          </li>
+          <li>
+            <b>② 從公告的清單裡挑一套算法</b>
+            <span className="ml-1 text-xs text-ink-300">（第 12 條）</span>
+            <p className="mt-1 text-ink-200">
+              每一套算法都寫死了它適用什麼專案、邊界畫到哪、基線怎麼設。
+              你的專案必須<b>落在某一套的適用條件裡</b>；差一點點就得換一套，或換一個國家申請。
+            </p>
+          </li>
+          <li>
+            <b>③ 寫專案計畫書</b>
+            <span className="ml-1 text-xs text-ink-300">（第 4 條；外加性定義見第 2 條第 6 款，小規模放寬見第 8 條）</span>
+            <p className="mt-1 text-ink-200">
+              計畫書要說清楚三件事：用哪一套算法、<b>不做這個專案的話會排多少</b>（基線），
+              以及<b>為什麼這件事需要碳權才做得成</b>。
+            </p>
+            <p className="mt-1 text-ink-300">
+              最後那一項叫<b>外加性</b>，是最多人卡住的地方。法規要你證明四件事的組合：
+              不是法規本來就要求的、光看財務不划算、技術在國內還不普遍、或者存在資金與技術上的障礙。
+              規模小的專案有放寬——小規模只要證明「不是法規要求」，另外三項擇一；更小規模的只要第一項。
+            </p>
+          </li>
+          <li>
+            <b>④ 開工前先讓查驗機構審圖</b>
+            <span className="ml-1 text-xs text-ink-300">（確證，第 2、4 條）</span>
+            <p className="mt-1 text-ink-200">
+              查驗機構審的是<b>還沒發生的事</b>：基線合不合理、外加性站不站得住、監測計畫做不做得到。
+              審過了會出一份<b>確證總結報告</b>，跟計畫書一起送去註冊。
+            </p>
+          </li>
+          <li>
+            <b>⑤ 註冊，時鐘開始跑</b>
+            <span className="ml-1 text-xs text-ink-300">（第 7 條）</span>
+            <p className="mt-1 text-ink-200">
+              註冊之後才算數：<b>註冊之前已經做完的減碳，不能回頭認列。</b>
+              註冊同時決定這個專案還能生多少年的額度（計入期）——
+              種樹這類「把碳存起來」的最長，固定型 30 年；換設備這類「少排一點」的固定型 10 年。
+            </p>
+          </li>
+          <li>
+            <b>⑥ 邊做邊記錄</b>
+            <span className="ml-1 text-xs text-ink-300">（第 4、17 條）</span>
+            <p className="mt-1 text-ink-200">
+              照計畫抄表、留紀錄，<b>同時記產量</b>——「同樣產量下少燒多少」才算減量。
+              用電的部分要用政府<b>公告的電力排碳係數</b>，而且不能跟別的制度重複主張同一度電。
+            </p>
+            <p className="mt-1 text-ink-300">
+              這一段最常出事：表計壞了又沒有補救程序，那段期間的減量多半就算不進去了。
+            </p>
+          </li>
+          <li>
+            <b>⑦ 完工後驗收</b>
+            <span className="ml-1 text-xs text-ink-300">（查證，第 2、16 條）</span>
+            <p className="mt-1 text-ink-200">
+              這次查的是<b>已經發生的事</b>：核對數據、看現場，出一份<b>查證總結報告</b>，
+              連同監測報告書一起送去申請額度。
+            </p>
+          </li>
+          <li>
+            <b>⑧ 政府核發</b>
+            <span className="ml-1 text-xs text-ink-300">（第 22 條）</span>
+            <p className="mt-1 text-ink-200">
+              主管機關換算減量成效、給每一批一組編碼，<b>核撥到你自己的官方額度帳戶</b>。
+              到這裡你才真的「有碳權」。
+            </p>
+            <p className="mt-1 text-ink-300">
+              注意核撥對象是<b>申請人自己</b>：法規沒有「發給代辦公司」這種設計。
+              所以本站不代持國內額度，它從頭到尾都在你的帳戶裡。
+            </p>
+          </li>
+        </ol>
 
-        <h3 className="pt-1 font-display text-base font-semibold text-ink-50">五大類：各自會卡在哪裡</h3>
+        {/* ── 五大類 ───────────────────────────────────────────── */}
+        <h3 className="pt-2 font-display text-base font-semibold text-ink-50">你的專案屬於哪一類，就會卡在哪裡</h3>
         <p>
-          先說一件會省下很多時間的事：<b>你心裡的分類，和登錄簿的分類不是同一套。</b>
-          做減碳的人習慣按技術領域分（「我們是做沼氣的」），而登錄簿按<b>產業別</b>分——
-          臺灣的類別表是 B-1 到 B-14：能源工業、能源輸配業、能源需求業、製造工業、化學製造業、
-          建築業、運輸業、礦業、金屬製造業、燃料逸散、鹵化物及氟硫化物逸散、溶劑之使用、
-          廢棄物處理及棄置、造林與植林。
-          兩套對不齊是常態（例如那張表裡<b>沒有獨立的農業類</b>），所以找方法時要照登錄簿的分類去找，
-          不是照自己的習慣用語去找。
+          先說一件會省下很多時間的事：<b>你習慣的分類，和政府清單的分類不是同一套。</b>
+          做減碳的人按技術講（「我們是做沼氣的」），政府清單按<b>產業別</b>排——
+          臺灣分成 B-1 到 B-14：能源工業、能源輸配業、能源需求業、製造工業、化學製造業、建築業、運輸業、
+          礦業、金屬製造業、燃料逸散、鹵化物及氟硫化物逸散、溶劑之使用、廢棄物處理及棄置、造林與植林。
+          兩套對不齊是常態（例如那張表裡<b>沒有農業這一類</b>），找算法時要照政府的分類去翻。
         </p>
         <p>
-          下面按五個技術大類整理：典型的專案、在登錄簿裡大致落在哪一類，
-          以及<b>這一類在 ISO 14064-2 的框架下最容易卡住的地方</b>。
-          最後一項通常不是技術問題，而是外加性、基線或監測設計的問題——
-          在寫計畫書之前就該知道要準備什麼。
+          下面按五個技術大類整理。每一類最後一行是<b>這一類最容易被退件的地方</b>——
+          那通常不是技術問題，而是外加性、基線或監測沒設計好，值得在動筆寫計畫書之前先看一眼。
         </p>
         <div className="space-y-3">
           {METHOD_FAMILIES.map((f, i) => (
@@ -555,99 +583,121 @@ export default function About() {
                   <dd className="text-ink-200"><Rich text={f.examples} /></dd>
                 </div>
                 <div className="sm:flex sm:gap-3">
-                  <dt className="shrink-0 text-ink-300 sm:w-28">臺灣類別</dt>
+                  <dt className="shrink-0 text-ink-300 sm:w-28">臺灣歸在哪類</dt>
                   <dd className="text-ink-200"><Rich text={f.tw} /></dd>
                 </div>
                 <div className="sm:flex sm:gap-3">
-                  <dt className="shrink-0 text-ink-300 sm:w-28">澳洲 ACCU 方法</dt>
+                  <dt className="shrink-0 text-ink-300 sm:w-28">澳洲的對應方法</dt>
                   <dd className="text-ink-200"><Rich text={f.au} /></dd>
                 </div>
               </dl>
               <p className="mt-3 border-t border-ink-500 pt-3 text-xs leading-6 text-ink-300">
-                <b className="text-warn">最容易卡住的地方：</b>
+                <b className="text-warn">最容易被退件的地方：</b>
                 <Rich text={f.catch} />
               </p>
             </div>
           ))}
         </div>
+
+        {/* ── 換一個國家申請 ────────────────────────────────────── */}
+        <h3 className="pt-2 font-display text-base font-semibold text-ink-50">想在別的國家申請？</h3>
+        <p>
+          可以，而且很常見——專案在哪個國家，就走那個國家的制度。但要知道兩件事：
+          <b>算法不通用</b>，同一座鍋爐改燒天然氣，臺灣 TCER 與日本 J-Credit 的基線設定和監測頻率可能完全不同；
+          而且<b>發給你的額度，能拿去哪裡申報也不一樣</b>（見<a className="text-tide underline" href="#use">能用在哪</a>）。
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-sm">
+            <thead className="text-left text-xs uppercase tracking-wider text-ink-300">
+              <tr className="border-b border-ink-500">
+                <th className="py-2 pr-3 font-medium">轄區</th>
+                <th className="py-2 pr-3 font-medium">算法叫什麼</th>
+                <th className="py-2 font-medium">誰審定、去哪裡查</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-ink-500">
+              {[
+                ["🇹🇼 臺灣", "減量方法", "環境部審定後公開於指定資訊平台（第 12 條）；查詢系統另註明版次依 CDM 最新公告版為準"],
+                ["🇯🇵 日本", "方法論", "經產・環境・農水三省的 J-Credit 制度委員會，公告於 J-Credit 官網"],
+                ["🇰🇷 韓國", "외부사업 방법론", "環境部溫室氣體綜合資訊中心（GIR），公告於抵換登錄系統"],
+                ["🇹🇭 泰國", "T-VER methodology", "TGO 審定並公告於 T-VER 網站"],
+                ["🇮🇩 印尼", "metodologi SPE-GRK", "環境部依 SRN PPI 的機制文件核可"],
+                ["🇦🇺 澳洲", "method determination", "Clean Energy Regulator。官方定義是「一套在 ACCU 機制下執行專案的要求與規則」，明定可做哪些活動、如何量測、以及監測與紀錄義務"],
+              ].map(([c, m, who]) => (
+                <tr key={c} className="text-ink-200">
+                  <td className="whitespace-nowrap py-2 pr-3 text-ink-50">{c}</td>
+                  <td className="whitespace-nowrap py-2 pr-3">{m}</td>
+                  <td className="py-2">{who}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         <p className="text-ink-300">
-          日本 J-Credit、韓國 KOC、泰國 T-VER、印尼 SPE-GRK 的方法學各有自己的分類與編號，
-          本站不轉述其清單內容——那些清單改得比這一頁快，轉述一次就多一個會過期的地方。
-          請以上一張表裡各該登錄簿公告的版本為準。
+          清單會增修，所以這裡不列數量與內容——請以各該登錄簿<b>當時</b>公告的版本為準，
+          並記住你註冊時用的是<b>哪一版</b>，那一版會跟著專案一路走到查證。
         </p>
 
-        <h3 className="pt-1 font-display text-base font-semibold text-ink-50">申請流程：以臺灣為例</h3>
+        {/* ── 三份 ISO ─────────────────────────────────────────── */}
+        <h3 className="pt-2 font-display text-base font-semibold text-ink-50">那 ISO 14064 在這條路的哪裡</h3>
         <p>
-          下面的條號都是<b>溫室氣體自願減量專案管理辦法</b>的條文，不是本站的規定。
-          其他轄區的步驟名稱不同，但骨架一樣：選方法 → 寫計畫 → 被確證 → 註冊 → 監測 → 被查證 → 核發。
+          很多人以為「做了 ISO 14064 就有碳權」，這是不成立的。
+          ISO 規定的是<b>品質</b>，政府決定的是<b>能不能換到額度</b>：
         </p>
-        <ol className="space-y-3 border-l-2 border-ink-500 pl-4">
-          <li>
-            <b>① 確認自己有資格，並決定要不要合作</b>（第 3 條、第 6 條）——
-            申請人是<b>事業或各級政府</b>，得「自行或共同」提出。共同申請要由其中一方代表，
-            並檢具全體署名<b>經公證</b>的合約書，且在專案計畫書裡<b>載明額度的約定分配原則</b>。
-            分配比例在註冊時就要定案，不能事後隨市場調整。
-          </li>
-          <li>
-            <b>② 從已審定的減量方法中挑一個</b>（第 12 條）——
-            中央主管機關就各種減量措施類型審定方法，內容含<b>專案範疇、適用條件、專案邊界、基線情境與專案情境</b>，
-            審定後公開於指定資訊平台。你的專案必須落在某一個方法的適用條件之內。
-          </li>
-          <li>
-            <b>③ 寫專案計畫書</b>（第 4 條）——
-            含減量方法的應用、基線計算、<b>外加性分析</b>與<b>監測方法</b>。
-            外加性不是一句話：辦法第 2 條把它定義成<b>法規外加性、財務外加性、普遍性及障礙分析</b>四項，
-            要證明這件事「非法規要求、不具投資效益、非技術普遍或存在技術障礙」。
-            <span className="mt-1 block text-ink-300">
-              規模小的專案有放寬（第 8 條）：小規模專案只需分析法規外加性，另外三項擇一；更小規模的只分析法規外加性。
-            </span>
-          </li>
-          <li>
-            <b>④ 找查驗機構做確證</b>（第 2 條、第 4 條）——
-            確證是查驗機構對「<b>未來</b>活動結果之聲明」所做的審查，也就是開工前審圖。
-            採用的方法經中央主管機關指定應確證者，註冊時要檢附查驗機構出具的<b>確證總結報告</b>。
-          </li>
-          <li>
-            <b>⑤ 註冊，計入期開始起算</b>（第 7 條）——
-            計入期決定這個專案<b>還能不能繼續生出新額度</b>，不是已核發額度的效期：
-            移除類型（造林等）展延型 20 年、最多展延兩次每次 10 年，固定型 30 年；
-            減少／避免排放類型展延型 5 年、最多展延兩次每次 5 年，固定型 10 年。
-            <b>註冊之前已經做完的事情不能回頭認列。</b>
-          </li>
-          <li>
-            <b>⑥ 照計畫監測</b>（第 4 條、第 17 條）——
-            監測報告要使用<b>公告的電力排碳係數</b>、避免重複計算、確保持續性且無洩漏風險。
-            這一段最常出事：表計故障又沒有補救程序，那段期間的減量很可能就算不進去。
-          </li>
-          <li>
-            <b>⑦ 查證</b>（第 2 條、第 16 條）——
-            查證是依<b>歷史數據與資訊</b>評估實質正確性，也就是完工後驗收。
-            申請額度時要檢附<b>監測報告書</b>與查驗機構出具的<b>查證總結報告</b>。
-          </li>
-          <li>
-            <b>⑧ 核發</b>（第 22 條）——
-            中央主管機關「依據減量成效換算、核定減量額度及其編碼，<b>核撥至事業或各級政府於指定資訊平台之帳戶</b>」。
-            <span className="mt-1 block text-ink-300">
-              核撥對象是<b>申請人自己</b>。法規沒有「核撥給代辦人」或「指定第三人受領」的設計——
-              這也是本站不代持國內額度的原因，額度全程留在專案方的額度帳戶裡。
-            </span>
-          </li>
-        </ol>
+        <ul className="space-y-1.5 border-l-2 border-ink-500 pl-4">
+          <li><b>ISO 14064-2</b>——一份專案報告要寫到什麼程度才算完整：邊界、基線、資料品質、怎麼記錄績效。對應上面的第 ③ 與第 ⑥ 步。</li>
+          <li><b>ISO 14064-3</b>——查的人要怎麼查、查到什麼程度、聲明怎麼寫。對應第 ④ 與第 ⑦ 步。</li>
+          <li><b>各國自願減量辦法</b>——交給誰、用哪一套算法、額度發給誰、編碼長什麼樣。對應第 ②、⑤、⑧ 步。</li>
+        </ul>
+        <p className="text-ink-300">
+          所以一份只符合 ISO 14064-2 的報告，本身<b>不是</b>碳權，也賣不掉。
+          它要進到某一國的機制裡，由該國認可的查驗機構查過、該國主管機關核發，才會有序號、才進得了登錄簿。
+        </p>
 
-        <h3 className="pt-1 font-display text-base font-semibold text-ink-50">清單裡沒有適用的方法怎麼辦</h3>
+        {/* ── 第二段：上架 ─────────────────────────────────────── */}
+        <h3 className="pt-2 font-display text-base font-semibold text-ink-50">第二段：拿到碳權之後，在這裡上架賣</h3>
         <p>
-          有一條正式的路：依第 19 條，事業或各級政府可以向中央主管機關<b>申請審定新的減量方法</b>，
-          提交<b>減量方法草案</b>與應用範例；審查前會在指定資訊平台進行<b>十五日以上</b>的公眾意見蒐集。
-          這條路的時間成本高，但它的存在意味著<b>方法學清單不是封閉的</b>——
-          新的減量技術出現時，不必等主管機關自己想到。
+          到這一步你手上已經有政府核發的額度了。接下來看它是<b>臺灣核發</b>還是<b>其他國家核發</b>，
+          兩條路的差別只有一個：額度放在誰的帳戶裡。
         </p>
+
+        <Example title="臺灣核發的額度（TCER）">
+          <p>
+            額度留在<b>你自己</b>的環境部額度帳戶，從上架到最終註銷都不會動——
+            因為法規上的「移轉」只有「交易完成後由主管機關辦理」這一種，沒有為了保管而移轉的類型。
+          </p>
+          <ol className="mt-1 space-y-1">
+            <li>1. 在<a className="text-tide underline" href="/kyc">身分驗證</a>完成<b>法人</b>驗證。</li>
+            <li>2. 到<a className="text-tide underline" href="/enterprise">企業</a>頁<b>登錄專案</b>：名稱、用的方法學、地點、專案文件連結。</li>
+            <li>3. 同一頁<b>申請核發</b>：選專案、填監測起迄與噸數、上傳 ISO 14064-3 的<b>查驗報告 PDF</b>。</li>
+            <li>4. 查驗機構在鏈上<b>簽章核發</b>，你會拿到一批帶唯一序號的額度。</li>
+            <li>5. <b>掛單</b>：填數量、每噸價格、最小成交量與使用期限，送出後就出現在掛單簿上。</li>
+          </ol>
+          <p className="mt-1 text-ink-300">
+            買方在這裡買到的是<b>對那批額度的請求權</b>。等他要實際使用時，才辦那唯一一次官方移轉：
+            從你的帳戶直接到買方帳戶，由主管機關執行。所以<b>你有配合過戶的契約義務</b>——
+            不配合會失去上架資格並被追繳已減免的代辦費。
+          </p>
+        </Example>
+
+        <Example title="其他國家核發的額度（J-Credit、KOC、T-VER、SPE-GRK、ACCU）">
+          <p>
+            這些國家的法規允許以託管帳戶持有，所以流程多一步：額度依該國登錄簿的規則，
+            移轉到<b>本公司在該國官方登錄簿開立的託管帳戶</b>。額度<b>自始至終留在該國政府的登錄簿裡</b>，
+            本公司的自有錢包不持有任何額度。之後的登錄專案、核發、掛單與臺灣額度相同。
+          </p>
+          <p className="mt-1 text-ink-300">
+            目前開放掛單的是日本 J-Credit、韓國 KOC、泰國 T-VER、印尼 SPE-GRK、澳洲 ACCU。
+            中國 CCER 與印度 CCC 在本站<b>只顯示、不開放掛單</b>——不是技術限制，是那兩國的跨境使用規定還沒訂。
+            每月 5 日本站會公開<a className="text-tide underline" href="/custody">託管與準備金對帳報告</a>，由查核機構簽署。
+          </p>
+        </Example>
 
         <Notice>
-          <b>本站在這條路上的位置：第 8 段之後。</b>
-          核發是主管機關的權責，本平台不是登錄簿的替代品，也不核發任何有法律效力的額度。
-          本站做的是額度核發<b>之後</b>的交易撮合、請求權登錄、資訊公開，以及註銷程序的協辦。
-          Phase 0 展示版本裡，查驗機構的簽章與身分驗證皆為模擬，
-          <b>站上的額度不具法律效力，不得作為任何申報依據</b>。
+          <b>Phase 0 展示版本：</b>本站的查驗機構簽章、身分驗證與結算幣<b>皆為模擬</b>，
+          站上的額度<b>不具法律效力，不得作為任何申報依據</b>。
+          上面第一段（政府核發）描述的是真實制度，第二段描述的是本站的實際操作流程；
+          正式營運還缺主管機關認可、查驗機構以自己的金鑰簽章，以及金融機構提供的結算工具。
         </Notice>
       </Section>
 
