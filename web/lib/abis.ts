@@ -25,8 +25,16 @@ export const kycRegistryAbi = [
 ] as const;
 
 export const accountFactoryAbi = [
-  { type: "function", name: "getAddress", stateMutability: "view", inputs: [{ type: "bytes32" }, { type: "bytes32" }], outputs: [{ type: "address" }] },
-  { type: "function", name: "createAccount", stateMutability: "nonpayable", inputs: [{ type: "bytes32" }, { type: "bytes32" }], outputs: [{ type: "address" }] },
+  // getAddress 只吃 accountRef——地址由**登入帳號**決定，不由 passkey 決定。
+  // 這一個參數的差別就是「換裝置還是同一個錢包」的全部。
+  { type: "function", name: "getAddress", stateMutability: "view", inputs: [{ type: "bytes32" }], outputs: [{ type: "address" }] },
+  {
+    type: "function", name: "createAccount", stateMutability: "nonpayable",
+    inputs: [{ name: "accountRef", type: "bytes32" }, { name: "qx", type: "bytes32" }, { name: "qy", type: "bytes32" }, { name: "label", type: "string" }],
+    outputs: [{ type: "address" }],
+  },
+  { type: "function", name: "recoveryAgent", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+  { type: "function", name: "operator", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
 ] as const;
 
 export const callType = {
@@ -34,16 +42,58 @@ export const callType = {
   components: [{ name: "target", type: "address" }, { name: "value", type: "uint256" }, { name: "data", type: "bytes" }],
 } as const;
 
+export const keyType = {
+  type: "tuple", name: "key",
+  components: [
+    { name: "qx", type: "bytes32" }, { name: "qy", type: "bytes32" },
+    { name: "label", type: "string" }, { name: "addedAt", type: "uint64" }, { name: "active", type: "bool" },
+  ],
+} as const;
+
 export const passkeyAccountAbi = [
   { type: "function", name: "nonce", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "accountRef", stateMutability: "view", inputs: [], outputs: [{ type: "bytes32" }] },
+  { type: "function", name: "frozen", stateMutability: "view", inputs: [], outputs: [{ type: "bool" }] },
+  { type: "function", name: "activeKeys", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "RECOVERY_DELAY", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "getDigest", stateMutability: "view", inputs: [callType, { name: "nonce_", type: "uint256" }], outputs: [{ type: "bytes32" }] },
-  { type: "function", name: "execute", stateMutability: "nonpayable", inputs: [callType, { name: "signature", type: "bytes" }], outputs: [] },
-  // 這兩個 error 一定要放進 ABI。少了它們，viem 解不出 revert 的名字，
+  // execute 多了 keyId：一個錢包可以有好幾把 passkey，簽章要說是哪一把簽的。
+  // 讓合約逐把試也行，但那會讓 gas 隨著使用者的裝置數線性上升。
+  { type: "function", name: "execute", stateMutability: "nonpayable", inputs: [callType, { name: "keyId", type: "bytes32" }, { name: "signature", type: "bytes" }], outputs: [] },
+  // 凍結中唯一還走得通的路：只能對帳戶自己下指令（加/撤金鑰、凍結、解凍、否決復原）。
+  { type: "function", name: "executeSelf", stateMutability: "nonpayable", inputs: [callType, { name: "keyId", type: "bytes32" }, { name: "signature", type: "bytes" }], outputs: [] },
+  // 這四個只能由帳戶自己呼叫（也就是要經過 executeSelf 與一把有效的 passkey 簽章）。
+  // 放進 ABI 是為了在伺服器端把 calldata 編出來。
+  { type: "function", name: "addKey", stateMutability: "nonpayable", inputs: [{ name: "qx", type: "bytes32" }, { name: "qy", type: "bytes32" }, { name: "label", type: "string" }], outputs: [] },
+  { type: "function", name: "removeKey", stateMutability: "nonpayable", inputs: [{ name: "keyId", type: "bytes32" }], outputs: [] },
+  { type: "function", name: "unfreeze", stateMutability: "nonpayable", inputs: [], outputs: [] },
+  { type: "function", name: "cancelRecovery", stateMutability: "nonpayable", inputs: [], outputs: [] },
+  // 凍結：平台 relayer 直接送。門檻刻意低於解凍——止血要快，開鎖要慢。
+  { type: "function", name: "freeze", stateMutability: "nonpayable", inputs: [], outputs: [] },
+  { type: "function", name: "finaliseRecovery", stateMutability: "nonpayable", inputs: [], outputs: [] },
+  {
+    type: "function", name: "keys", stateMutability: "view", inputs: [],
+    outputs: [{ name: "ids", type: "bytes32[]" }, { name: "out", type: "tuple[]", components: keyType.components }],
+  },
+  {
+    type: "function", name: "pendingRecovery", stateMutability: "view", inputs: [],
+    outputs: [{ name: "qx", type: "bytes32" }, { name: "qy", type: "bytes32" }, { name: "label", type: "string" }, { name: "executeAfter", type: "uint64" }],
+  },
+  // 這些 error 一定要放進 ABI。少了它們，viem 解不出 revert 的名字，
   // 只會把原始的四個位元組丟出來——畫面上就是一句 `0x5c0dee5d`，
   // 使用者與開發者都無從判斷發生什麼事。CallFailed 更關鍵：
   // 它把「真正的錯誤」包在 reason 裡，不解開就等於把診斷資訊丟掉。
   { type: "error", name: "InvalidSignature", inputs: [] },
   { type: "error", name: "CallFailed", inputs: [{ name: "index", type: "uint256" }, { name: "reason", type: "bytes" }] },
+  { type: "error", name: "NotSelf", inputs: [] },
+  { type: "error", name: "NotRecoveryAgent", inputs: [] },
+  { type: "error", name: "UnknownKey", inputs: [{ name: "keyId", type: "bytes32" }] },
+  { type: "error", name: "KeyAlreadyExists", inputs: [{ name: "keyId", type: "bytes32" }] },
+  { type: "error", name: "LastKey", inputs: [] },
+  { type: "error", name: "AccountFrozen", inputs: [] },
+  { type: "error", name: "NoPendingRecovery", inputs: [] },
+  { type: "error", name: "RecoveryNotReady", inputs: [{ name: "executeAfter", type: "uint64" }] },
+  { type: "error", name: "RecoveryPending", inputs: [] },
 ] as const;
 
 export const webAuthnAuthType = {

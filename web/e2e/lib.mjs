@@ -57,10 +57,10 @@ export async function login(page, email) {
 
 export async function createPasskeyAccount(page) {
   const ready = page.locator('[data-testid="account-ready"]');
-  // 這個 email 之前綁過帳戶的話，登入當下就已經自動還原，畫面直接是「帳戶已就緒」，
-  // 根本沒有「建立」那顆按鈕可以按。e2e 重跑第二次就是這個情況（accounts.json
-  // 只在 rebuild 時才清）。兩種狀態都要能往下走，否則測到的只是第一次的路徑。
-  const create = page.getByRole("button", { name: /建立(新|鏈上|另一個)帳戶/ });
+  // 這個 email 的錢包已經存在、而且這個瀏覽器 context 還留著那把 passkey 的話，
+  // 畫面直接就是「帳戶已就緒」，根本沒有「建立」那顆按鈕可以按。
+  // 兩種狀態都要能往下走，否則測到的只是第一次的路徑。
+  const create = page.getByRole("button", { name: /建立鏈上錢包|建立(新|鏈上|另一個)帳戶/ });
   await Promise.race([
     ready.waitFor({ timeout: 30_000 }),
     create.waitFor({ timeout: 30_000 }),

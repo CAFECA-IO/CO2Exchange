@@ -102,37 +102,69 @@ const retireDisabled = await page.getByRole("button", { name: "註銷並取得�
 if (!retireDisabled) throw new Error("自然人的註銷按鈕應該是停用的");
 console.log("✔ 自然人被擋下註銷，且畫面有說明");
 
-// 換一台裝置（＝新的瀏覽器 context，localStorage 是空的）之後，畫面不可以說
-// 「尚未建立鏈上帳戶」——帳戶好端端在鏈上，沒有的是這台裝置的綁定。
-// 伺服器知道這個登入帳號綁過什麼，知道了就該照實講，並把「綁回來」放在主要位置。
+// 換一台裝置（＝新的瀏覽器 context，localStorage 與虛擬 authenticator 都是空的）。
+//
+// 新模型下的正確行為**不是**自動還原——那台裝置沒有任何 passkey，還原了也簽不了字。
+// 正確行為是：地址照樣顯示出來（它由登入帳號決定，伺服器算得出來），
+// 畫面說清楚缺的是「這台裝置的鑰匙」，並給出兩條路：用既有 passkey 綁回來、
+// 或申請加入等現有裝置核准。**不可以**說「尚未建立鏈上錢包」——那是假的。
 {
   const other = await newUser(browser, "alice-2nd-device");
   await login(other.page, who("alice"));
   await other.page.goto(BASE);
-  // 登入就該把帳戶還給他：不必按任何按鈕、不跳 passkey 視窗，直接就緒，
-  // 而且是**同一個**地址。這就是登入的意義；做不到的話，登入只是換了個地方
-  // 問「要不要建立帳戶」，而重建出來的是另一個帳戶。
-  await other.page.locator('[data-testid="account-ready"]').waitFor({ timeout: 30_000 });
+  await other.page.getByRole("button", { name: /申請加入這台裝置/ }).waitFor({ timeout: 30_000 });
   const t = await other.page.locator("main").innerText();
-  if (t.includes("尚未建立鏈上帳戶")) throw new Error("重新登入卻說「尚未建立鏈上帳戶」");
-  if (!t.includes(address)) throw new Error(`還原到的不是同一個地址，畫面上是：${t.slice(0, 200)}`);
-  console.log("✔ 重新登入（或換裝置）自動還原同一個帳戶，不必重建");
+  if (t.includes("尚未建立鏈上錢包")) throw new Error("換裝置卻說「尚未建立鏈上錢包」");
+  if (!t.includes(address.slice(0, 6)) || !t.includes(address.slice(-4))) {
+    throw new Error(`換裝置後沒有顯示原本的錢包地址，畫面上是：${t.slice(0, 300)}`);
+  }
+  // 新裝置不能自己把自己加進來：送出申請之後只會進待核准區，不會直接就緒。
+  await other.page.getByRole("button", { name: /申請加入這台裝置/ }).click();
+  await other.page.locator("text=已送出申請").waitFor({ timeout: 60_000 });
+  if (await other.page.locator('[data-testid="account-ready"]').isVisible().catch(() => false)) {
+    throw new Error("新裝置竟然不需要核准就能簽字——登入被盜就等於錢包被盜了");
+  }
+  console.log("✔ 換裝置：地址照舊、說得清楚，而且新裝置不能自己核准自己");
+
+  // 回到原本那台裝置核准它，新裝置就能簽字了。這是「多裝置」的完整來回。
+  await page.goto(`${BASE}/account`);
+  await page.getByRole("button", { name: "核准", exact: true }).first().click();
+  await waitOk(page, "已核准");
+  await other.page.reload();
+  await other.page.locator('[data-testid="account-ready"]').waitFor({ timeout: 60_000 });
+  console.log("✔ 現有裝置核准之後，新裝置可以簽字，且仍是同一個地址");
+
+  // 撤掉它，錢包回到一把金鑰。撤銷是即時的，不需要平台也不需要治理方。
+  await page.goto(`${BASE}/account`);
+  await page.getByRole("button", { name: "撤銷", exact: true }).first().click();
+  await waitOk(page, "已移除");
+  console.log("✔ 從另一台裝置撤銷遺失的裝置");
   await other.context.close();
 }
 
-// 合約重新部署之後，這個裝置記住的地址上沒有合約。這一段把那個狀況做出來：
-// 把 localStorage 裡的地址換成一個不存在的，其餘（passkey id 與公鑰）不動。
-//
-// 期待的行為是**什麼都不用做**——送出前會確認地址、發現不對就用同一把 passkey
-// 重綁，然後照常送出。以前這裡會噴「這個裝置記住的帳戶在目前這條鏈上不存在」，
-// 而且系統自己幾百毫秒後就修好了，那則紅色錯誤卻會一直留在畫面上。
+// 掛失：凍結只要登得進來就按得下去，解凍要 passkey。凍結期間交易被擋，
+// 但金鑰管理與解凍走得通——否則止血手段會變成陷阱。
 {
-  const real = await page.evaluate(() => {
+  await page.goto(`${BASE}/account`);
+  await page.getByRole("button", { name: "凍結我的錢包" }).click();
+  await waitOk(page, "已凍結");
+  await page.goto(`${BASE}/account`);
+  await page.getByRole("button", { name: /用這台裝置解除凍結/ }).click();
+  await waitOk(page, "已解除凍結");
+  console.log("✔ 凍結 → 以現存 passkey 解凍");
+}
+
+// 合約重新部署之後，這個裝置記住的地址上沒有合約。這一段把那個狀況做出來：
+// 把 localStorage 裡的地址換成一個不存在的，其餘（passkey id、公鑰、keyId）不動。
+//
+// 期待的行為是**什麼都不用做**。新模型下地址由登入帳號決定，伺服器隨時算得出來，
+// 所以送交易時一律以伺服器回報的地址為準，localStorage 那份只是快取。
+// 以快取為準的話，使用者會拿到一個他沒做錯任何事、重新整理就消失的紅字。
+{
+  await page.evaluate(() => {
     const c = JSON.parse(localStorage.getItem("co2x.credential"));
-    const was = c.address;
     c.address = "0x00000000000000000000000000000000dEaD0001";
     localStorage.setItem("co2x.credential", JSON.stringify(c));
-    return was;
   });
   // 用「掛買單」當那筆交易：它會走同一條 relay 路徑，但不消耗持有的批次，
   // 不會影響後面「自然人轉售、法人買下那一批」的步驟。
@@ -145,11 +177,9 @@ console.log("✔ 自然人被擋下註銷，且畫面有說明");
   await page.locator('[data-testid="bid-price"]').fill("11");
   await page.locator('[data-testid="submit-bid"]').click();
   await waitOk(page, "掛買單");
-  const back = await page.evaluate(() => JSON.parse(localStorage.getItem("co2x.credential")).address);
-  if (back.toLowerCase() !== real.toLowerCase()) throw new Error(`沒有綁回原本的地址：${back} ≠ ${real}`);
   const body = await page.locator("main").innerText();
-  if (body.includes("在目前這條鏈上不存在")) throw new Error("重綁成功了，畫面上卻還留著那則錯誤");
-  console.log("✔ 地址失效時自動重綁，交易照常送出且畫面不留錯誤");
+  if (body.includes("在目前這條鏈上不存在")) throw new Error("地址只是快取過期，卻把錯誤丟給使用者");
+  console.log("✔ localStorage 的地址過期時，交易照常送出（以伺服器的地址為準）");
 }
 
 // 自然人的出場方式是轉售：在交易頁上架

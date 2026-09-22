@@ -18,7 +18,7 @@ import { LogoMark } from "@/components/Logo";
 /// 都有了就直接去交易。一個頁面上只出現一個「下一步」，不要讓人自己挑。
 function NextStep() {
   const { data: session, status } = useSession();
-  const { credential, busy, createAccount, useExistingPasskey, config, knownAccounts } = useAccount();
+  const { busy, createAccount, useExistingPasskey, requestThisDevice, config, wallet, thisDeviceActive } = useAccount();
   const [email, setEmail] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const providers = config?.providers ?? [];
@@ -32,10 +32,11 @@ function NextStep() {
     try { await fn(); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
   };
 
-  // 載入中的佔位也掛上 id：導覽列的 /#login 可能在 session 還沒回來時就跳過去了。
-  // 伺服器知道這個登入帳號綁過哪些鏈上帳戶。null = 還沒問到，這時候不要斷言任何一邊。
-  const hasAccount = (knownAccounts?.length ?? 0) > 0;
-  const firstAccount = knownAccounts?.[0]?.address;
+  // 錢包狀態由伺服器回答（地址由登入帳號決定，這台裝置知不知道無關）。
+  // null = 還沒問到，這時候不要斷言任何一邊。
+  const hasWallet = !!wallet?.exists;
+  const ready = hasWallet && thisDeviceActive;
+  const [sent, setSent] = useState(false);
 
   if (status === "loading") return <div id="login" className="h-10 scroll-mt-24" />;
 
@@ -69,24 +70,28 @@ function NextStep() {
               </div>
             )}
           </>
-        ) : !credential ? (
-          // 這個人**已經有**鏈上帳戶、只是這台裝置沒綁定的話，主要動作是「綁回來」，
-          // 不是「再建一個」。順序講的是我們認為你該做什麼，擺錯就是給錯建議。
-          hasAccount ? (
+        ) : !ready ? (
+          // 錢包已經在鏈上、只是這台裝置沒鑰匙的話，主要動作是「把鑰匙裝回來」，
+          // 不是「再建一個錢包」——後者在新模型下根本不存在：一個登入帳號一個錢包。
+          hasWallet ? (
             <>
               <Button onClick={() => run(useExistingPasskey)} disabled={!!busy}>{busy ?? "用 passkey 綁定這台裝置"}</Button>
-              <Button variant="secondary" onClick={() => run(createAccount)} disabled={!!busy}>建立另一個帳戶</Button>
-              {/* 建第二個帳戶是合法的，但第一個帳戶裡的碳權不會跟過來——
-                  這句話要在按下去之前說，不是在之後。 */}
+              <Button
+                variant="secondary"
+                disabled={!!busy || sent}
+                onClick={() => run(async () => { const r = await requestThisDevice(""); setSent(r.pending); })}
+              >
+                申請加入這台裝置
+              </Button>
+              {/* 新裝置不能自己把自己加進來。這句話要在按下去之前說，不是在之後。 */}
               <span className="w-full text-xs text-ink-300">
-                建立另一個帳戶不會把原本帳戶裡的碳權帶過來，兩個帳戶各自獨立。
+                {sent
+                  ? "已送出申請，請用一台已經在錢包裡的裝置核准。"
+                  : "新裝置要由一台現有裝置核准才能簽字——否則登入被盜就等於錢包被盜。"}
               </span>
             </>
           ) : (
-            <>
-              <Button onClick={() => run(createAccount)} disabled={!!busy}>{busy ?? "建立鏈上帳戶（passkey）"}</Button>
-              <Button variant="secondary" onClick={() => run(useExistingPasskey)} disabled={!!busy}>我已有 passkey</Button>
-            </>
+            <Button onClick={() => run(createAccount)} disabled={!!busy}>{busy ?? "建立鏈上錢包（passkey）"}</Button>
           )
         ) : (
           <>
@@ -117,28 +122,27 @@ function NextStep() {
         </form>
       )}
 
-      {session?.user && !credential && (
-        // 「尚未建立鏈上帳戶」對換了裝置的人來說是錯的：帳戶好端端在鏈上，
-        // 只是這個瀏覽器沒有那把 passkey 的紀錄。知道了就要照實講。
+      {session?.user && !ready && (
+        // 「尚未建立鏈上帳戶」對換了裝置的人來說是錯的：錢包好端端在鏈上，
+        // 只是這個瀏覽器沒有那把 passkey。知道了就要照實講。
         <p className="text-xs text-ink-300">
           已登入 {session.user.email}。
-          {hasAccount ? (
+          {hasWallet && wallet ? (
             <>
-              你已經有一個鏈上帳戶
-              {firstAccount && <> <span className="font-mono">{firstAccount.slice(0, 6)}…{firstAccount.slice(-4)}</span></>}
-              ，只是<b>這台裝置還沒綁定</b>——用當初那把 passkey 綁回來即可，地址不會變。
+              你的錢包是 <span className="font-mono">{wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}</span>
+              ，資產都在，只是<b>這台裝置沒有鑰匙</b>。地址由登入帳號決定，不會因為換裝置而改變。
             </>
           ) : (
-            <>帳戶地址由 passkey 的公鑰決定，換裝置後同一把 passkey 仍對到同一個地址。</>
+            <>錢包地址由登入帳號決定：同一個帳號在任何裝置登入，都是同一個地址。</>
           )}
         </p>
       )}
-      {credential && (
+      {ready && wallet && (
         // data-testid 而不是靠文案：帳戶好了沒有是一個**狀態**，
         // e2e 要等的是那個狀態，不是某一句話。之前這裡等的是「帳戶已就緒」四個字，
         // 於是改一次文案就有三個測試掛掉——掛的不是功能，是字串。
         <p data-testid="account-ready" className="text-xs text-ink-300">
-          帳戶已就緒 · <span className="font-mono">{credential.address}</span>
+          帳戶已就緒 · <span className="font-mono">{wallet.address}</span>
         </p>
       )}
       {err && <Notice kind="error">{err}</Notice>}

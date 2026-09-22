@@ -3,7 +3,9 @@ import { createWebAuthnCredential, toWebAuthnAccount } from "viem/account-abstra
 import { bytesToBigInt, encodeAbiParameters, hexToBytes, type Address, type Hex } from "viem";
 import { webAuthnAuthType } from "@/lib/abis";
 
-export type StoredCredential = { id: string; publicKey: Hex; address: Address; userId: string };
+/// 這台裝置上的 passkey。**不是**「我的帳戶」——帳戶在鏈上，地址由登入帳號決定；
+/// 這裡只記「這台裝置用哪一把鑰匙、對應鏈上的哪一個 keyId」。
+export type StoredCredential = { id: string; publicKey: Hex; address: Address; userId: string; keyId?: Hex };
 const KEY = "co2x.credential";
 
 /// ── 憑證儲存：一個可訂閱的小 store ──
@@ -70,9 +72,9 @@ const wire = (calls: Call[]) => calls.map((c) => ({ ...c, value: c.value.toStrin
 
 /// 這個地址上有沒有合約——問後端，不是自己連節點。
 ///
-/// PasskeyAccount 的地址是由 factory 以 CREATE2 從公鑰推出來的，所以 factory 一換
-/// （重新部署、換一條鏈），同一把 passkey 會對到不同地址。localStorage 裡存的舊地址
-/// 就成了空地址。呼叫端據此重新綁定。
+/// 錢包地址是由 factory 以 CREATE2 從 accountRef（登入帳號）推出來的，所以 factory 一換
+/// （重新部署、換一條鏈），同一個登入帳號會對到不同地址。localStorage 裡存的舊地址
+/// 就成了空地址。呼叫端據此重新建立。
 export async function hasCode(address: Address): Promise<boolean> {
   try {
     const r = await fetch(`/api/account?address=${address}`);
@@ -83,46 +85,80 @@ export async function hasCode(address: Address): Promise<boolean> {
   }
 }
 
-/// 後端算 digest → passkey 在這台裝置上簽 → 編成合約要的 WebAuthnAuth → 交給 relayer。
+/// 把一個 digest 交給這台裝置上的 passkey 簽，編成合約要的 WebAuthnAuth。
 ///
 /// 只有**簽章**留在瀏覽器，因為私鑰在裝置的安全元件裡，它非留不可。
-/// 要簽什麼、簽完送到哪，都由後端決定：前端不直接跟區塊鏈說話。
-export async function signAndRelay(cred: StoredCredential, calls: Call[]) {
-  const prep = await fetch("/api/relay/prepare", {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ account: cred.address, calls: wire(calls) }),
-  });
-  if (prep.status === 409) {
-    throw new Error(
-      // 正常路徑不會走到這裡：AccountProvider.relay 在送出前就會確認並重綁。
-      // 會到這裡表示確認之後帳戶才消失（例如剛好在這中間重新部署），
-      // 所以不要再說「重新整理就會自動重綁」——那句話在這個時點是空頭支票。
-      `這個裝置記住的帳戶（${cred.address.slice(0, 8)}…）在目前這條鏈上不存在，` +
-        `多半是剛剛重新部署過。請重新整理頁面；若仍失敗，按「移除此裝置的帳戶紀錄」後用同一把 passkey 重新建立。`,
-    );
-  }
-  const prepJson = await prep.json();
-  if (!prep.ok) throw new Error(prepJson.error ?? "prepare failed");
-  const digest = prepJson.digest as Hex;
-
+async function signDigest(cred: StoredCredential, digest: Hex): Promise<Hex> {
   const account = toWebAuthnAccount({ credential: { id: cred.id, publicKey: cred.publicKey } });
   const { signature, webauthn } = await account.sign({ hash: digest });
-  const sigBytes = hexToBytes(signature); // r||s，ox 已將 s 正規化為 low-s
-  const r = bytesToBigInt(sigBytes.slice(0, 32));
-  const s = bytesToBigInt(sigBytes.slice(32, 64));
-  const encoded = encodeAbiParameters([webAuthnAuthType], [{
+  const sigBytes = hexToBytes(signature); // r||s，viem 已將 s 正規化為 low-s
+  return encodeAbiParameters([webAuthnAuthType], [{
     authenticatorData: webauthn.authenticatorData,
     clientDataJSON: webauthn.clientDataJSON,
     challengeIndex: BigInt(webauthn.challengeIndex ?? 23),
     typeIndex: BigInt(webauthn.typeIndex ?? 1),
-    r, s,
+    r: bytesToBigInt(sigBytes.slice(0, 32)),
+    s: bytesToBigInt(sigBytes.slice(32, 64)),
   }]);
+}
 
+export type RelayResult = { txHash: Hex; status: string; gasUsed: string };
+
+type Prepared = { account: Address; mode: "execute" | "self"; digest: Hex; calls: { target: Address; value: string; data: Hex }[] };
+
+async function prepare(body: unknown, cred: StoredCredential): Promise<Prepared> {
+  const res = await fetch("/api/relay/prepare", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  if (res.status === 409) {
+    throw new Error(
+      // 正常路徑不會走到這裡：AccountProvider.relay 在送出前就會確認並重建。
+      // 會到這裡表示確認之後帳戶才消失（例如剛好在這中間重新部署），
+      // 所以不要再說「重新整理就會自動修好」——那句話在這個時點是空頭支票。
+      `這個錢包（${cred.address.slice(0, 8)}…）在目前這條鏈上不存在，多半是剛剛重新部署過。` +
+        `請重新整理頁面；若仍失敗，按「移除此裝置的紀錄」後用同一個登入帳號重新建立。`,
+    );
+  }
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error ?? "prepare failed");
+  return json as Prepared;
+}
+
+async function send(p: Prepared, keyId: Hex, signature: Hex): Promise<RelayResult> {
   const res = await fetch("/api/relay", {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ account: cred.address, calls: wire(calls), signature: encoded }),
+    body: JSON.stringify({ account: p.account, calls: p.calls, keyId, signature, mode: p.mode }),
   });
   const json = await res.json();
   if (!res.ok) throw new Error(json.error ?? "relay failed");
-  return json as { txHash: Hex; status: string; gasUsed: string };
+  return json as RelayResult;
 }
+
+/// 後端算 digest → passkey 在這台裝置上簽 → 交給 relayer。
+///
+/// 要簽什麼、簽完送到哪，都由後端決定：前端不直接跟區塊鏈說話。
+/// `account` 由呼叫端明確指定，而且應該是**伺服器回報的**錢包地址，不是
+/// localStorage 裡那一個。地址現在由登入帳號決定，伺服器隨時算得出來；
+/// 而瀏覽器存的那份只是快取，重新部署之後會過期。以快取為準的話，
+/// 使用者會拿到一個他沒做錯任何事、而且重新整理就會消失的錯誤。
+export async function signAndRelay(cred: StoredCredential, account: Address, calls: Call[]): Promise<RelayResult> {
+  if (!cred.keyId) throw new Error("這台裝置的紀錄不完整（缺少 keyId），請重新整理頁面");
+  const p = await prepare({ account, calls: wire(calls) }, cred);
+  return send(p, cred.keyId, await signDigest(cred, p.digest));
+}
+
+/// 帳戶對自己下的指令：加裝置、撤裝置、解凍、否決復原。
+///
+/// calldata 由伺服器端編（見 /api/relay/prepare 的 intent），前端只負責簽。
+/// 這條路在**凍結期間仍然走得通**——否則掛失會把使用者自己鎖在門外。
+export async function signSelfIntent(cred: StoredCredential, intent: Intent): Promise<RelayResult> {
+  if (!cred.keyId) throw new Error("這台裝置的紀錄不完整（缺少 keyId），請重新整理頁面");
+  const p = await prepare({ intent }, cred);
+  return send(p, cred.keyId, await signDigest(cred, p.digest));
+}
+
+export type Intent =
+  | { kind: "addKey"; publicKey: Hex; label: string }
+  | { kind: "removeKey"; keyId: Hex }
+  | { kind: "unfreeze" }
+  | { kind: "cancelRecovery" };

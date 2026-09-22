@@ -241,9 +241,16 @@ contract Deploy is Script {
     }
 
     /// @dev 帳戶層，與 v4 無關 —— 不含 v4 的核心部署一樣要有。
+    ///
+    ///      兩個角色在這裡固定下來，之後所有使用者錢包共用：
+    ///      · recoveryAgent = 國家級 Safe。只有它能**提案**復原（使用者所有裝置都遺失時），
+    ///        而且提案要等 72 小時、期間任何一把現存 passkey 都能否決。它不能直接動錢。
+    ///      · operator = 平台 relayer。唯一的特權是**凍結**，讓只通過登入、手上已經沒有
+    ///        passkey 的人也止得了血。它不能解凍——解凍要一把現存 passkey 或治理方。
+    ///      這個不對稱是刻意的：往安全的方向動門檻低，往開鎖的方向動門檻高。
     function _deployAccountFactory() internal {
         vm.startBroadcast(cfg.pk);
-        accountFactory = new PasskeyAccountFactory();
+        accountFactory = new PasskeyAccountFactory(address(nationalSafe), cfg.operator);
         vm.stopBroadcast();
     }
 

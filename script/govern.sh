@@ -13,6 +13,13 @@
 #   govern.sh safe (national|operator) exec <target> <data> <addr:sig> [<addr:sig>…]
 #   govern.sh sign <hash> --private-key <pk> | --ledger | --trezor
 #
+# 使用者錢包復原（所有裝置都遺失，且身分已在鏈下重新驗證過）：
+#   govern.sh build wallet-status  <account>
+#   read T D < <(govern.sh build wallet-recover <account> <qx> <qy> "新手機")
+#   H=$(govern.sh safe national hash $T $D); …各自 sign…; govern.sh safe national exec $T $D …
+#   # 等過 RECOVERY_DELAY（72 小時）之後，任何人都能執行：
+#   cast send <account> 'finaliseRecovery()' --rpc-url "$RPC_URL" --private-key <任何有餘額的帳戶>
+#
 # 典型流程（緊急凍結）：
 #   read T D < <(govern.sh build freeze 0xABC… true)
 #   H=$(govern.sh safe national hash $T $D)        # 給每位簽章者
@@ -68,6 +75,19 @@ cmd_build() {
     safe-swap-owner)   echo "$(safe_addr "$1") $(cast calldata 'swapOwner(address,address,address)' "$(prev_owner "$1" "$2")" "$2" "$3")";;
     safe-threshold)    echo "$(safe_addr "$1") $(cast calldata 'changeThreshold(uint256)' "$2")";;
     safe-owners)       call "$(safe_addr "$1")" 'getOwners()(address[])'; echo "threshold=$(call "$(safe_addr "$1")" 'getThreshold()(uint256)')";;
+    # ── 使用者錢包的復原（所有裝置都遺失）─────────────────────────────
+    # 目標是**使用者的 PasskeyAccount**，由國家 Safe 以 recoveryAgent 的身分執行。
+    # 提案不會立刻生效：合約強制等 RECOVERY_DELAY，期間使用者手上任何一把現存
+    # passkey 都能否決。所以這條路的安全性不在合約，在**提案之前**那一步——
+    # 治理方必須先在鏈下重新驗證申請人的身分（與當初 KYC 同一套程序，不是「他登入了」）。
+    # 少了那一步，這幾行就是一個接管任何錢包的後門。
+    wallet-recover)    echo "$1 $(cast calldata 'proposeRecovery(bytes32,bytes32,string)' "$2" "$3" "${4:-recovered device}")";;
+    wallet-cancel)     echo "$1 $(cast calldata 'cancelRecovery()')";;
+    wallet-freeze)     echo "$1 $(cast calldata 'freeze()')";;
+    wallet-unfreeze)   echo "$1 $(cast calldata 'unfreeze()')";;
+    wallet-status)     echo "frozen=$(call "$1" 'frozen()(bool)')  activeKeys=$(call "$1" 'activeKeys()(uint256)')"
+                       echo "keys:"; call "$1" 'keys()(bytes32[],(bytes32,bytes32,string,uint64,bool)[])'
+                       echo "pendingRecovery:"; call "$1" 'pendingRecovery()(bytes32,bytes32,string,uint64)';;
     *) echo "未知 preset：$p" >&2; exit 1;;
   esac
 }

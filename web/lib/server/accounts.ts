@@ -4,64 +4,101 @@ import path from "node:path";
 import type { Address, Hex } from "viem";
 import { deploymentFingerprint } from "./fingerprint";
 
-/// Phase 0：credentialId → 帳戶 的對照放本機 JSON。
-/// 正式環境放營運資料庫，或改讀鏈上 AccountCreated 事件索引。
-/// userId / email 是**後來才加的**，舊資料沒有。加它們的理由：沒有這兩個欄位，
-/// 伺服器只能用 credentialId 查帳戶，而 credentialId 在使用者換一台裝置、
-/// 或清掉瀏覽器資料之後就沒了——於是畫面只能說「尚未建立鏈上帳戶」，
-/// 而那句話是錯的：帳戶好端端在鏈上，只是這台裝置不知道。
-type Row = { publicKey: Hex; address: Address; createdAt: string; userId?: string; email?: string };
-type Doc = { fingerprint: string; chainId: number; rows: Record<string, Row> };
+/// Phase 0：passkey → 錢包 的對照放本機 JSON。正式環境放營運資料庫，
+/// 或直接索引鏈上的 `KeyAdded` 事件（鏈上本來就有 keyId、label、時間）。
+///
+/// **鏈才是權威**：一把 passkey 現在能不能動這個錢包，只有合約的 `keys()` 說了算。
+/// 這份檔案存的是鏈上沒有、而瀏覽器需要的那一塊：keyId ↔ credentialId。
+/// 沒有它，介面知道「這個錢包有三把金鑰」，卻不知道要叫瀏覽器用哪一個
+/// credentialId 去喚起哪一把——WebAuthn 簽章需要 credentialId，而它不上鏈。
+export type KeyRow = {
+  credentialId: string;
+  /// 64-byte 未壓縮公鑰（x||y，不含 0x04 前綴）
+  publicKey: Hex;
+  /// keccak256(abi.encode(qx, qy))：合約裡認金鑰用的 id
+  keyId: Hex;
+  accountRef: Hex;
+  address: Address;
+  /// 使用者看得懂的裝置名稱。鏈上也有一份，這裡留著是為了離線時也顯示得出來。
+  label: string;
+  createdAt: string;
+  userId?: string;
+  email?: string;
+  /// 這把金鑰**還沒上鏈**：使用者在一台新裝置上登入、建了一把 passkey，
+  /// 但加金鑰必須由**現有裝置**簽字（新裝置沒有任何權限，否則登入被盜就等於錢包被盜）。
+  /// 所以它先停在這裡，等某一台現有裝置核准。
+  pending?: boolean;
+};
+
+/// 待核准的新裝置放多久。過期就當作沒發生過——一個長期掛在畫面上的
+/// 「有新裝置要求加入」是在訓練使用者忽略它，而那正是攻擊者需要的。
+export const PENDING_TTL_MS = 24 * 60 * 60 * 1000;
+
+type Doc = { fingerprint: string; chainId: number; keys: Record<string, KeyRow> };
 const FILE = process.env.ACCOUNTS_FILE ?? path.resolve(process.cwd(), "data", "accounts.json");
 
-/// 這份對照跟其他紀錄不一樣：地址是 CREATE2 從 factory + passkey 公鑰算出來的，
-/// 也就是**可以重算**。所以 factory 換了地方時不需要攔下整個系統 —— 舊的對照當作
-/// 不存在，前端重新註冊一次就會拿到新鏈上的地址。硬擋反而會讓自動重綁失效。
+/// 這份對照跟其他紀錄不一樣：地址是 CREATE2 從 factory + accountRef 算出來的，
+/// 也就是**可以重算**。所以 factory 換了地方時不需要攔下整個系統——舊的對照當作
+/// 不存在，重新綁一次就會拿到新鏈上的地址。硬擋反而會讓自動重綁失效。
 function load(): Doc {
   const fp = deploymentFingerprint();
+  const empty = { fingerprint: fp.fingerprint, chainId: fp.chainId, keys: {} };
   let raw: unknown;
-  try { raw = JSON.parse(fs.readFileSync(FILE, "utf8")); } catch { return { fingerprint: fp.fingerprint, chainId: fp.chainId, rows: {} }; }
-  const doc = raw as Partial<Doc> & Record<string, unknown>;
-  // 舊格式是扁平的 { credentialId: Row }，沒有指紋。沿用它，並在下一次寫入時補上戳記。
-  const rows = (doc.rows ?? (doc as Record<string, Row>)) as Record<string, Row>;
-  const stamped = typeof doc.fingerprint === "string" ? doc.fingerprint : undefined;
-  if (stamped && stamped !== fp.fingerprint) {
-    console.warn(`[accounts] accounts.json 屬於部署 ${stamped}，目前是 ${fp.fingerprint}；舊對照忽略，passkey 會重新綁定新地址。`);
-    return { fingerprint: fp.fingerprint, chainId: fp.chainId, rows: {} };
+  try { raw = JSON.parse(fs.readFileSync(FILE, "utf8")); } catch { return empty; }
+  const doc = raw as Partial<Doc> & { rows?: unknown };
+  // v1 的格式是 { rows: { credentialId: { publicKey, address } } }：那時候地址由公鑰決定，
+  // 換一把 passkey 就是換一個錢包。新模型下那些地址算不出來也對不上，直接丟掉——
+  // 這是 Phase 0 展示站，重綁一次的成本遠低於留著一份會產生錯誤答案的舊資料。
+  if (doc.rows && !doc.keys) return empty;
+  if (typeof doc.fingerprint === "string" && doc.fingerprint !== fp.fingerprint) {
+    console.warn(`[accounts] accounts.json 屬於部署 ${doc.fingerprint}，目前是 ${fp.fingerprint}；舊對照忽略，passkey 會重新綁定。`);
+    return empty;
   }
-  return { fingerprint: fp.fingerprint, chainId: fp.chainId, rows: rows ?? {} };
+  return { fingerprint: fp.fingerprint, chainId: fp.chainId, keys: doc.keys ?? {} };
 }
 
-export function getAccount(credentialId: string): Row | undefined {
-  return load().rows[credentialId];
-}
-
-export function putAccount(credentialId: string, row: Omit<Row, "createdAt">) {
-  const doc = load();
-  doc.rows[credentialId] = { ...row, createdAt: new Date().toISOString() };
+function save(doc: Doc) {
   fs.mkdirSync(path.dirname(FILE), { recursive: true });
   fs.writeFileSync(FILE, JSON.stringify(doc, null, 2));
 }
 
-/// 這個登入帳號綁過哪些鏈上帳戶（去重、最新的在前）。
-///
-/// 這是「登入」之所以有意義的地方：登入告訴我們你是誰，我們就該把你的帳戶還給你，
-/// 而不是每次都問「要不要建立帳戶」。沒有這個查詢，帳戶等於只存在於某一個瀏覽器的
-/// localStorage 裡——清掉、換裝置、換個登入方式，就像沒有過。
-///
-/// **同時比對 userId 與 email**：userId 是登入供應商給的（Google 一組、開發用登入
-/// 另一組），同一個人用不同方式登入會拿到不同的 userId。而這個系統其他地方
-/// （ADMIN_EMAILS、VERIFIER_EMAILS、KYC 紀錄）本來就以 email 認人，這裡跟著一致。
-///
-/// 回傳含 credentialId 與公鑰，讓前端能**無聲地**把綁定還原回來。這兩個都是公開值：
-/// 公鑰本來就是公開的，credentialId 只是一個識別碼；拿到它們也簽不了任何東西，
-/// 簽章需要 authenticator 裡的私鑰。而呼叫者已經是通過驗證的本人。
-export function accountsOf(userId: string, email?: string | null) {
-  const mail = email?.toLowerCase();
-  const seen = new Set<string>();
-  return Object.entries(load().rows)
-    .filter(([, r]) => r.userId === userId || (!!mail && r.email?.toLowerCase() === mail))
-    .sort(([, a], [, b]) => b.createdAt.localeCompare(a.createdAt))
-    .filter(([, r]) => (seen.has(r.address.toLowerCase()) ? false : seen.add(r.address.toLowerCase())))
-    .map(([credentialId, r]) => ({ address: r.address, createdAt: r.createdAt, credentialId, publicKey: r.publicKey }));
+export function keyByCredential(credentialId: string): KeyRow | undefined {
+  return load().keys[credentialId];
+}
+
+export function keyById(keyId: Hex): KeyRow | undefined {
+  return Object.values(load().keys).find((k) => k.keyId.toLowerCase() === keyId.toLowerCase());
+}
+
+/// 這個錢包登記過的所有 passkey（含已經被撤掉的——撤掉與否問鏈）。
+export function keysOfRef(accountRef: Hex): KeyRow[] {
+  return Object.values(load().keys)
+    .filter((k) => k.accountRef.toLowerCase() === accountRef.toLowerCase())
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+export function putKey(row: Omit<KeyRow, "createdAt"> & { createdAt?: string }) {
+  const doc = load();
+  const prev = doc.keys[row.credentialId];
+  doc.keys[row.credentialId] = { ...row, createdAt: row.createdAt ?? prev?.createdAt ?? new Date().toISOString() };
+  save(doc);
+}
+
+/// 撤掉一把金鑰之後把對照也刪掉。鏈上仍留著 `KeyRemoved` 事件當紀錄，
+/// 這裡不需要再保留 credentialId——它已經沒有用途，而留著只是多一筆
+/// 「哪一台裝置屬於誰」的個資。
+/// 這個錢包待核准的新裝置（已過期的自動略過）。
+export function pendingOfRef(accountRef: Hex): KeyRow[] {
+  const now = Date.now();
+  return keysOfRef(accountRef).filter(
+    (k) => k.pending && now - Date.parse(k.createdAt) < PENDING_TTL_MS,
+  );
+}
+
+export function dropKey(keyId: Hex) {
+  const doc = load();
+  for (const [cid, k] of Object.entries(doc.keys)) {
+    if (k.keyId.toLowerCase() === keyId.toLowerCase()) delete doc.keys[cid];
+  }
+  save(doc);
 }

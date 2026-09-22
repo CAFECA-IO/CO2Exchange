@@ -17,12 +17,13 @@ const base = [
   ["/registry", "公告欄"],
   ["/custody", "託管揭露"],
   ["/agreements", "契約"],
+  ["/account", "裝置與安全"],
 ] as const;
 
 export function Nav() {
   const path = usePathname();
   const { data: session } = useSession();
-  const { credential, me, tier, config, knownAccounts } = useAccount();
+  const { me, tier, config, wallet, thisDeviceActive } = useAccount();
   const links: readonly (readonly [string, string])[] = [
     ...base,
     ...(tier === 2 ? [["/enterprise", "企業"] as const] : []),
@@ -66,16 +67,22 @@ export function Nav() {
             登入狀態與鏈上帳戶要分開顯示。只顯示「登出」而不說帳戶還沒建立，
             使用者進到內頁看到「請先建立鏈上帳戶」就會覺得自相矛盾。
           */}
-          {credential ? (
-            <span className="tnum font-mono text-ink-200" title={credential.address}>
-              {credential.address.slice(0, 6)}…{credential.address.slice(-4)}
-            </span>
-          ) : session?.user ? (
-            // 「尚未建立鏈上帳戶」是一句我們不見得知道是真的話：使用者換了裝置、
-            // 或清掉瀏覽器資料時，帳戶還在鏈上，沒有的是**這台裝置的綁定**。
-            // 伺服器查得到他綁過帳戶時就照實講，查不到才說沒建立。
+          {/*
+            地址來自**錢包**而不是這台裝置的 passkey：地址由登入帳號決定，
+            所以就算這台裝置還沒配鑰匙，使用者一樣該看得到自己的地址。
+            凍結中另外標一筆——那是使用者最需要一眼看到的狀態。
+          */}
+          {wallet?.exists ? (
+            <Link href="/account" className="flex items-center gap-1.5" title={wallet.address}>
+              {wallet.frozen && <span className="rounded-[--radius-ctl] bg-warn/15 px-1.5 py-0.5 text-warn">已凍結</span>}
+              <span className="tnum font-mono text-ink-200 transition hover:text-ink-50">
+                {wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}
+              </span>
+              {!thisDeviceActive && <span className="text-warn">· 這台裝置無法簽署</span>}
+            </Link>
+          ) : session?.user && wallet ? (
             <Link href="/#login" className="rounded-[--radius-ctl] border border-warn/50 px-2 py-1 text-warn transition hover:border-warn">
-              {knownAccounts?.length ? "這台裝置未綁定帳戶" : "尚未建立鏈上帳戶"}
+              尚未建立鏈上錢包
             </Link>
           ) : null}
           {session?.user ? (

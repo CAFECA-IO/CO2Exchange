@@ -7,19 +7,23 @@ import { NO_LOGIN_BODY, NO_LOGIN_TITLE, hasLogin } from "@/lib/login";
 
 /// 進入內頁前的門檻畫面。
 ///
-/// 為什麼需要它：「登入」與「鏈上帳戶」是兩件不同的事，但舊版的文案把它們講成同一件。
-/// 使用者用 Apple / Google 登入後，右上角顯示「登出」；此時若這台裝置還沒有 passkey，
-/// 內頁只會冒出一句「請先在首頁建立鏈上帳戶」——看起來就是「叫我登入，又說我已登入」，
-/// 而且把人趕去首頁才能動作。
+/// 為什麼需要它：「登入」「錢包」「這台裝置能不能簽字」是**三**件事，而舊版的文案
+/// 把它們講成一件。使用者登入後看到「請先建立鏈上帳戶」，會覺得「叫我登入，
+/// 又說我已登入」；換一台手機時更糟——他明明有錢包，畫面卻要他再建一個。
 ///
-/// 現在原地說明兩者的差別，並且把該按的按鈕放在同一個畫面上。
+/// 現在三件事分開說：
+///   · 登入      → 你是誰。決定錢包地址（一個登入帳號一個錢包）。
+///   · 錢包      → 鏈上那個地址。換幾台裝置都是同一個。
+///   · 這台裝置  → 有沒有一把在錢包裡的 passkey。沒有就只能看，不能動。
 export function AccountGate() {
-  const { userId, credential, config, busy, unbound, knownAccounts, createAccount, useExistingPasskey } = useAccount();
-  const hasAccount = (knownAccounts?.length ?? 0) > 0;
-  const firstAccount = knownAccounts?.[0]?.address;
+  const {
+    userId, deviceCredential, config, busy, unbound, wallet, thisDeviceActive,
+    createAccount, useExistingPasskey, requestThisDevice,
+  } = useAccount();
   const [err, setErr] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
 
-  async function run(fn: () => Promise<void>) {
+  async function run(fn: () => Promise<unknown>) {
     setErr(null);
     try { await fn(); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
   }
@@ -42,8 +46,8 @@ export function AccountGate() {
     return (
       <Card title="請先登入">
         <p className="text-sm leading-7 text-ink-200">
-          登入只用來建立這個瀏覽器的 session，不是你的鏈上身分。
-          登入之後還要在這台裝置建立一次鏈上帳戶（passkey）。
+          登入決定你的錢包是哪一個——同一個登入帳號永遠對到同一個鏈上地址。
+          登入之後還要在這台裝置放一把 passkey，才能簽字動用它。
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
           <Link href="/"><Button>回首頁登入</Button></Link>
@@ -52,56 +56,81 @@ export function AccountGate() {
     );
   }
 
-  // ② 有 session，但這台裝置沒有 passkey
-  if (!credential) {
+  // 錢包狀態還沒問到：不要在這時候斷言任何一邊。
+  if (!wallet) return <Notice>{busy ?? "讀取錢包狀態中…"}</Notice>;
+
+  // ② 有 session，錢包還不存在 → 第一次建立
+  if (!wallet.exists) {
     return (
-      <Card title={hasAccount ? "這台裝置還沒綁定你的鏈上帳戶" : "這台裝置還沒有鏈上帳戶"}>
+      <Card title="建立你的鏈上錢包">
         <div className="space-y-3 text-sm leading-7 text-ink-200">
           <p>
-            你<b>已經登入</b>了（右上角所以顯示「登出」），但登入和鏈上帳戶是兩件事：
+            這個登入帳號的錢包地址已經算得出來了：
+            <span className="ml-1 font-mono text-ink-50">{wallet.address.slice(0, 10)}…{wallet.address.slice(-6)}</span>。
+            它由<b>登入帳號</b>決定，所以之後換幾台裝置都是同一個地址。
           </p>
-          <ul className="space-y-1.5 border-l-2 border-ink-500 pl-4">
-            <li><b>登入</b>——Apple / Google 帳號，只是這個瀏覽器的 session。</li>
-            <li><b>鏈上帳戶</b>——由這台裝置的 passkey（Face ID / Touch ID）決定，地址從公鑰算出來。金鑰只在裝置上，平台拿不到，所以換一台裝置或清掉瀏覽器資料之後，要再綁一次。</li>
-          </ul>
-          {unbound ? (
-            <Notice kind="error">
-              這台裝置原本綁定的帳戶，在目前的合約部署上不存在，自動重新綁定也沒有成功，已經解除綁定。
-              如果鏈剛重開過，這是正常的：底下用同一把 passkey 重新綁定即可，不需要重新註冊。
-            </Notice>
-          ) : (
-            <p className="text-ink-300">
-              {hasAccount ? (
-                <>
-                  你已經有一個鏈上帳戶
-                  {firstAccount && <> <span className="font-mono">{firstAccount.slice(0, 6)}…{firstAccount.slice(-4)}</span></>}
-                  ，選「我已有 passkey」把這台裝置綁回去，地址不會變。
-                </>
-              ) : (
-                <>第一次使用請選「建立新帳戶」；在別台裝置建過、或這台裝置清過資料，選「我已有 passkey」。</>
-              )}
-            </p>
-          )}
+          <p className="text-ink-300">
+            按下去會在這台裝置建立一把 passkey（Face ID / Touch ID / 螢幕鎖），
+            並用它部署錢包。金鑰只留在這台裝置的安全元件裡，平台拿不到，也複製不走。
+          </p>
         </div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          {hasAccount ? (
-            <>
-              <Button onClick={() => run(useExistingPasskey)} disabled={!!busy}>{busy ?? "我已有 passkey"}</Button>
-              <Button variant="secondary" onClick={() => run(createAccount)} disabled={!!busy}>建立另一個帳戶</Button>
-            </>
-          ) : (
-            <>
-              <Button onClick={() => run(createAccount)} disabled={!!busy}>{busy ?? "建立新帳戶（passkey）"}</Button>
-              <Button variant="secondary" onClick={() => run(useExistingPasskey)} disabled={!!busy}>我已有 passkey</Button>
-            </>
-          )}
+        <div className="mt-4">
+          <Button onClick={() => run(createAccount)} disabled={!!busy}>{busy ?? "建立錢包（passkey）"}</Button>
         </div>
         {err && <div className="mt-3"><Notice kind="error">{err}</Notice></div>}
       </Card>
     );
   }
 
-  // ③ 有帳戶，但設定還沒讀回來（或鏈連不上）
+  // ③ 錢包在鏈上，但這台裝置簽不了字
+  if (!thisDeviceActive) {
+    const pendingHere = deviceCredential && wallet.pendingDevices.some((d) => d.keyId === deviceCredential.keyId);
+    return (
+      <Card title="這台裝置還不能簽署交易">
+        <div className="space-y-3 text-sm leading-7 text-ink-200">
+          <p>
+            你的錢包好端端在鏈上
+            <span className="ml-1 font-mono text-ink-50">{wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}</span>
+            ，資產一分沒少。缺的只是<b>這台裝置的鑰匙</b>——passkey 存在裝置的安全元件裡，
+            不會跟著帳號跑。
+          </p>
+          {unbound && (
+            <Notice kind="warn">
+              這台裝置記著的那把 passkey 已經不在錢包的有效金鑰裡了。
+              可能是你從別台裝置把它撤掉了，也可能是合約重新部署過。
+            </Notice>
+          )}
+          {pendingHere || sent ? (
+            <Notice>
+              已經送出加入申請，等待核准。請拿一台<b>已經在錢包裡</b>的裝置，
+              到「裝置與安全」按核准。<br />
+              一台都不剩的話，這條路走不通——要走復原程序（重新驗證身分，等待
+              {Math.round((wallet.recoveryDelay || 259200) / 3600)} 小時）。請與平台聯絡。
+            </Notice>
+          ) : (
+            <ul className="space-y-1.5 border-l-2 border-ink-500 pl-4 text-ink-300">
+              <li><b>這台裝置以前綁過</b>（清掉瀏覽器資料、換個瀏覽器）→ 選「我已有 passkey」，不需要任何人核准。</li>
+              <li><b>這是一台新裝置</b> → 選「申請加入」，然後用一台現有裝置核准。新裝置不能自己把自己加進來，否則登入被盜就等於錢包被盜。</li>
+            </ul>
+          )}
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button onClick={() => run(useExistingPasskey)} disabled={!!busy}>{busy ?? "我已有 passkey"}</Button>
+          <Button
+            variant="secondary"
+            disabled={!!busy || sent}
+            onClick={() => run(async () => { const r = await requestThisDevice(""); setSent(r.pending); })}
+          >
+            申請加入這台裝置
+          </Button>
+          <Link href="/account"><Button variant="secondary">裝置與安全</Button></Link>
+        </div>
+        {err && <div className="mt-3"><Notice kind="error">{err}</Notice></div>}
+      </Card>
+    );
+  }
+
+  // ④ 都有了，但設定還沒讀回來（或鏈連不上）
   return (
     <Notice>
       {busy ?? (config ? "讀取中…" : "讀取鏈上設定中…若一直停在這裡，請確認節點已啟動。")}

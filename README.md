@@ -18,7 +18,8 @@
 ## 分層
 
 ```
-帳戶層             PasskeyAccount / Factory  P-256 passkey 擁有的智能帳戶，CREATE2 決定地址，WebAuthn 驗簽（OZ P256）
+帳戶層             PasskeyAccount / Factory  一個登入帳號一個智能帳戶（CREATE2 salt = accountRef），多把 P-256 passkey，
+                                             WebAuthn 驗簽（OZ P256）；凍結、72h 延遲復原 + 現存金鑰否決
 身分層（UUPS）     KYCRegistry            政府憑證 attestation → tier / expiry / frozen / recover
 登錄層（不可升級） CarbonRegistry         查驗機構 EIP-712 簽章核發、序號唯一、專案登錄、**轄區（國別）政策**
                    CarbonCredit1155       額度本體，白名單主防線在 _update；retire → 用途 × 轄區檢查 → 憑證
@@ -351,7 +352,7 @@ Phase 0 的營運動作分三種節奏。**誰做**那一欄很重要：營運�
 
 重建是安全的：Anvil 從同一個部署者、同樣的 nonce 順序跑同一支腳本，
 **十七個合約地址一字不差**（只有部署檔裡的 `deployedAt` 會變）。
-前端的設定不用動，使用者的 passkey 地址也還是同一個——那是 CREATE2 從公鑰算出來的。
+前端的設定不用動，使用者的錢包地址也還是同一個——那是 CREATE2 從 accountRef（登入帳號的雜湊）算出來的。
 
 只有 `web/data/` 需要注意：那裡的 KYC 與核發申請是用帳戶地址當鍵的，
 鏈上狀態歸零之後它們對不到任何東西，所以指紋檢查會擋下來並回 `503 DATA_STALE`。
@@ -424,7 +425,8 @@ forge 模擬時讀到的是鏈上**最後一個區塊**的時間戳，而 anvil 
 
 #### 重新部署之後：`web/data/` 的舊紀錄
 
-`web/data/` 裡的 KYC 申請、核發申請、passkey 對照都是用**帳戶地址**當鍵的，而地址是合約部署的產物。
+`web/data/` 裡的 KYC 申請、核發申請、passkey 對照都是用**帳戶地址**當鍵的，而地址是合約部署的產物
+（`accountRef` 不變，但 factory 換了地址就換了）。
 鏈重開、換鏈、或 factory 重新部署之後，那些鍵在新鏈上對不到任何東西——資料讀得出來、畫面也畫得出來，錯得無聲無息。
 
 所以資料夾裡壓了一張 `.deployment.json` 戳記，記下這批資料屬於哪一**次**部署：chainId、七個決定身分的合約地址的雜湊，
@@ -436,8 +438,10 @@ forge 模擬時讀到的是鏈上**最後一個區塊**的時間戳，而 anvil 
 
 - **申請與憑證紀錄**（`kyc-requests`、`issuance-requests`）直接擋下，API 回 `503 DATA_STALE`，訊息說明怎麼處理。
   這些是證據，不該悄悄拿舊的來用。
-- **`accounts.json`**（credentialId → 帳戶地址）不擋。那個地址是 CREATE2 從 factory + passkey 公鑰算出來的，**可以重算**，
-  舊對照當作不存在，前端重新註冊一次就拿到新地址（`AccountProvider` 的自動重綁）。硬擋反而會讓自動重綁失效。
+- **`accounts.json`**（credentialId → keyId / 帳戶地址）不擋。那個地址是 CREATE2 從 factory + accountRef 算出來的，
+  **可以重算**，舊對照當作不存在，使用者重新建立一次就拿到新地址。硬擋反而會讓這件事變成死結。
+  這份檔案存的是鏈上沒有、而瀏覽器需要的那一塊：`keyId ↔ credentialId`（WebAuthn 要 credentialId，它不上鏈）。
+  **哪些金鑰現在有效，一律以鏈上的 `keys()` 為準。**
 
 確認舊資料不用了：
 
@@ -522,7 +526,7 @@ RPC 位址——前端根本不知道節點在哪。
 
 | 角色 | 頁面 | 內容 |
 |---|---|---|
-| 自然人 / 法人 | `/`、`/kyc`、`/trade`、`/portfolio`、`/retire` | 首頁＝市場現況（地球＋各轄區清單）→ 登入 → passkey 建帳戶 → 身分驗證申請 → 交易（買賣同頁、限價與市價、下單前確認單）→ 我的資產（持有、成本、損益、**註銷憑證**）→ 註銷 |
+| 自然人 / 法人 | `/`、`/kyc`、`/trade`、`/portfolio`、`/retire`、`/account` | 首頁＝市場現況（地球＋各轄區清單）→ 登入 → passkey 建帳戶 → 身分驗證申請 → 交易（買賣同頁、限價與市價、下單前確認單）→ 我的資產（持有、成本、損益、**註銷憑證**）→ 註銷；`/account` 管理裝置、掛失與復原 |
 | 任何人（免登入） | `/about`、`/registry`、`/custody`、`/agreements`、`/agreements/<id>` | 認識碳權（制度說明與行情圖表）、公告欄（TCER 五分頁 + 轄區）、託管與稽核揭露（每月 5 日）、七份契約與條款全文（五份定型化契約 + 網站服務條款 + 隱私權政策，每份一個網址） |
 | 法人 | `/enterprise` | 登錄專案、上傳 ISO 14064-3 查驗報告申請核發、批次掛單 / 入池、取消掛單 |
 | 查驗機構（`VERIFIER_EMAILS`） | `/verifier` | 待查驗佇列：檢視報告與雜湊 → 簽署 IssuanceAttestation 核發，或退回 |
@@ -608,16 +612,51 @@ python3 scripts/gen-globe-mask.py ./package > lib/globe-mask.ts
 否則申請會卡在沒有人能核准的佇列裡（要走查驗核發那條線同理，`VERIFIER_EMAILS` 也要加）。憑證 PDF 用 `fonts/NotoSansTC-Subset.otf`（Big5 常用字子集），
 檔案 SHA-256 由 `DOCUMENT_SIGNER_PK`（`DOCUMENT_ROLE`）回寫鏈上，任何人可重算比對。
 
-錢包架構：`PasskeyAccount`（P-256 passkey 是唯一擁有者，地址由公鑰經 CREATE2 決定，換裝置不變）。
-Phase 0 交易由平台 relayer 代送 `execute`（`/api/relay`，gas 由平台付），授權來自使用者的 WebAuthn 簽章，relayer 無法竄改內容；
+### 錢包：一個登入帳號一個錢包，一個錢包多把 passkey
+
+`PasskeyAccount` 的地址是 `CREATE2(salt = accountRef)`，而 `accountRef = keccak256("co2x:account:v1:" + 登入 email)`。
+**地址不由 passkey 決定**——綁在 passkey 上的話，換一台手機就是換一個錢包，舊錢包裡的碳權不會跟過來，
+而使用者根本不覺得自己做了「開新戶」這件事。所以金鑰在部署**之後**由 factory 呼叫 `initialise()` 補上
+（放進建構子的話 initCode 會變，地址就跟著金鑰跑了）。
+
+一個帳戶可以登錄多把金鑰（`keyId = keccak256(qx, qy)`），任何一把都能簽 `execute`，
+`execute` 因此多收一個 `keyId` 參數——讓合約逐把試會使 gas 隨裝置數線性上升。
+
+四種事故，四條路：
+
+| 情形 | 機制 | 誰有權 |
+| --- | --- | --- |
+| 部分裝置遺失 | `removeKey`（經 `executeSelf`） | 任一現存 passkey。即時，不需要平台 |
+| 全部裝置遺失 | `proposeRecovery` → 等 `RECOVERY_DELAY`（72h）→ `finaliseRecovery` | 提案只有 `recoveryAgent`（國家 Safe）能做，且須鏈下重驗身分；期間任一現存金鑰可 `cancelRecovery` |
+| 登入帳號被盜 | 盜用者簽不了字，也加不了金鑰（`addKey` 要現存金鑰簽章）。他能做的只有 `freeze` | — |
+| passkey 被盜 | 從別台 `removeKey`；來不及就 `freeze` | `freeze`：operator / recoveryAgent / self |
+
+**凍結與解凍的門檻刻意不對稱。** `freeze` 由平台 relayer 代送（只要通過登入即可），因為需要它的那一刻
+使用者手上多半已經沒有那台裝置了；`unfreeze` 只接受現存 passkey 或治理方。於是只拿到登入權的人
+至多造成阻斷服務，不能把持有人關在門外。凍結中 `execute` 一律擋下，但 `executeSelf` 仍走得通——
+它有 selector 白名單（`addKey` / `removeKey` / `freeze` / `unfreeze` / `cancelRecovery`），
+碰不到任何會動錢的函式，所以凍結不會變成陷阱。
+
+新裝置**不能自己把自己加進來**：它在後端進「待核准」區（`accounts.json` 的 `pending`），
+等一台現有裝置在 `/account` 按核准（那是一筆 `addKey` 的 `executeSelf`）。
+可以的話，拿到 Google 帳號的人只要登入、建一把自己的 passkey 就成了共同持有人。
+
+治理端的操作：`script/govern.sh build wallet-status|wallet-recover|wallet-cancel|wallet-freeze|wallet-unfreeze <account> …`。
+
+Phase 0 交易由平台 relayer 代送（`/api/relay`，gas 由平台付），授權來自使用者的 WebAuthn 簽章，relayer 無法竄改內容；
 Phase 1 換成 ERC-4337 EntryPoint + paymaster，帳戶簽章格式與 nonce 語意不變。
 
 Apple / Google 登入：在 `.env.local` 設 `AUTH_GOOGLE_ID/SECRET`、`AUTH_APPLE_ID/SECRET` 後自動出現；登入只建立 session，不是身分根。
 
-端到端測試（Chromium 虛擬 passkey，需 `npx playwright install chromium`）：`npm run e2e` 跑三條流程 ——
+端到端測試（Chromium 虛擬 passkey，需 `npx playwright install chromium`）：`npm run e2e` 跑五條流程 ——
 `e2e/flow.mjs`（自然人：KYC 人工核准 → 購買 → 註銷 → 管理員產生 PDF 並回寫 → 下載）、
 `e2e/enterprise.mjs`（法人 KYC → 專案登錄 → 上傳報告 → 查驗核發 → 掛單 + 入池 → 另一自然人購買並註銷）與
-`e2e/globe.mjs`（首頁地球與各轄區清單：資料、選取、換量、減少動態、手機不橫捲，以及 `/about` 的章節有沒有搬齊）。
+`e2e/globe.mjs`（首頁地球與各轄區清單：資料、選取、換量、減少動態、手機不橫捲，以及 `/about` 的章節有沒有搬齊）與
+`e2e/recovery.mjs`（錢包：換裝置看得到同一個地址、新裝置要現有裝置核准、撤銷、凍結與解凍，
+以及全部裝置遺失時的復原——只有治理方提得了案、等待期未過執行不了、現存金鑰可否決、期滿後地址不變）。
+`recovery.mjs` 要把鏈的時鐘往前推 72 小時（等待期），而 `evm_increaseTime` 只有一個方向——
+鏈上時間領先真實時間之後，伺服器簽的 attestation 會全部「過期」，下一個跑 KYC 的人看到 `register` revert
+卻找不到原因。所以它在推時間之前 `evm_snapshot`、測完 `evm_revert` 回來，並排在最後一支。
 需 anvil + DemoFlowV4 + `KYC_AUTO_APPROVE=0` 的伺服器。
 
 e2e 等的是 `data-testid` 標記的**狀態**，不是畫面上的某一句話。之前帳戶建好與否是等

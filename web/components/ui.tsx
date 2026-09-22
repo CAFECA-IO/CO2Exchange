@@ -36,13 +36,19 @@ export function Field({ label, children }: { label: string; children: React.Reac
 export const inputCls =
   "w-full rounded-[--radius-ctl] border border-ink-500 bg-ink-800 px-3 py-2 text-sm text-ink-50 outline-none placeholder:text-ink-300 focus:border-tide";
 
-export function Notice({ kind = "info", children }: { kind?: "info" | "error" | "ok"; children: React.ReactNode }) {
+/// `warn` 與 `error` 分開，不是為了多一個顏色：**「要你注意」不等於「出錯了」**。
+/// 「有人正在申請加入你的錢包」是前者——系統運作正常，需要你做決定；
+/// 把它畫成錯誤，使用者會以為是故障，而真正的錯誤訊息也跟著貶值。
+/// （順帶一提，e2e 用 `notice-error` 判斷「頁面壞了」，混用會讓測試自己說謊。）
+export function Notice({ kind = "info", children }: { kind?: "info" | "error" | "warn" | "ok"; children: React.ReactNode }) {
   const cls =
     kind === "error"
       ? "border-down/40 bg-down/10 text-down"
-      : kind === "ok"
-        ? "border-up/40 bg-up/10 text-up"
-        : "border-ink-500 bg-ink-600 text-ink-200";
+      : kind === "warn"
+        ? "border-warn/40 bg-warn/10 text-warn"
+        : kind === "ok"
+          ? "border-up/40 bg-up/10 text-up"
+          : "border-ink-500 bg-ink-600 text-ink-200";
   return (
     <div className={`rounded-[--radius-ctl] border px-3 py-2 text-sm ${cls}`} role={kind === "error" ? "alert" : undefined} data-testid={`notice-${kind}`}>
       {children}

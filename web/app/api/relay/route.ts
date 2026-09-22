@@ -25,7 +25,15 @@ const MAX_DEPTH = 6;
 const HINT: Record<string, string> = {
   NotActiveAccount: "這個帳戶在目前這條鏈上沒有有效的身分驗證。鏈重開或重新部署之後要重做一次 /kyc（KYC_AUTO_APPROVE=1 的話是即時的）。",
   IdentityExpired: "身分驗證過期了，到 /kyc 重新申請。",
-  AccountFrozen: "這個帳戶被凍結了，只有國家 Safe 能解除。",
+  AccountFrozen: "這個錢包被凍結了。到「裝置與安全」用任何一把還在手上的 passkey 解凍；一把都不剩的話走復原程序。",
+  UnknownKey: "這把 passkey 已經從錢包裡移除了（或從來沒加進去）。換一台還在清單裡的裝置操作。",
+  KeyAlreadyExists: "這把 passkey 已經在錢包裡了，不需要再加一次。",
+  LastKey: "這是最後一把 passkey，移除它會讓錢包永遠動不了。先加一台新裝置，再撤掉舊的。",
+  NotSelf: "這個操作只能由錢包自己發動，也就是要有一把現存 passkey 簽字。",
+  NotRecoveryAgent: "復原提案只有治理方能提出，而且要重新通過身分驗證。",
+  NoPendingRecovery: "目前沒有進行中的復原提案。",
+  RecoveryNotReady: "復原提案還在等待期內。等待期存在的理由就是讓你有時間否決它。",
+  RecoveryPending: "已經有一個進行中的復原提案，先完成或否決它。",
   OrderInactive: "這張單已經被買走或取消了。模擬器在跑的時候很容易遇到——它假設自己是鏈上唯一的寫入者，掛單簿在它的記憶體裡。重新整理掛單簿再試。",
   ExceedsRemaining: "掛單剩餘量不足，多半是同一張單剛被別人吃掉（模擬器在跑的話尤其常見）。",
   PurposeNotAllowed: "這個轄區的額度不允許這個註銷用途。國外額度只能扣碳費或做自願性碳中和。",
@@ -70,18 +78,33 @@ function unwrap(errorName: string, args: readonly unknown[]): string {
 
 type Call = { target: string; value: string; data: string };
 
-/// POST { account, calls, signature } → relayer 送出 PasskeyAccount.execute（平台付 gas）
-/// 授權來自使用者的 WebAuthn 簽章，relayer 無法竄改內容；Phase 1 由 ERC-4337 bundler + paymaster 取代。
+/// POST { account, calls, keyId, signature, mode? } → relayer 送出交易（平台付 gas）
+///
+/// `keyId` 說明這是**哪一把 passkey** 簽的。一個錢包可以有好幾把（手機一把、
+/// 筆電一把），合約靠這個直接查，不必逐把試——逐把試會讓 gas 隨著裝置數上升。
+///
+/// `mode`：
+///   · "execute"（預設）— 一般交易。帳戶凍結時一律擋下。
+///   · "self"           — 帳戶對自己下的指令（加/撤裝置、解凍、否決復原）。
+///     **凍結中仍然走得通**，否則掛失會把使用者自己鎖在門外。合約端另有白名單，
+///     這條路碰不到任何會動錢的函式。
+///
+/// 授權來自使用者的 WebAuthn 簽章，relayer 無法竄改內容；
+/// Phase 1 由 ERC-4337 bundler + paymaster 取代。
 export async function POST(req: Request) {
-  const { account, calls, signature } = (await req.json()) as { account?: string; calls?: Call[]; signature?: string };
-  if (!isAddress(account) || !Array.isArray(calls) || !isHex(signature)) return Response.json({ error: "bad request" }, { status: 400 });
+  const { account, calls, keyId, signature, mode } = (await req.json()) as
+    { account?: string; calls?: Call[]; keyId?: string; signature?: string; mode?: string };
+  if (!isAddress(account) || !Array.isArray(calls) || !isHex(signature) || !isHex(keyId) || keyId.length !== 66) {
+    return Response.json({ error: "bad request" }, { status: 400 });
+  }
+  const fn = mode === "self" ? "executeSelf" : "execute";
   const typed = calls.map((c) => {
     if (!isAddress(c.target) || !isHex(c.data)) throw new Error("bad call");
     return { target: c.target, value: BigInt(c.value ?? "0"), data: c.data as Hex };
   });
   try {
     const { request } = await publicClient.simulateContract({
-      address: account, abi: passkeyAccountAbi, functionName: "execute", args: [typed, signature], account: relayerClient.account,
+      address: account, abi: passkeyAccountAbi, functionName: fn, args: [typed, keyId, signature], account: relayerClient.account,
     });
     const hash = await relayerClient.writeContract(request);
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
