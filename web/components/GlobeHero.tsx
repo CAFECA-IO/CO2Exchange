@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import type { GlobeCountry } from "@/components/Globe";
+import { PriceSpark, type SparkPoint } from "@/components/PriceSpark";
 
 /// 地球是純瀏覽器的東西（canvas、rAF、DecompressionStream），伺服器端算不出來，
 /// 所以動態載入並關掉 SSR。地球還沒到之前，右邊的清單已經是完整可用的頁面——
@@ -26,6 +27,7 @@ export type CountryRow = {
   tradedKg: number;
   trades: number;
   avgPricePerTonne: number;
+  priceSeries: SparkPoint[];
   listedKg: number;
   orders: number;
 };
@@ -219,6 +221,13 @@ export default function GlobeHero() {
               </div>
               <StatusChip enabled={sel.enabled} issued={sel.issuedKg} />
             </div>
+            {/* 走勢放在數字上面：先看得出在漲還是在跌，再看細項。
+                點開一個轄區的人，多半就是想知道這件事。 */}
+            {sel.priceSeries.length >= 2 && (
+              <div className="mt-3 border-t border-ink-500 pt-3">
+                <PriceSpark points={sel.priceSeries} label={sel.name} />
+              </div>
+            )}
             <dl className="mt-3 space-y-1.5 text-xs">
               {[
                 ["累計核發", `${t(sel.issuedKg)} 噸`],

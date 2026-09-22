@@ -49,6 +49,10 @@
   --globe-ocean: #0d1317;
   --globe-land: #45515e;
 
+  /* 走勢小圖的漸層頂端不透明度。深淺各給一個值，不是把同一個翻過來用：
+     30% 的青色畫在近黑上是一層薄霧，同樣的 30% 畫在白上是一塊顏色。 */
+  --spark-top: 0.32;
+
   --radius-card: 12px;
   --radius-ctl: 10px;
 
@@ -85,6 +89,7 @@
     --color-cat-2: #7551e0;
     --globe-ocean: #dae3ec;
     --globe-land: #95a3b3;
+    --spark-top: 0.26;
   }
 }
 
@@ -112,6 +117,7 @@
   --color-cat-2: #7551e0;
   --globe-ocean: #dae3ec;
   --globe-land: #95a3b3;
+  --spark-top: 0.26;
 }
 
 body {

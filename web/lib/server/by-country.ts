@@ -41,6 +41,9 @@ export type CountryStat = {
   /// 為什麼是加權平均而不是最後一筆：最後一筆可能是某個人買 0.1 噸留下的，
   /// 拿它代表一個轄區的價格，會被一筆小單帶著跑。
   avgPricePerTonne: number;
+  /// 區間內的價格走勢：等寬時間桶，每一桶是該桶的成交量加權均價。
+  /// 沒有成交的桶**不出現**——補一個假的點會讓走勢圖上長出一段沒發生過的行情。
+  priceSeries: { t: number; price: number }[];
   /// 目前掛單簿上的數量與筆數
   listedKg: number;
   orders: number;
@@ -110,7 +113,7 @@ export async function byCountry(rangeHours = 24 * 365): Promise<{
 
   const blank = (): Omit<CountryStat, "country" | "name" | "scheme" | "registryName" | "enabled" | "lat" | "lon"> => ({
     issuedKg: 0, circulatingKg: 0, retiredKg: 0, tradedKg: 0, trades: 0, listedKg: 0, orders: 0,
-    avgPricePerTonne: 0,
+    avgPricePerTonne: 0, priceSeries: [],
   });
   const acc = new Map<string, ReturnType<typeof blank>>();
   const get = (c: string) => {
@@ -151,6 +154,31 @@ export async function byCountry(rangeHours = 24 * 365): Promise<{
   for (const [c, money] of notional) {
     const v = get(c);
     if (v.tradedKg > 0) v.avgPricePerTonne = money / (v.tradedKg / 1000);
+  }
+
+  // 走勢：把區間切成等寬的桶，每一桶算自己的加權均價。
+  // 桶數固定，所以不管看一週還是看一年，畫出來的點數都差不多——
+  // 那是給小圖用的，不是給人讀出某一天價格的（那要去 /about 的 K 線）。
+  const BUCKETS = 26;
+  const width = (rangeHours * 3600) / BUCKETS;
+  const bucketed = new Map<string, { kg: number; money: number }[]>();
+  for (const l of filled) {
+    const ts = blockTimes.get(l.blockNumber!) ?? 0;
+    if (ts < since) continue;
+    const info = orderInfo.get(Number(l.args.orderId));
+    const c = info == null ? undefined : countryOfBatch(info.batchId);
+    if (!c || !info) continue;
+    let arr = bucketed.get(c);
+    if (!arr) bucketed.set(c, (arr = Array.from({ length: BUCKETS }, () => ({ kg: 0, money: 0 }))));
+    const i = Math.min(BUCKETS - 1, Math.max(0, Math.floor((ts - since) / width)));
+    const kg = Number(l.args.amountKg);
+    arr[i].kg += kg;
+    arr[i].money += (kg / 1000) * (Number(info.pricePerTonne) / 1e6);
+  }
+  for (const [c, arr] of bucketed) {
+    get(c).priceSeries = arr
+      .map((b, i) => ({ t: Math.round(since + (i + 0.5) * width), price: b.kg > 0 ? b.money / (b.kg / 1000) : 0 }))
+      .filter((p) => p.price > 0);
   }
 
   // 掛單簿現況：逐筆讀，數量不大（示範規模）

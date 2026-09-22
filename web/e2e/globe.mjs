@@ -55,6 +55,20 @@ const browser = await launch();
   ok(/mTWD \/ 噸/.test(priceRow), `成交均價的單位是 mTWD / 噸：${priceRow.split("\n")[0]}`);
   ok(await page.getByRole("button", { name: "掛單量" }).count() === 0, "「掛單量」不再是可比較的量");
 
+  // 走勢小圖。它是圖，但數字不能只活在圖裡——最新價、漲跌、最高最低都要是文字，
+  // 而且 aria-label 要說得出這張圖畫的是誰的什麼，不然螢幕報讀器只會唸到一個 svg。
+  // 前面的步驟已經選過一列，而點選是**切換**：對同一列再點一次會取消選取，
+  // 明細卡就不見了。所以先看它是不是已經被選起來。
+  const tw = page.getByRole("button").filter({ hasText: "臺灣" }).first();
+  if ((await tw.getAttribute("aria-pressed")) !== "true") await tw.click();
+  const fig = page.locator("figure").first();
+  await fig.waitFor({ timeout: 10_000 });
+  const figText = await fig.innerText();
+  ok(/近一年走勢/.test(figText), "明細卡有價格走勢圖");
+  ok(/最低[\s\S]*最高/.test(figText), "走勢圖把最高最低直接寫出來，不必 hover");
+  const aria = await fig.getByRole("img").getAttribute("aria-label");
+  ok(/臺灣.*走勢.*最高.*最低.*最新/.test(aria ?? ""), `走勢圖有可讀的替代文字：${aria?.slice(0, 40)}…`);
+
   ok(errs.length === 0, `沒有 console 例外${errs.length ? "：" + errs[0] : ""}`);
   await ctx.close();
 }
