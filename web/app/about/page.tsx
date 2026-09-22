@@ -24,6 +24,82 @@ const LIFECYCLE = [
   { n: "9", title: "註銷 Retirement", body: "買方註銷額度，這一公噸永久退出流通，不能再轉讓、也不能再被任何人主張，並換得一張載明受益人與用途的憑證。", who: "本平台", here: true },
 ];
 
+/// 減碳專案的五個大類。這是**人在想事情時**的分類——「我們是做再生能源的」——
+/// 而各國登錄簿的類別表長得不一樣（臺灣是 B-1 到 B-14 的產業別）。
+/// 兩套分類對不齊，正是申請時第一個會撞到的東西，所以這張表兩邊都列。
+///
+/// `catch` 欄不是湊字數：每一類真正會卡住的地方都不同，而那通常不是技術問題，
+/// 是外加性、基線或監測設計的問題。寫在這裡，讓人在寫計畫書之前就知道要準備什麼。
+const METHOD_FAMILIES = [
+  {
+    key: "sink",
+    title: "自然碳匯與碳移除",
+    lead: "把已經排到大氣裡的碳抓回來、存起來——靠植物、土壤、海岸濕地，或工程封存。",
+    examples: "造林與再造林、森林經營改善、土壤有機碳、紅樹林與海草的藍碳復育、CCS 地質封存",
+    tw: "B-14 造林與植林",
+    au: "Plantation forestry、Reforestation by environmental or mallee plantings FullCAM 2024、Improved forest management in multiple-use public native forests、Savanna fire management、Tidal restoration of blue carbon ecosystems、Carbon capture and storage",
+    catch:
+      "**永久性**。其他四類減的是「沒排出去的碳」，這一類存的是「已經抓回來的碳」——" +
+      "而抓回來的碳會因為火災、病蟲害、砍伐或土地變更再跑出去。所以這一類的方法" +
+      "幾乎都額外要求緩衝額度、長期監測義務與逆轉時的補回機制，計入期也最長" +
+      "（臺灣：移除類型固定型 30 年，是減少排放類型的三倍）。" +
+      "另一個常見的坑是**洩漏**：在這塊地停止砍伐，砍伐移到隔壁，淨減量是零。",
+  },
+  {
+    key: "industry",
+    title: "工業與高溫製程減碳",
+    lead: "鍋爐、加熱爐、熔煉、窯爐——把燃料換掉、把廢熱撿回來，或改變製程本身。",
+    examples: "燃料轉換（重油→天然氣）、廢熱回收、高效率設備汰換、製程改善、含氟氣體與 N₂O 削減",
+    tw: "B-4 製造工業、B-5 化學製造業、B-9 金屬製造業、B-3 能源需求業、B-11 來自鹵化物及氟硫化物製造和使用之逸散",
+    au: "Industrial and commercial emissions reduction、Industrial equipment upgrade",
+    catch:
+      "**財務外加性與普遍性**。節能設備常常本來就會回本——一旦「不做也划算」，" +
+      "外加性就站不住。臺灣的辦法把外加性拆成法規、財務、普遍性、障礙四項分析（第 2 條第 6 款），" +
+      "這一類最常靠後兩項過關：技術在國內還不普遍，或存在資金、技術、資訊上的障礙。" +
+      "第二個坑是**基線要綁產量**：少燒的燃料如果是因為減產，那不是減量。監測計畫必須同時記錄產量。",
+  },
+  {
+    key: "renewable",
+    title: "再生能源與能源結構轉型",
+    lead: "用不排碳的電或熱，取代排碳的那一份。",
+    examples: "太陽光電、風力、小水力、地熱、生質能鍋爐、沼氣發電、自用型再生能源熱能",
+    tw: "B-1 能源工業（含再生能源/非再生能源）、B-2 能源輸配業",
+    au: "（ACCU 機制目前不以再生能源發電為主要方法類別，相關減量多由電力市場機制處理）",
+    catch:
+      "**重複計算**，而且有兩個層次。第一，同一度綠電如果已經以再生能源憑證賣出環境效益，" +
+      "再拿來主張碳權就是同一件事賣兩次；臺灣的辦法第 17 條明文要求監測報告要「避免重複計算」。" +
+      "第二，基線用的是**公告的電力排碳係數**（同條），係數逐年下修——電網自己變乾淨時，" +
+      "同一座電廠能主張的減量會逐年變少，這要在財務模型裡先算進去。",
+  },
+  {
+    key: "agriculture",
+    title: "農業與甲烷抑制",
+    lead: "反芻動物的腸道發酵、糞尿處理、水稻田的間歇灌溉、肥料管理。",
+    examples: "畜牧糞尿厭氧消化與沼氣回收、飼料添加劑降低腸道甲烷、水稻田間歇灌溉（AWD）、氮肥管理",
+    tw: "臺灣的類別表**沒有獨立的農業類**（B-1 到 B-14 裡最接近的是 B-13 廢棄物處理及棄置）",
+    au: "Animal effluent management、Estimating soil organic carbon sequestration using measurement and models",
+    catch:
+      "**量測不確定性與 GWP 版本**。甲烷不像燃料有油表可讀，排放量多半靠模型加係數推估，" +
+      "所以這一類的方法通常要求較高的保守性（估低不估高）與較密的抽樣。" +
+      "另外甲烷要換算成 CO₂e，用哪一版 GWP 由各機制規定——換一版，同一個專案的額度數量就不同，" +
+      "跨轄區比較時要先確認雙方用的是不是同一版。",
+  },
+  {
+    key: "waste",
+    title: "廢棄物管理與資源循環",
+    lead: "不讓有機物在無氧環境裡爛掉變成甲烷，或讓材料少走一次高耗能的製程。",
+    examples: "掩埋場沼氣收集與發電、廚餘厭氧消化、堆肥、廢水處理的甲烷回收、材料回收與再生粒料",
+    tw: "B-13 廢棄物處理及棄置",
+    au: "Reducing methane emissions from landfill gas method 2025",
+    catch:
+      "**法規外加性**。這一類最常在第一關就被否決：如果法規已經強制要求收集或處理，" +
+      "那麼做這件事是義務，不是額外的減量——臺灣的定義寫得很直白，外加性要確認其" +
+      "「非法規要求」（第 2 條第 6 款）。所以同一座掩埋場，在法規還沒強制的年代可以申請，" +
+      "法規上路之後就不行了。第二個坑是**基線情境要誠實**：如果沒有這個專案，那些甲烷" +
+      "真的會全部逸散嗎？多數方法會要求扣掉本來就會被火炬燒掉的部分。",
+  },
+] as const;
+
 const ISO_PARTS = [
   { part: "ISO 14064-1", level: "量一整間公司", what: "組織層級的盤查：這間公司一年排了多少、移除了多少，怎麼算、怎麼報。" },
   { part: "ISO 14064-2", level: "量一個專案減了多少", what: "專案層級的量化、監測與報告。要求把排放源、匯與貯存庫列清楚，建立基線情境，並完整規劃專案活動。扣件廠那 1,000 公噸走的就是這一部。", highlight: true },
@@ -37,6 +113,22 @@ function Section({ id, eyebrow, title, children }: { id: string; eyebrow: string
       <h2 className="mt-1 font-display text-xl font-semibold tracking-tight text-ink-50">{title}</h2>
       <div className="mt-4 space-y-4 text-sm leading-7 text-ink-200">{children}</div>
     </section>
+  );
+}
+
+/// 把資料裡的 `**粗體**` 轉成 <b>。
+///
+/// 為什麼需要它：METHOD_FAMILIES 那幾段是**資料**不是 JSX，裡面又真的需要強調
+/// （「最容易卡住的地方」那一句的主詞）。少了這個轉換，畫面上就會出現裸露的星號——
+/// 而且只會出現在後來才加上強調的那幾個欄位，很容易漏看。所以每一個會顯示
+/// 這份資料的地方都走這裡，不要各自處理。
+function Rich({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/\*\*(.+?)\*\*/).map((seg, i) =>
+        i % 2 ? <b key={i} className="text-ink-50">{seg}</b> : <span key={i}>{seg}</span>,
+      )}
+    </>
   );
 }
 
@@ -426,8 +518,62 @@ export default function About() {
         </div>
         <p className="text-ink-300">
           方法學清單<b>會增修</b>——新方法會被審定、舊方法會被停用或改版。
-          所以這裡刻意不列數量與清單內容：請以各該登錄簿當時公告的版本為準，
+          所以這裡刻意不列數量：請以各該登錄簿當時公告的版本為準，
           並注意你註冊時採用的是<b>哪一版</b>，那會跟著專案一路走到查證。
+          臺灣的查詢系統另外註明，減量方法的版次「依據 CDM 網頁最新公告版為準」。
+        </p>
+
+        <h3 className="pt-1 font-display text-base font-semibold text-ink-50">五大類：各自會卡在哪裡</h3>
+        <p>
+          先說一件會省下很多時間的事：<b>你心裡的分類，和登錄簿的分類不是同一套。</b>
+          做減碳的人習慣按技術領域分（「我們是做沼氣的」），而登錄簿按<b>產業別</b>分——
+          臺灣的類別表是 B-1 到 B-14：能源工業、能源輸配業、能源需求業、製造工業、化學製造業、
+          建築業、運輸業、礦業、金屬製造業、燃料逸散、鹵化物及氟硫化物逸散、溶劑之使用、
+          廢棄物處理及棄置、造林與植林。
+          兩套對不齊是常態（例如那張表裡<b>沒有獨立的農業類</b>），所以找方法時要照登錄簿的分類去找，
+          不是照自己的習慣用語去找。
+        </p>
+        <p>
+          下面按五個技術大類整理：典型的專案、在登錄簿裡大致落在哪一類，
+          以及<b>這一類在 ISO 14064-2 的框架下最容易卡住的地方</b>。
+          最後一項通常不是技術問題，而是外加性、基線或監測設計的問題——
+          在寫計畫書之前就該知道要準備什麼。
+        </p>
+        <div className="space-y-3">
+          {METHOD_FAMILIES.map((f, i) => (
+            <div key={f.key} className="rounded-[--radius-card] border border-ink-500 bg-ink-700 p-4">
+              <div className="flex items-baseline gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-ink-600 text-xs font-semibold text-ink-200">
+                  {i + 1}
+                </span>
+                <h4 className="font-display text-sm font-semibold text-ink-50">{f.title}</h4>
+              </div>
+              <p className="mt-2 text-sm leading-6 text-ink-200"><Rich text={f.lead} /></p>
+              <dl className="mt-3 space-y-1.5 text-xs leading-6">
+                <div className="sm:flex sm:gap-3">
+                  <dt className="shrink-0 text-ink-300 sm:w-28">典型專案</dt>
+                  <dd className="text-ink-200"><Rich text={f.examples} /></dd>
+                </div>
+                <div className="sm:flex sm:gap-3">
+                  <dt className="shrink-0 text-ink-300 sm:w-28">臺灣類別</dt>
+                  <dd className="text-ink-200"><Rich text={f.tw} /></dd>
+                </div>
+                <div className="sm:flex sm:gap-3">
+                  <dt className="shrink-0 text-ink-300 sm:w-28">澳洲 ACCU 方法</dt>
+                  <dd className="text-ink-200"><Rich text={f.au} /></dd>
+                </div>
+              </dl>
+              <p className="mt-3 border-t border-ink-500 pt-3 text-xs leading-6 text-ink-300">
+                <b className="text-warn">最容易卡住的地方：</b>
+                <Rich text={f.catch} />
+              </p>
+            </div>
+          ))}
+        </div>
+        <p className="text-ink-300">
+          日本 J-Credit、韓國 KOC、泰國 T-VER、印尼 SPE-GRK 的方法學各有自己的分類與編號，
+          本站不轉述其清單內容——那些清單改得比這一頁快，轉述一次就多一個會過期的地方。
+          請以上一張表裡各該登錄簿公告的版本為準。
         </p>
 
         <h3 className="pt-1 font-display text-base font-semibold text-ink-50">申請流程：以臺灣為例</h3>
