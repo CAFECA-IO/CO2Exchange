@@ -185,7 +185,7 @@ const browser = await launch();
   await page.goto(`${BASE}/about`, { waitUntil: "networkidle" });
   await page.waitForTimeout(1500);
   console.log("/about");
-  for (const id of ["project", "paris", "iso", "lifecycle", "local", "markets", "use"]) {
+  for (const id of ["project", "paris", "iso", "lifecycle", "mint", "local", "markets", "use"]) {
     ok(await page.locator(`#${id}`).count() === 1, `#${id} 章節在介紹頁`);
   }
   ok(await page.locator("text=減量額度成交價").count() > 0, "K 線行情搬到介紹頁");
