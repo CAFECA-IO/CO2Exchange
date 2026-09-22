@@ -9,6 +9,10 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    // e2e 會另起一個實例來測費思（有金鑰／沒金鑰兩種狀態），
+    // 它的輸出放在這裡。不排除的話，lint 會去掃編譯產物，
+    // 吐出上萬條與原始碼無關的訊息，把真正的錯誤埋掉。
+    ".next-faith/**",
     "out/**",
     "build/**",
     "next-env.d.ts",

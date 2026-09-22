@@ -81,8 +81,11 @@ export function Donut({ slices, centerLabel, centerValue, size = 148 }: {
           </text>
         )}
       </svg>
-      {/* 圖例兼直接標示：數字寫在文字上，不是只靠顏色 */}
-      <ul className="space-y-2 text-sm">
+      {/* 圖例兼直接標示：數字寫在文字上，不是只靠顏色。
+          `min-w-0` 不是裝飾：flex 子項的最小寬度預設是**內容寬度**，
+          少了它，圖例裡那串「154,376.1 噸」會把整張卡片撐得比手機螢幕還寬，
+          於是整頁可以左右拖動——而看起來只是「這張卡好像有點寬」。 */}
+      <ul className="min-w-0 flex-1 space-y-2 text-sm">
         {slices.map((s, i) => (
           <li key={s.label} className="flex items-baseline gap-2">
             <span className="mt-1 inline-block h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: CAT[i % CAT.length] }} aria-hidden />
@@ -106,8 +109,11 @@ export function BarList({ rows, unit = "", max }: { rows: { label: string; value
     <ul className="space-y-2.5">
       {rows.map((r) => (
         <li key={r.label}>
-          <div className="flex items-baseline justify-between gap-3 text-sm">
-            <span className="truncate text-ink-200">{r.label}</span>
+          {/* truncate 要能生效，祖先鏈上必須有人肯縮：`min-w-0`。
+              沒有它，`text-overflow: ellipsis` 永遠不會觸發，
+              因為這個 flex 項的最小寬度就是那串沒截斷的文字。 */}
+          <div className="flex min-w-0 items-baseline justify-between gap-3 text-sm">
+            <span className="min-w-0 truncate text-ink-200">{r.label}</span>
             <b className="tnum shrink-0 font-medium text-ink-50">
               {r.value.toLocaleString("zh-TW", { maximumFractionDigits: 3 })}{unit}
             </b>

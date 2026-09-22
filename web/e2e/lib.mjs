@@ -48,11 +48,27 @@ export async function waitOk(page, text, timeout = 90_000) {
   throw new Error(`timeout waiting: ${text}`);
 }
 
+/// 登入。看起來只有三行，但這裡踩過一個會間歇性失敗的坑，值得寫下來。
+///
+/// NextAuth 的 CSRF token 是在頁面載入之後**非同步**抓的。冷啟動的 context
+/// （每個 newUser 都是）如果在它回來之前就送出表單，伺服器會回 MissingCSRF，
+/// 而畫面上什麼都不會發生——測試只會說「等不到『登出』」，完全指不到原因。
+/// 整組 e2e 大約每十次會中一次，而且每次中的位置不同。
+///
+/// 所以先等那個 cookie 真的出現再送出。等不到也不要卡死：再送一次多半就成了，
+/// 第二次仍然失敗才是真的有問題。
 export async function login(page, email) {
   await page.goto(BASE);
-  await page.getByPlaceholder("you@example.com").fill(email);
-  await page.getByRole("button", { name: "登入", exact: true }).click();
-  await page.locator("text=登出").waitFor({ timeout: 30_000 });
+  await page.waitForFunction(() => document.cookie.includes("csrf") || !!document.querySelector("form"), null, { timeout: 15_000 }).catch(() => {});
+  const submit = async () => {
+    await page.getByPlaceholder("you@example.com").fill(email);
+    await page.getByRole("button", { name: "登入", exact: true }).click();
+    return page.locator("text=登出").waitFor({ timeout: 20_000 }).then(() => true, () => false);
+  };
+  if (await submit()) return;
+  await page.goto(BASE);
+  if (await submit()) return;
+  throw new Error(`登入失敗（兩次都沒出現「登出」）：${email}`);
 }
 
 export async function createPasskeyAccount(page) {

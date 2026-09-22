@@ -139,3 +139,27 @@ body {
   scrollbar-color: var(--color-ink-500) transparent;
   scrollbar-width: thin;
 }
+
+/*
+  搜尋命中之後短暫標出那一段。
+  用 outline 而不是 background：內文裡有卡片、表格與 Notice，各自有自己的底色，
+  換底色會把那些區塊的意思一起改掉（例如把一則錯誤提示變成普通段落）。
+  outline 不佔版面，所以標記出現與消失時文字不會跳動。
+*/
+@keyframes nav-flash {
+  0%   { outline-color: color-mix(in srgb, var(--color-tide) 85%, transparent); }
+  100% { outline-color: transparent; }
+}
+.nav-flash {
+  outline: 2px solid transparent;
+  outline-offset: 4px;
+  border-radius: 6px;
+  animation: nav-flash 2s ease-out forwards;
+}
+/* 會動的東西一律尊重系統設定：直接給一個靜止的標記，兩秒後由 JS 移除。 */
+@media (prefers-reduced-motion: reduce) {
+  .nav-flash {
+    animation: none;
+    outline-color: color-mix(in srgb, var(--color-tide) 85%, transparent);
+  }
+}

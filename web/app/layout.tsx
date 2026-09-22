@@ -3,6 +3,7 @@ import "./globals.css";
 import { AccountProvider } from "@/components/AccountProvider";
 import { Nav } from "@/components/Nav";
 import { Footer } from "@/components/Footer";
+import { Faith } from "@/components/Faith";
 
 export const metadata: Metadata = {
   title: { default: "TideBit-DeFi 碳權交易所", template: "%s｜TideBit-DeFi 碳權交易所" },
@@ -67,6 +68,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <Nav />
           <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">{children}</main>
           <Footer />
+          {/*
+            費思在 AccountProvider 之內：它要讀登入狀態與錢包，代操時也走同一條
+            relay（所以那條路徑上的所有檢查——地址確認、凍結、金鑰有效性——
+            對費思一律適用，不必也不該另開一條）。
+          */}
+          <Faith />
         </AccountProvider>
       </body>
     </html>

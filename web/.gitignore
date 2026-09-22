@@ -45,3 +45,4 @@ data/
 data.bak-*/
 .env.local
 e2e/*.png
+.next-faith

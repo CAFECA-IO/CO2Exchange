@@ -3,6 +3,7 @@ import { Notice } from "@/components/ui";
 import { MarketPanel } from "@/components/MarketPanel";
 import { MarketOverview } from "@/components/MarketOverview";
 import Link from "next/link";
+import { ChapterNav } from "@/components/ChapterNav";
 
 /// 認識碳權。首頁是市場現況，這一頁回答「這個市場在交易什麼」。
 ///
@@ -78,27 +79,21 @@ export default function About() {
           所以本站在每一筆掛單、每一次下單確認、每一張憑證上都標明核發國與機制——
           判斷留給你和你的顧問，資訊由我們負責講清楚。
         </p>
-        <nav aria-label="本頁章節" className="flex flex-wrap gap-2 pt-1 text-xs">
-          {[
-            ["#project", "什麼是自願減量專案"],
-            ["#paris", "巴黎協定第六條"],
-            ["#iso", "ISO 14064"],
-            ["#lifecycle", "專案生命週期"],
-            ["#local", "為什麼優先買在地"],
-            ["#markets", "亞太各國額度"],
-            ["#use", "能用在哪"],
-            ["#wallet", "你的錢包怎麼運作"],
-          ].map(([href, label]) => (
-            <a key={href} href={href} className="rounded-full border border-ink-500 px-3 py-1 text-ink-300 transition hover:border-tide/60 hover:text-ink-50">
-              {label}
-            </a>
-          ))}
-        </nav>
       </header>
 
       {/* ── 行情與市場概況：圖表都在這一頁 ───────────────────────── */}
       <MarketPanel />
       <MarketOverview />
+
+      {/*
+        兩欄：左邊是常駐的章節導覽，右邊是內文。
+        `minmax(0,1fr)` 而不是 `1fr`——grid 項目的最小寬度預設是內容寬度，
+        內文裡有寬表格時右欄會把左欄擠掉，而且是在某些螢幕寬度下才發生。
+        導覽自己是 sticky 的，所以外層不能有 overflow，否則 sticky 立刻失效。
+      */}
+      <div className="lg:grid lg:grid-cols-[210px_minmax(0,1fr)] lg:gap-10">
+        <ChapterNav />
+        <div className="space-y-14">
 
       {/* ── 什麼是自願減量專案 ──────────────────────────────────────── */}
       <Section id="project" eyebrow="本平台交易的標的" title="什麼是自願減量專案：從一家扣件廠說起">
@@ -700,6 +695,8 @@ export default function About() {
           管理你自己的裝置在<Link className="text-tide underline" href="/account">裝置與安全</Link>。
         </p>
       </Section>
+        </div>
+      </div>
     </div>
   );
 }

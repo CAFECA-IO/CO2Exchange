@@ -190,6 +190,56 @@ const browser = await launch();
   }
   ok(await page.locator("text=減量額度成交價").count() > 0, "K 線行情搬到介紹頁");
   ok(await page.getByRole("link", { name: "認識碳權" }).count() > 0, "導覽列有「認識碳權」");
+
+  // ── 章節導覽：捲到哪都看得到目錄，而且找得到其他章節的內容 ──────
+  //
+  // 這一頁七千多字。導覽要解決的是「我讀到一半，想知道別章有沒有寫我要的東西」，
+  // 所以三件事都要測：目錄常駐、現在讀到哪、以及**全文**搜尋得到並跳得過去。
+  await page.locator('[data-testid="chapter-list"]').waitFor({ timeout: 10_000 }).catch(() => {});
+  await page.locator('[data-testid="chapter-search"]').hover();
+  ok(await page.locator('[data-testid="chapter-list"] button').count() >= 8, "側邊目錄列出所有章節");
+
+  // 捲到最後一章，目錄要跟著標出來，而且**還在畫面上**（sticky）
+  await page.locator("#wallet").scrollIntoViewIfNeeded();
+  await page.waitForTimeout(600);
+  const current = await page.locator('[data-testid="chapter-list"] button[aria-current="true"]').innerText();
+  ok(/錢包/.test(current), `捲到哪就標到哪（目前：${current.replace(/\s+/g, " ").trim()}）`);
+  ok(await page.locator('[data-testid="chapter-search"]').isVisible(), "捲到頁尾了，目錄與搜尋還在畫面上");
+
+  // 全文搜尋：查一個只出現在別章的詞，命中要標明屬於哪一章
+  await page.locator('[data-testid="chapter-search"]').fill("碳費");
+  await page.locator('[data-testid="chapter-results"]').waitFor({ timeout: 5_000 });
+  const results = page.locator('[data-testid="chapter-results"] button');
+  ok(await results.count() > 0, "搜尋得到內文（不只是章節標題）");
+  ok((await page.locator('[data-testid="chapter-results"]').innerText()).includes("章節"), "並且說明命中分布在幾個章節");
+
+  // 點命中要跳到**那一段**並標起來，不是只跳到章節開頭
+  await results.first().click();
+  await page.waitForTimeout(800);
+  ok(await page.locator(".nav-flash").count() > 0, "點命中會跳到那一段並短暫標出來");
+
+  // 查不到要說查不到，不要留一個空白面板
+  await page.locator('[data-testid="chapter-search"]').fill("zzzz不存在的詞zzzz");
+  await page.waitForTimeout(400);
+  ok((await page.locator('[data-testid="chapter-results"]').innerText()).includes("沒有提到"), "查不到時明講，並指路到契約");
+
+  await ctx.close();
+}
+
+// ── /about 的章節導覽在手機上：收起來，但一定找得到 ──────────────
+{
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 780 } });
+  const page = await ctx.newPage();
+  await page.goto(`${BASE}/about`, { waitUntil: "networkidle" });
+  await page.waitForTimeout(1200);
+  console.log("/about（手機）");
+  ok(!(await page.locator('[data-testid="chapter-list"]').isVisible().catch(() => false)),
+     "小螢幕不常駐目錄（那會吃掉半個畫面）");
+  await page.locator('[data-testid="chapter-open"]').click();
+  await page.locator('[data-testid="chapter-search"]').waitFor({ timeout: 5_000 });
+  ok(await page.locator('[data-testid="chapter-list"] button').count() >= 8, "點開之後看得到完整目錄");
+  const w = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
+  ok(w, "手機不橫捲");
   await ctx.close();
 }
 

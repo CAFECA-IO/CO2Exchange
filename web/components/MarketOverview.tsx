@@ -74,7 +74,12 @@ export function MarketOverview() {
         <StatTile label="參與事業" value={`${s.participants}`} sub={`累計移轉 ${fmtT(s.transferredKg)}`} />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr]">
+      {/* `minmax(0,…)` 而不是 `1fr`：grid 項目的最小寬度預設是內容寬度，
+          所以一張內容很寬的卡片會把整條軌道（連同整個頁面）撐開。 */}
+      {/* `grid-cols-1` 看起來多餘（單欄本來就是預設），但它換掉的是**軌道的最小尺寸**：
+          隱含軌道是 `auto`，會被最寬的那張卡撐開；Tailwind 的 grid-cols-1 是
+          `minmax(0,1fr)`，肯縮。少了這一個類別，手機上整頁可以左右拖動。 */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
         <Card title="額度去了哪裡">
           <Donut
             slices={[
