@@ -512,6 +512,9 @@ contract Deploy is Script {
         vm.serializeUint(j, "tickSpacing", 60);
         vm.serializeAddress(j, "accountFactory", address(accountFactory));
         vm.serializeAddress(j, "bank", address(bank));
+        // 手續費的收款人。資產池模型下它也是餘額樹裡的一個帳戶——
+        // 手續費留在池子裡、記在國庫名下，所以樹的總額才對得上池子實際持有。
+        vm.serializeAddress(j, "treasury", cfg.treasury);
         vm.serializeAddress(j, "nationalSafe", address(nationalSafe));
         vm.serializeAddress(j, "operatorSafe", address(operatorSafe));
         vm.serializeUint(j, "timelockDelay", cfg.timelockDelay);

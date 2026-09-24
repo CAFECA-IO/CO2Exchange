@@ -19,8 +19,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createPublicClient, defineChain, http, parseAbi } from "viem";
 
-const { buildBalanceTree } = await import("../lib/bank/tree.ts");
-const { deriveLedger } = await import("../lib/bank/ledger-core.ts");
+const { replay } = await import("../lib/bank/replay.ts");
 
 const arg = (n) => {
   const i = process.argv.indexOf(`--${n}`);
@@ -36,7 +35,7 @@ const abi = parseAbi([
   "struct WithdrawProof { uint64 proofEpoch; bytes32 assetsRoot; uint256 leafKg; uint256 leafCash; Node[] siblings; uint256 path; uint256 batchKg; bytes32[] assetSiblings; uint256 assetPath; }",
   "struct Node { bytes32 hash; uint256 kg; uint256 cash; }",
   "function epoch() view returns (uint64)",
-  "function commitments(uint64) view returns (bytes32,bytes32,uint256,uint256,bytes32,uint64,uint64)",
+  "function commitments(uint64) view returns (bytes32,bytes32,uint256,uint256,bytes32,uint64,uint64,uint64)",
   "function withdrawalsEnabled() view returns (bool)",
   "function withdraw(uint256 batchId, uint256 amountKg, WithdrawProof p)",
   // error 也要放進 ABI，否則 viem 只回得出四個位元組的選擇器，
@@ -64,12 +63,20 @@ const D = JSON.parse(fs.readFileSync(
 const epoch = await client.readContract({ address: D.bank, abi, functionName: "epoch" });
 const c = await client.readContract({ address: D.bank, abi, functionName: "commitments", args: [epoch] });
 const balanceRoot = c[1];
-const upToBlock = c[5];
+const lastSeq = c[6];
 
-const ledger = await deriveLedger({
-  client, bank: D.bank, fromBlock: BigInt(D.deployedAtBlock ?? 0), toBlock: BigInt(upToBlock),
-});
-const tree = buildBalanceTree(ledger.balances, epoch);
+// 樹來自**重播委託單 log**（B 期之後），而且只讀到這一期的 lastSeq 為止。
+function readLog(upTo) {
+  const dir = process.env.ORDERLOG_DIR ?? path.resolve(process.cwd(), "data", "orderlog");
+  const file = path.join(dir, "events.jsonl");
+  if (!fs.existsSync(file)) return [];
+  const reviver = (_k, v) => (typeof v === "string" && /^\d+n$/.test(v) ? BigInt(v.slice(0, -1)) : v);
+  return fs.readFileSync(file, "utf8").split("\n").filter((l) => l.trim())
+    .map((l) => JSON.parse(l, reviver))
+    .filter((e) => e.seq <= upTo)
+    .sort((a, b) => (a.seq < b.seq ? -1 : a.seq > b.seq ? 1 : 0));
+}
+const { tree } = replay(readLog(BigInt(lastSeq)), epoch, D.treasury);
 if (tree.root.hash !== balanceRoot) {
   console.error(`重建的 root 和鏈上第 ${epoch} 期對不上，證據不會過。先跑 npm run bank:verify。`);
   process.exit(1);

@@ -25,8 +25,9 @@ import path from "node:path";
 import { createPublicClient, createWalletClient, defineChain, http, parseAbi } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
-const { buildBalanceTree, totalsHashOf } = await import("../lib/bank/tree.ts");
-const { deriveLedger } = await import("../lib/bank/ledger-core.ts");
+const { totalsHashOf } = await import("../lib/bank/tree.ts");
+const { replay, checkExternalEvents } = await import("../lib/bank/replay.ts");
+const { toBalances } = await import("../lib/bank/engine.ts");
 
 const dry = process.argv.includes("--dry-run") || process.argv.includes("--plan");
 const RPC = process.env.RPC_URL ?? "http://127.0.0.1:28545";
@@ -35,7 +36,7 @@ const bankAbi = parseAbi([
   "function head() view returns (bytes32)",
   "function epoch() view returns (uint64)",
   "function solvency() view returns (uint256 owedKg, uint256 heldKg, uint256 owedCash, uint256 heldCash)",
-  "function commit(bytes32 prev, uint64 newEpoch, bytes32 orderLogRoot, bytes32 balanceRoot, uint256 totalKg, uint256 totalCash, bytes32 totalsHash, uint64 upToBlock) returns (bytes32)",
+  "function commit(bytes32 prev, uint64 newEpoch, bytes32 orderLogRoot, bytes32 balanceRoot, uint256 totalKg, uint256 totalCash, bytes32 totalsHash, uint64 upToBlock, uint64 lastSeq) returns (bytes32)",
 ]);
 
 const pub0 = createPublicClient({ transport: http(RPC) });
@@ -57,6 +58,18 @@ if (!D.bank) {
   process.exit(1);
 }
 
+/// 委託單 log（JSONL）。這支腳本不經過 Next，所以自己讀檔——
+/// 格式與 lib/server/bank/log-store.ts 寫出去的一致。
+function readLog() {
+  const dir = process.env.ORDERLOG_DIR ?? path.resolve(process.cwd(), "data", "orderlog");
+  const file = path.join(dir, "events.jsonl");
+  if (!fs.existsSync(file)) return [];
+  const reviver = (_k, v) => (typeof v === "string" && /^\d+n$/.test(v) ? BigInt(v.slice(0, -1)) : v);
+  return fs.readFileSync(file, "utf8").split("\n").filter((l) => l.trim())
+    .map((l) => JSON.parse(l, reviver))
+    .sort((a, b) => (a.seq < b.seq ? -1 : a.seq > b.seq ? 1 : 0));
+}
+
 const [head, current, solvency, toBlock] = await Promise.all([
   client.readContract({ address: D.bank, abi: bankAbi, functionName: "head" }),
   client.readContract({ address: D.bank, abi: bankAbi, functionName: "epoch" }),
@@ -64,30 +77,55 @@ const [head, current, solvency, toBlock] = await Promise.all([
   client.getBlockNumber(),
 ]);
 
-const ledger = await deriveLedger({
-  client, bank: D.bank, fromBlock: BigInt(D.deployedAtBlock ?? 0), toBlock,
-});
-if (ledger.balances.length === 0) {
-  console.log("這一期沒有任何帳戶有餘額，不需要提交。");
+// 委託單 log 是餘額的來源，不是鏈上餘額——B 期之後，帳上的數字包含了鏈下成交。
+// 鏈上事件仍然要對，但它的角色變成「log 裡宣稱的外部事件是不是真的」（見下）。
+const events = readLog();
+if (events.length === 0) {
+  console.log("委託單 log 是空的，這一期沒有東西可以提交。");
   process.exit(0);
 }
-
 const epoch = current + 1n;
-const tree = buildBalanceTree(ledger.balances, epoch);
+const r = replay(events, epoch, D.treasury);
+if (r.tree.root.kg === 0n && r.tree.root.cash === 0n) {
+  console.log("重播之後沒有任何餘額，不需要提交。");
+  process.exit(0);
+}
+const tree = r.tree;
 const totalsHash = totalsHashOf(tree.totalsByBatch, tree.root.cash);
+const lastSeq = events[events.length - 1].seq;
+const accountCount = toBalances(r.state, D.treasury).length;
 const [, heldKg, , heldCash] = solvency;
+
+// log 裡宣稱的外部事件，鏈上真的有嗎？
+//
+// 這一道和重播是**獨立**的兩件事。重播只保證「餘額是從 log 算出來的」；
+// 如果交易所可以在 log 裡塞一筆不存在的存入，餘額樹會完全自洽，而池子裡沒有那些東西。
+const ext = await checkExternalEvents({
+  client, bank: D.bank, fromBlock: BigInt(D.deployedAtBlock ?? 0), toBlock, events,
+});
 
 const kg = (v) => `${(Number(v) / 1000).toLocaleString("zh-TW")} 噸`;
 const twd = (v) => `${(Number(v) / 1e6).toLocaleString("zh-TW")} mTWD`;
 
 console.log(`第 ${epoch} 期`);
-console.log(`  帳戶數        ${ledger.balances.length}`);
+console.log(`  委託單        ${r.events} 筆（到第 ${lastSeq} 號）、成交 ${r.fills} 筆、拒絕 ${r.rejected.length} 筆`);
+console.log(`  帳戶數        ${accountCount}`);
 console.log(`  算到區塊      ${toBlock}`);
 console.log(`  上一個 anchor ${head}`);
+console.log(`  委託單 root   ${r.orderLogRoot}`);
+console.log(`  事件鏈 head   ${r.runningHash}`);
 console.log(`  餘額樹 root   ${tree.root.hash}`);
 console.log(`  totalsHash    ${totalsHash}（${tree.totalsByBatch.length} 個批次）`);
 console.log(`  碳權  帳本 ${kg(tree.root.kg)} / 池子 ${kg(heldKg)}（差 ${kg(heldKg - tree.root.kg)}）`);
 console.log(`  現金  帳本 ${twd(tree.root.cash)} / 池子 ${twd(heldCash)}（差 ${twd(heldCash - tree.root.cash)}）`);
+
+if (!ext.ok) {
+  console.error(`\n外部事件對不上鏈（${ext.checked} 筆檢查）：`);
+  for (const p2 of ext.problems.slice(0, 10)) console.error(`  · ${p2}`);
+  console.error("不要提交——log 裡宣稱的存入／提領與鏈上不符。");
+  process.exit(1);
+}
+console.log(`  外部事件      ${ext.checked} 筆，與鏈上相符`);
 
 // 合約也會擋（Insolvent），但在這裡先擋一次，錯誤訊息才說得出是哪一邊多了。
 if (tree.root.kg > heldKg || tree.root.cash > heldCash) {
@@ -107,12 +145,9 @@ if (!pk) {
 }
 const wallet = createWalletClient({ account: privateKeyToAccount(pk), chain, transport: http(RPC) });
 
-// orderLogRoot 在 A 期是零：委託單 log 是 B 期的事。欄位現在就留著而不是之後再加，
-// 因為 anchor 的組成一旦改變，之前所有的 anchor 就要用不同公式重算——那等於承諾鏈斷掉。
-const ZERO = `0x${"0".repeat(64)}`;
 const { request } = await client.simulateContract({
   address: D.bank, abi: bankAbi, functionName: "commit",
-  args: [head, epoch, ZERO, tree.root.hash, tree.root.kg, tree.root.cash, totalsHash, toBlock],
+  args: [head, epoch, r.orderLogRoot, tree.root.hash, tree.root.kg, tree.root.cash, totalsHash, toBlock, lastSeq],
   account: wallet.account,
 });
 const hash = await wallet.writeContract(request);

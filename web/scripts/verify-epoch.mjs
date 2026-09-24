@@ -30,8 +30,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { createPublicClient, defineChain, http, parseAbi } from "viem";
 
-const { buildBalanceTree, totalsHashOf } = await import("../lib/bank/tree.ts");
-const { deriveLedger } = await import("../lib/bank/ledger-core.ts");
+const { totalsHashOf } = await import("../lib/bank/tree.ts");
+const { replay, checkExternalEvents } = await import("../lib/bank/replay.ts");
 
 const arg = (n) => {
   const i = process.argv.indexOf(`--${n}`);
@@ -42,7 +42,7 @@ const RPC = arg("rpc") ?? process.env.RPC_URL ?? "http://127.0.0.1:28545";
 const bankAbi = parseAbi([
   "function epoch() view returns (uint64)",
   "function totalHeldKg() view returns (uint256)",
-  "function commitments(uint64) view returns (bytes32 orderLogRoot, bytes32 balanceRoot, uint256 totalKg, uint256 totalCash, bytes32 totalsHash, uint64 upToBlock, uint64 committedAt)",
+  "function commitments(uint64) view returns (bytes32 orderLogRoot, bytes32 balanceRoot, uint256 totalKg, uint256 totalCash, bytes32 totalsHash, uint64 upToBlock, uint64 lastSeq, uint64 committedAt)",
 ]);
 const erc20Abi = parseAbi(["function balanceOf(address) view returns (uint256)"]);
 
@@ -66,20 +66,36 @@ const latest = await client.readContract({ address: D.bank, abi: bankAbi, functi
 const epoch = arg("epoch") ? BigInt(arg("epoch")) : latest;
 if (epoch === 0n) { console.error("這條鏈上還沒有任何一期的承諾。"); process.exit(1); }
 
-const [, balanceRoot, totalKg, totalCash, totalsHash, upToBlock, committedAt] =
+const [onchainLogRoot, balanceRoot, totalKg, totalCash, totalsHash, upToBlock, lastSeq, committedAt] =
   await client.readContract({ address: D.bank, abi: bankAbi, functionName: "commitments", args: [epoch] });
 
 console.log(`第 ${epoch} 期（chainId ${chainId}）`);
 console.log(`  提交於      ${new Date(Number(committedAt) * 1000).toISOString()}`);
 console.log(`  算到區塊    ${upToBlock}`);
+console.log(`  委託單到第  ${lastSeq} 號`);
 console.log(`  鏈上 root   ${balanceRoot}\n`);
 
-const ledger = await deriveLedger({
-  client, bank: D.bank, fromBlock: BigInt(D.deployedAtBlock ?? 0), toBlock: BigInt(upToBlock),
-});
-if (ledger.balances.length === 0) { console.error("重新推導出 0 個帳戶，但鏈上有承諾——對不上。"); process.exit(1); }
+/// 委託單 log（JSONL）。驗證的人手上要有這份檔——它是交易所發布的批次檔內容。
+function readLog(upTo) {
+  const dir = process.env.ORDERLOG_DIR ?? path.resolve(process.cwd(), "data", "orderlog");
+  const file = path.join(dir, "events.jsonl");
+  if (!fs.existsSync(file)) return [];
+  const reviver = (_k, v) => (typeof v === "string" && /^\d+n$/.test(v) ? BigInt(v.slice(0, -1)) : v);
+  return fs.readFileSync(file, "utf8").split("\n").filter((l) => l.trim())
+    .map((l) => JSON.parse(l, reviver))
+    .filter((e) => e.seq <= upTo)
+    .sort((a, b) => (a.seq < b.seq ? -1 : a.seq > b.seq ? 1 : 0));
+}
 
-const tree = buildBalanceTree(ledger.balances, epoch);
+const events = readLog(BigInt(lastSeq));
+if (events.length === 0 && lastSeq > 0n) {
+  console.error(`鏈上說這一期涵蓋到第 ${lastSeq} 號事件，但本機的委託單 log 是空的。`);
+  console.error("驗證需要交易所發布的批次檔（明細只給監理與查核）。");
+  process.exit(1);
+}
+
+const r = replay(events, epoch, D.treasury);
+const tree = r.tree;
 const computedTotals = totalsHashOf(tree.totalsByBatch, tree.root.cash);
 
 let bad = 0;
@@ -90,11 +106,28 @@ const check = (label, expected, got) => {
   if (!okay) console.log(`      鏈上 ${expected}\n      重算 ${got}`);
 };
 
-console.log(`重新推導（${ledger.balances.length} 個帳戶、${tree.totalsByBatch.length} 個批次）`);
+console.log(`重播委託單 log（${r.events} 筆事件、成交 ${r.fills} 筆、${tree.totalsByBatch.length} 個批次）`);
+check("委託單 root", onchainLogRoot, r.orderLogRoot);
 check("餘額樹 root", balanceRoot, tree.root.hash);
 check("總公斤數", totalKg, tree.root.kg);
 check("總結算幣", totalCash, tree.root.cash);
 check("逐批次明細 totalsHash", totalsHash, computedTotals);
+
+// log 裡宣稱的外部事件，鏈上真的有嗎？
+//
+// 這一道和重播是**獨立**的兩件事，缺一不可：
+//   · 重播對得上 → 餘額確實是從 log 算出來的
+//   · 外部事件對得上 → log 裡沒有憑空多出來的存入
+// 只驗前者的話，交易所可以在 log 裡塞一筆不存在的存入，而整棵樹完全自洽。
+const ext = await checkExternalEvents({
+  client, bank: D.bank, fromBlock: BigInt(D.deployedAtBlock ?? 0), toBlock: BigInt(upToBlock), events,
+});
+console.log(`\n外部事件（${ext.checked} 筆）`);
+if (ext.ok) console.log("  ✓ log 裡宣稱的存入／註銷／提領，鏈上都找得到，而且沒有漏記");
+else {
+  bad += 1;
+  for (const p2 of ext.problems.slice(0, 10)) console.log(`  ✗ ${p2}`);
+}
 
 // 償付能力：宣稱欠多少 vs 池子裡實際有多少。
 const heldKg = await client.readContract({ address: D.bank, abi: bankAbi, functionName: "totalHeldKg" });
@@ -126,9 +159,11 @@ if (account) {
     console.log(`     碳權 ${p.leafKg} kg、現金 ${p.leafCash}`);
     console.log(`     assetsRoot ${p.assetsRoot}`);
     console.log(`     兄弟節點 ${p.siblings.length} 個、path 0b${p.path.toString(2)}`);
-    for (const a of ledger.balances.find((b) => b.account.toLowerCase() === account.toLowerCase()).assets) {
-      const ap = tree.assetProofOf(account, a.batchId);
-      console.log(`     批次 ${a.batchId}：${ap.kg} kg，資產樹兄弟 ${ap.siblings.length} 個`);
+    for (const t of tree.totalsByBatch) {
+      try {
+        const ap = tree.assetProofOf(account, t.batchId);
+        console.log(`     批次 ${t.batchId}：${ap.kg} kg，資產樹兄弟 ${ap.siblings.length} 個`);
+      } catch { /* 這個帳戶沒有這個批次 */ }
     }
   } catch (e) {
     bad += 1;

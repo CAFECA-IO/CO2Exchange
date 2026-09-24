@@ -75,6 +75,12 @@ contract Bank is AccessControl, ERC1155Holder {
         ///      而他無法判斷是自己讀錯還是交易所報錯。
         ///      這是整個 A 期可驗證性的邊界條件，所以它必須上鏈，不能只寫在檔案裡。
         uint64 upToBlock;
+        /// @dev 這一期涵蓋到委託單 log 的第幾號事件為止（上一期的 lastSeq + 1 起算）。
+        ///
+        ///      和 `upToBlock` 同一個道理：少了它，重播的人不知道哪些事件屬於這一期，
+        ///      而 `orderLogRoot` 就驗不了。兩個邊界——鏈上事件讀到哪、log 讀到哪——
+        ///      都必須上鏈，「任何人都能重算」才不是空話。
+        uint64 lastSeq;
         uint64 committedAt;
     }
 
@@ -101,7 +107,8 @@ contract Bank is AccessControl, ERC1155Holder {
         uint256 totalKg,
         uint256 totalCash,
         bytes32 totalsHash,
-        uint64 upToBlock
+        uint64 upToBlock,
+        uint64 lastSeq
     );
     event Withdrawn(address indexed account, uint256 indexed batchId, uint256 amountKg, uint64 epoch);
     event CashWithdrawn(address indexed account, uint256 amount, uint64 epoch);
@@ -119,6 +126,7 @@ contract Bank is AccessControl, ERC1155Holder {
     error WithdrawalsDisabled();
     error Insolvent(uint256 owed, uint256 held);
     error BadUpToBlock(uint64 upToBlock, uint256 head);
+    error BadLastSeq(uint64 given, uint64 previous);
 
     constructor(address credit_, address cash_, address sovereign, address operator) {
         credit = CarbonCredit1155(credit_);
@@ -166,7 +174,8 @@ contract Bank is AccessControl, ERC1155Holder {
         uint256 totalKg,
         uint256 totalCash,
         bytes32 totalsHash,
-        uint64 upToBlock
+        uint64 upToBlock,
+        uint64 lastSeq
     ) external onlyRole(COMMITTER_ROLE) returns (bytes32 anchor) {
         if (prev != head) revert ChainBroken(head, prev);
         if (newEpoch != epoch + 1) revert EpochOutOfOrder(epoch + 1, newEpoch);
@@ -181,8 +190,10 @@ contract Bank is AccessControl, ERC1155Holder {
         if (upToBlock > block.number || upToBlock <= commitments[epoch].upToBlock) {
             revert BadUpToBlock(upToBlock, block.number);
         }
+        // log 的序號只能往前。倒退等於把同一批事件算進兩期，那兩期的 root 都沒有意義。
+        if (lastSeq < commitments[epoch].lastSeq) revert BadLastSeq(lastSeq, commitments[epoch].lastSeq);
         anchor = keccak256(
-            abi.encode(prev, newEpoch, orderLogRoot, balanceRoot, totalKg, totalCash, totalsHash, upToBlock)
+            abi.encode(prev, newEpoch, orderLogRoot, balanceRoot, totalKg, totalCash, totalsHash, upToBlock, lastSeq)
         );
         head = anchor;
         epoch = newEpoch;
@@ -193,9 +204,10 @@ contract Bank is AccessControl, ERC1155Holder {
             totalCash: totalCash,
             totalsHash: totalsHash,
             upToBlock: upToBlock,
+            lastSeq: lastSeq,
             committedAt: uint64(block.timestamp)
         });
-        emit Committed(newEpoch, anchor, orderLogRoot, balanceRoot, totalKg, totalCash, totalsHash, upToBlock);
+        emit Committed(newEpoch, anchor, orderLogRoot, balanceRoot, totalKg, totalCash, totalsHash, upToBlock, lastSeq);
     }
 
     // ───────────────────────── 註銷（記名） ─────────────────────────

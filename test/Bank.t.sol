@@ -84,7 +84,7 @@ contract BankTest is Fixture {
         // 接在錯的地方要被擋下來。這一條就是「串連」。
         vm.prank(committer);
         vm.expectRevert(abi.encodeWithSelector(Bank.ChainBroken.selector, a1, bytes32(0)));
-        bank.commit(bytes32(0), 2, bytes32("root2"), bytes32("b2"), 0, 0, bytes32(0), uint64(block.number));
+        bank.commit(bytes32(0), 2, bytes32("root2"), bytes32("b2"), 0, 0, bytes32(0), uint64(block.number), 0);
 
         bytes32 a2 = _commit(a1, 2, bytes32("root2"), 10_000, 0);
         assertTrue(a2 != a1);
@@ -95,7 +95,7 @@ contract BankTest is Fixture {
         bytes32 a1 = _commit(bytes32(0), 1, bytes32("root1"), 0, 0);
         vm.prank(committer);
         vm.expectRevert(abi.encodeWithSelector(Bank.EpochOutOfOrder.selector, 2, 5));
-        bank.commit(a1, 5, bytes32("root5"), bytes32("b5"), 0, 0, bytes32(0), uint64(block.number));
+        bank.commit(a1, 5, bytes32("root5"), bytes32("b5"), 0, 0, bytes32(0), uint64(block.number), 0);
     }
 
     /// 宣稱欠的比池子裡有的多 → 擋下來。
@@ -107,13 +107,13 @@ contract BankTest is Fixture {
         _fund(companyB, batchA, 1_000);
         vm.prank(committer);
         vm.expectRevert(abi.encodeWithSelector(Bank.Insolvent.selector, 1_001, 1_000));
-        bank.commit(bytes32(0), 1, bytes32("r"), bytes32("b"), 1_001, 0, bytes32(0), uint64(block.number));
+        bank.commit(bytes32(0), 1, bytes32("r"), bytes32("b"), 1_001, 0, bytes32(0), uint64(block.number), 0);
     }
 
     function test_commit_onlyCommitterRole() public {
         vm.prank(operator);
         vm.expectRevert();
-        bank.commit(bytes32(0), 1, bytes32("r"), bytes32("b"), 0, 0, bytes32(0), uint64(block.number));
+        bank.commit(bytes32(0), 1, bytes32("r"), bytes32("b"), 0, 0, bytes32(0), uint64(block.number), 0);
     }
 
     /// 每一期都要記「這棵樹算到哪一個區塊為止」，而且必須嚴格遞增。
@@ -127,12 +127,12 @@ contract BankTest is Fixture {
         vm.expectRevert(
             abi.encodeWithSelector(Bank.BadUpToBlock.selector, uint64(block.number + 10), block.number)
         );
-        bank.commit(a1, 2, bytes32("o"), bytes32("r2"), 0, 0, bytes32(0), uint64(block.number + 10));
+        bank.commit(a1, 2, bytes32("o"), bytes32("r2"), 0, 0, bytes32(0), uint64(block.number + 10), 0);
 
         // 倒退也不行——同一段區塊被算進兩期，那兩期的樹就沒有意義了
         vm.prank(committer);
         vm.expectRevert();
-        bank.commit(a1, 2, bytes32("o"), bytes32("r2"), 0, 0, bytes32(0), uint64(block.number - 1));
+        bank.commit(a1, 2, bytes32("o"), bytes32("r2"), 0, 0, bytes32(0), uint64(block.number - 1), 0);
     }
 
     // ───────────────────────── 註銷（記名） ─────────────────────────
@@ -276,7 +276,8 @@ contract BankTest is Fixture {
         vm.roll(block.number + 1);
         vm.prank(committer);
         return bank.commit(
-            prev, ep, bytes32("orderlog"), balanceRoot, totalKg, totalCash, bytes32("totals"), uint64(block.number)
+            prev, ep, bytes32("orderlog"), balanceRoot, totalKg, totalCash, bytes32("totals"),
+            uint64(block.number), 0
         );
     }
 

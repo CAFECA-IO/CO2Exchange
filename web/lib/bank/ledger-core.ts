@@ -1,5 +1,5 @@
 import { parseAbiItem, type Address, type PublicClient } from "viem";
-import type { AccountBalance } from "./tree";
+import type { AccountBalance } from "./tree.ts";
 
 /// 從鏈上事件推導出「誰在 Bank 裡有多少」。
 ///

@@ -32,7 +32,7 @@ export async function GET() {
       commitment: c
         ? {
             orderLogRoot: c[0], balanceRoot: c[1], totalKg: c[2], totalCash: c[3],
-            totalsHash: c[4], upToBlock: c[5], committedAt: c[6],
+            totalsHash: c[4], upToBlock: c[5], lastSeq: c[6], committedAt: c[7],
           }
         : null,
       solvency: {

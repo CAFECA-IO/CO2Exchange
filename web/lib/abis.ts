@@ -385,7 +385,7 @@ export const EVENTS = {
     "event RetiredFor(address indexed account, uint256 indexed batchId, uint256 amountKg, uint256 certId)",
   ),
   bankCommitted: parseAbiItem(
-    "event Committed(uint64 indexed epoch, bytes32 anchor, bytes32 orderLogRoot, bytes32 balanceRoot, uint256 totalKg, uint256 totalCash, bytes32 totalsHash, uint64 upToBlock)",
+    "event Committed(uint64 indexed epoch, bytes32 anchor, bytes32 orderLogRoot, bytes32 balanceRoot, uint256 totalKg, uint256 totalCash, bytes32 totalsHash, uint64 upToBlock, uint64 lastSeq)",
   ),
 } as const;
 
@@ -395,13 +395,13 @@ export const bankAbi = parseAbi([
   "function epoch() view returns (uint64)",
   "function totalHeldKg() view returns (uint256)",
   "function withdrawalsEnabled() view returns (bool)",
-  "function commitments(uint64) view returns (bytes32 orderLogRoot, bytes32 balanceRoot, uint256 totalKg, uint256 totalCash, bytes32 totalsHash, uint64 upToBlock, uint64 committedAt)",
+  "function commitments(uint64) view returns (bytes32 orderLogRoot, bytes32 balanceRoot, uint256 totalKg, uint256 totalCash, bytes32 totalsHash, uint64 upToBlock, uint64 lastSeq, uint64 committedAt)",
   "function solvency() view returns (uint256 owedKg, uint256 heldKg, uint256 owedCash, uint256 heldCash)",
-  "function commit(bytes32 prev, uint64 newEpoch, bytes32 orderLogRoot, bytes32 balanceRoot, uint256 totalKg, uint256 totalCash, bytes32 totalsHash, uint64 upToBlock) returns (bytes32)",
+  "function commit(bytes32 prev, uint64 newEpoch, bytes32 orderLogRoot, bytes32 balanceRoot, uint256 totalKg, uint256 totalCash, bytes32 totalsHash, uint64 upToBlock, uint64 lastSeq) returns (bytes32)",
   "function deposit(uint256 batchId, uint256 amountKg)",
   "function depositCash(uint256 amount)",
   "event Deposited(address indexed account, uint256 indexed batchId, uint256 amountKg)",
   "event CashDeposited(address indexed account, uint256 amount)",
-  "event Committed(uint64 indexed epoch, bytes32 anchor, bytes32 orderLogRoot, bytes32 balanceRoot, uint256 totalKg, uint256 totalCash, bytes32 totalsHash, uint64 upToBlock)",
+  "event Committed(uint64 indexed epoch, bytes32 anchor, bytes32 orderLogRoot, bytes32 balanceRoot, uint256 totalKg, uint256 totalCash, bytes32 totalsHash, uint64 upToBlock, uint64 lastSeq)",
   "event RetiredFor(address indexed account, uint256 indexed batchId, uint256 amountKg, uint256 certId)",
 ]);

@@ -6,6 +6,12 @@
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
+    // 允許在 import 裡寫 .ts 副檔名。
+    //
+    // 為什麼需要：lib/bank/ 底下那幾支要能被 `node --experimental-strip-types` 直接跑
+    // （重播工具、查核機構、排程都不經過 Next），而 Node 的型別剝離**要求相對 import
+    // 帶副檔名**。副檔名對 Next 的打包器沒有影響，對 Node 則是能不能跑的差別。
+    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
