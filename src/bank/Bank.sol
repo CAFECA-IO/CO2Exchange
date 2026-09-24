@@ -41,9 +41,9 @@ import {MerkleSumTree} from "./MerkleSumTree.sol";
 /// 所以 `withdraw` 完整實作、完整測試，只是被 `withdrawalsEnabled` 關著。
 /// 一個沒被跑過的提領路徑，等於沒有提領路徑。
 ///
-/// 還缺的那一半（逃生門：營運方不再提交 root 時，使用者仍能憑最後一個 root 領走，
-/// 且營運方關不掉）留在 C 期。缺它的話，這裡的提領只是「營運方正常時可以提領」——
-/// 而那正好是最不需要保障的時候。這件事寫在這裡，免得被當成已經做完。
+/// 另一半是**逃生模式**（見 `escapeActive`）：營運方超過 72 小時沒有提交承諾，
+/// 使用者憑最後一個 root 就能領走，不需要任何人同意，也沒有任何角色關得掉。
+/// 少了它，提領只是「營運方正常時可以提領」——而那正好是最不需要保障的時候。
 contract Bank is AccessControl, ERC1155Holder {
     using SafeERC20 for IERC20;
     using MerkleSumTree for MerkleSumTree.Node;
