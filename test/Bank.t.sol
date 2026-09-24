@@ -31,9 +31,13 @@ contract BankTest is Fixture {
         vm.prank(operator);
         bank.grantRole(committerRole, committer);
 
-        // Bank 自己要能被身分層接受，否則存入的那一筆 transfer 會被 _update 擋下來。
-        // 這是刻意的：邊界仍然守在鏈上，Bank 不是規則的例外。
-        _registerIdentity(address(bank), IKYCRegistry.Tier.Corporate, keccak256("TW-BANK"));
+        // Bank 要登錄成**系統合約**，和部署腳本一致（Deploy.s.sol 的 _wireAsSovereign）。
+        //
+        // 一開始這裡寫的是「發一張法人身分給它」，測試也綠——直到加上「身分過期之後
+        // 還領不領得出來」那一條才爆出來：法人身分會過期，於是連 Bank 自己都變成
+        // 非有效帳戶。測試環境與部署環境不一致的 bug 就是這樣藏起來的。
+        vm.prank(sovereign);
+        kyc.setSystemContract(address(bank), true);
 
         uint256 projectId = _registerProject(companyB);
         vm.startPrank(companyB);
@@ -192,8 +196,12 @@ contract BankTest is Fixture {
         assertEq(bank.totalHeldKg(), 6_000);
     }
 
-    /// 同一份證據不能用兩次。葉子記的是**當期餘額**，用兩次就是領兩倍。
-    function test_withdraw_sameEpochOnlyOnce() public {
+    /// 同一份證據可以分次領，但**加起來不能超過樹上說的那麼多**。
+    ///
+    /// 原本的規則是「一個 epoch 只能領一次」。那讓手上有三個批次的人一期只領得走一個，
+    /// 而且逃生模式下 epoch 根本不會前進——等於只有一次機會。改成累計上限之後，
+    /// 兩種模式共用同一條規則。
+    function test_withdraw_cumulativeCapPerEpoch() public {
         _fund(companyB, batchA, 10_000);
         _commitTree(bytes32(0), 1, companyB, batchA, 10_000, 0);
         vm.prank(operator);
@@ -201,9 +209,27 @@ contract BankTest is Fixture {
 
         Bank.WithdrawProof memory p = _singleLeafProof(companyB, batchA, 10_000, 0, 1);
         vm.startPrank(companyB);
-        bank.withdraw(batchA, 1_000, p);
-        vm.expectRevert(abi.encodeWithSelector(Bank.AlreadyWithdrawnThisEpoch.selector, companyB, uint64(1)));
-        bank.withdraw(batchA, 1_000, p);
+        bank.withdraw(batchA, 4_000, p);
+        bank.withdraw(batchA, 6_000, p); // 加起來剛好 10,000
+        assertEq(bank.withdrawnKg(companyB, 1, batchA), 10_000);
+
+        vm.expectRevert(abi.encodeWithSelector(Bank.NothingLeftToWithdraw.selector, companyB, uint64(1)));
+        bank.withdraw(batchA, 1, p);
+        vm.stopPrank();
+    }
+
+    /// 分次領也不能超過上限：第二次要求比剩下的多，直接擋。
+    function test_withdraw_cannotExceedRemaining() public {
+        _fund(companyB, batchA, 10_000);
+        _commitTree(bytes32(0), 1, companyB, batchA, 10_000, 0);
+        vm.prank(operator);
+        bank.setWithdrawalsEnabled(true);
+
+        Bank.WithdrawProof memory p = _singleLeafProof(companyB, batchA, 10_000, 0, 1);
+        vm.startPrank(companyB);
+        bank.withdraw(batchA, 9_000, p);
+        vm.expectRevert(abi.encodeWithSelector(Bank.SumMismatch.selector, 1_000, 2_000));
+        bank.withdraw(batchA, 2_000, p);
         vm.stopPrank();
     }
 
@@ -249,6 +275,169 @@ contract BankTest is Fixture {
         vm.prank(alice);
         vm.expectRevert(Bank.BadProof.selector);
         bank.withdraw(batchA, 1_000, p);
+    }
+
+    // ───────────────────────── 逃生模式 ─────────────────────────
+    //
+    // 這一組測的是「營運方消失之後會怎樣」。資產池的法律性質是商業託管，
+    // 沒有信託那種法定的破產隔離——所以「拿得回來」不能靠法律地位撐，
+    // 只能靠一個誰都關不掉的機制撐。這幾條就是那個機制。
+
+    function test_escape_notActiveWhileOperatorIsAlive() public {
+        _fund(companyB, batchA, 10_000);
+        _commitTree(bytes32(0), 1, companyB, batchA, 10_000, 0);
+        assertFalse(bank.escapeActive(), unicode"剛提交完不該是逃生狀態");
+
+        skip(71 hours);
+        assertFalse(bank.escapeActive(), unicode"71 小時還不到");
+
+        skip(2 hours);
+        assertTrue(bank.escapeActive(), unicode"超過 72 小時就開");
+    }
+
+    /// 還沒有任何承諾時不是逃生狀態——那時候沒有 root，也沒有東西可以憑據提領。
+    function test_escape_notActiveBeforeFirstCommit() public view {
+        assertFalse(bank.escapeActive());
+    }
+
+    /// **營運方關不掉逃生門。** 這是整個機制的重點。
+    function test_escape_worksEvenWithWithdrawalsDisabled() public {
+        _fund(companyB, batchA, 10_000);
+        _commitTree(bytes32(0), 1, companyB, batchA, 10_000, 0);
+        assertFalse(bank.withdrawalsEnabled(), unicode"提領開關是關的");
+
+        skip(73 hours);
+        Bank.WithdrawProof memory p = _singleLeafProof(companyB, batchA, 10_000, 0, 1);
+        vm.prank(companyB);
+        bank.withdraw(batchA, 10_000, p);
+        assertEq(credit.balanceOf(companyB, batchA), 100_000, unicode"領得出來，不需要營運方點頭");
+    }
+
+    /// 營運方恢復提交，逃生門就關回去——它是停擺的偵測器，不是單向開關。
+    function test_escape_closesWhenCommitsResume() public {
+        _fund(companyB, batchA, 10_000);
+        bytes32 a1 = _commitTree(bytes32(0), 1, companyB, batchA, 10_000, 0);
+        skip(73 hours);
+        assertTrue(bank.escapeActive());
+
+        _commitTree(a1, 2, companyB, batchA, 10_000, 0);
+        assertFalse(bank.escapeActive(), unicode"重新開始提交之後就不是逃生狀態了");
+    }
+
+    /// 先到先得：池子不夠時**不 revert**，能領多少領多少，差額記成欠款。
+    ///
+    /// 「先到先得、不足由平台補足」這個決策，只有在領不到的人拿得到一份可證明的
+    /// 欠款紀錄時才追得回來。如果那時候只是交易失敗，後到的人手上什麼都沒有——
+    /// 義務存在，證據卻不存在。
+    function test_escape_partialPayRecordsShortfall() public {
+        // 兩個人各有 10 噸的憑據，但池子裡只剩 12 噸（假設有 8 噸因故離開了池子）
+        _fund(companyB, batchA, 20_000);
+        _commitTree(bytes32(0), 1, companyB, batchA, 20_000, 0);
+
+        // 模擬短少：營運方把 8 噸註銷掉（記名給別人），池子剩 12 噸，但 root 還說欠 20 噸
+        vm.prank(operator);
+        bank.retireFor(companyB, batchA, 8_000, keccak256("b"), unicode"某公司",
+                       RetirementCertificate.Purpose.CarbonFee, "");
+        assertEq(credit.balanceOf(address(bank), batchA), 12_000);
+
+        skip(73 hours);
+        Bank.WithdrawProof memory p = _singleLeafProof(companyB, batchA, 20_000, 0, 1);
+
+        vm.expectEmit(true, true, false, true, address(bank));
+        emit Bank.Shortfall(companyB, batchA, 20_000, 12_000, 1);
+        vm.prank(companyB);
+        bank.withdraw(batchA, 20_000, p);
+
+        assertEq(credit.balanceOf(address(bank), batchA), 0, unicode"池子被領光");
+        assertEq(bank.withdrawnKg(companyB, 1, batchA), 12_000, unicode"只記已經付出去的那 12 噸");
+        // 剩下的 8 噸仍然是這個帳戶對平台的請求權，而且鏈上留著 Shortfall 紀錄。
+    }
+
+    /// 領到一毛不剩之後再來領，要說「沒有了」，而不是默默成功或含糊地 revert。
+    function test_escape_emptyPoolSaysSo() public {
+        _fund(companyB, batchA, 10_000);
+        _commitTree(bytes32(0), 1, companyB, batchA, 10_000, 0);
+        skip(73 hours);
+
+        Bank.WithdrawProof memory p = _singleLeafProof(companyB, batchA, 10_000, 0, 1);
+        vm.startPrank(companyB);
+        bank.withdraw(batchA, 10_000, p);
+        vm.expectRevert(abi.encodeWithSelector(Bank.NothingLeftToWithdraw.selector, companyB, uint64(1)));
+        bank.withdraw(batchA, 1, p);
+        vm.stopPrank();
+    }
+
+    /// 逃生模式下仍然只認最新的 root，而且證據照樣要驗——
+    /// 「營運方不在了」不等於「什麼都可以」。
+    function test_escape_stillRequiresValidProof() public {
+        _fund(companyB, batchA, 10_000);
+        _commitTree(bytes32(0), 1, companyB, batchA, 10_000, 0);
+        skip(73 hours);
+
+        Bank.WithdrawProof memory p = _singleLeafProof(companyB, batchA, 10_000, 0, 1);
+        vm.prank(alice);
+        vm.expectRevert(Bank.BadProof.selector);
+        bank.withdraw(batchA, 1_000, p);
+    }
+
+    /// **身分到期不能鎖住你拿回自己的東西。**
+    ///
+    /// 這一條是逃生模式最容易被忽略的前提。營運方消失之後，沒有人會再簽發
+    /// attestation，所有人的身分遲早到期——如果到期就領不出來，
+    /// 逃生門會在它唯一會被用到的那一天失效。
+    ///
+    /// 「到期只擋交易、不鎖資產」本來就是政策層定下來的原則；資產放在自己錢包裡的
+    /// 時候看不出落差，換成綜合帳戶託管之後，「拿回自己的東西」變成一次轉移，
+    /// 落差才浮出來。
+    function test_escape_worksAfterIdentityExpires() public {
+        _fund(companyB, batchA, 10_000);
+        _commitTree(bytes32(0), 1, companyB, batchA, 10_000, 0);
+
+        // 跳到身分已經過期之後（Fixture 給的效期是 365 天）
+        skip(400 days);
+        assertFalse(kyc.isActive(companyB), unicode"身分確實已經過期");
+        assertTrue(bank.escapeActive(), unicode"而且早就進入逃生模式");
+
+        Bank.WithdrawProof memory p = _singleLeafProof(companyB, batchA, 10_000, 0, 1);
+        vm.prank(companyB);
+        bank.withdraw(batchA, 10_000, p);
+        assertEq(credit.balanceOf(companyB, batchA), 100_000, unicode"過期的人仍然拿得回自己的東西");
+    }
+
+    /// 但拿回去之後**還是不能交易**——放行的只有「還給你」，不是「解除限制」。
+    function test_expiredIdentity_stillCannotTransfer() public {
+        vm.prank(companyB);
+        credit.safeTransferFrom(companyB, alice, batchA, 1_000, "");
+        skip(400 days);
+
+        vm.prank(companyB);
+        vm.expectRevert();
+        credit.safeTransferFrom(companyB, alice, batchA, 100, "");
+    }
+
+    /// 凍結仍然擋得住。凍結是主管機關的處分，和效期是兩回事。
+    function test_escape_frozenAccountStillBlocked() public {
+        _fund(companyB, batchA, 10_000);
+        _commitTree(bytes32(0), 1, companyB, batchA, 10_000, 0);
+        skip(73 hours);
+
+        vm.prank(sovereign);
+        kyc.setFrozen(companyB, true);
+
+        Bank.WithdrawProof memory p = _singleLeafProof(companyB, batchA, 10_000, 0, 1);
+        vm.prank(companyB);
+        vm.expectRevert();
+        bank.withdraw(batchA, 10_000, p);
+    }
+
+    function test_escapeIn_countsDown() public {
+        _fund(companyB, batchA, 1_000);
+        _commitTree(bytes32(0), 1, companyB, batchA, 1_000, 0);
+        assertEq(bank.escapeIn(), 72 hours);
+        skip(70 hours);
+        assertEq(bank.escapeIn(), 2 hours);
+        skip(3 hours);
+        assertEq(bank.escapeIn(), 0);
     }
 
     function test_solvency_reportsBothSides() public {

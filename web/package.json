@@ -16,6 +16,7 @@
     "gen:errors": "node scripts/gen-error-abi.mjs",
     "test:engine": "node --experimental-strip-types --no-warnings scripts/test-engine.mjs",
     "bank:seed": "node --experimental-strip-types --no-warnings scripts/bank-seed-orders.mjs",
+    "bank:proofs": "node --experimental-strip-types --no-warnings scripts/export-proofs.mjs",
     "bank:verify": "node --experimental-strip-types --no-warnings scripts/verify-epoch.mjs",
     "bank:plan": "node --experimental-strip-types --no-warnings scripts/commit-epoch.mjs --plan",
     "bank:commit": "node --experimental-strip-types --no-warnings scripts/commit-epoch.mjs",

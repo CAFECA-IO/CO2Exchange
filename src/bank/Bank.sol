@@ -86,9 +86,28 @@ contract Bank is AccessControl, ERC1155Holder {
 
     mapping(uint64 => Commitment) public commitments;
 
-    /// @notice 這個帳戶已經領走多少。葉子上的數字是**當期餘額**，
-    ///         所以同一個 epoch 的證據只能用一次——用 epoch 記，不是用金額累計。
-    mapping(address => uint64) public lastWithdrawEpoch;
+    /// @notice 對**某一期的證據**已經領走多少。key: 帳戶 → epoch → batchId。
+    ///
+    /// @dev 原本是「同一個 epoch 只能領一次」（`lastWithdrawEpoch`）。那個規則有兩個問題：
+    ///      手上有三個批次的人一期只領得走一個；而逃生模式下 epoch 根本不會前進，
+    ///      等於只有一次機會。
+    ///
+    ///      改成累計之後規則只剩一條，兩種模式共用：**你可以領到最新的 root 說你有的那麼多，
+    ///      減掉你已經對同一個 root 領走的**。下一期的樹本來就會把已領的扣掉
+    ///      （`Withdrawn` 事件會進帳本），所以上限跟著換 root 自動重算，不會重複計算。
+    mapping(address => mapping(uint64 => mapping(uint256 => uint256))) public withdrawnKg;
+    mapping(address => mapping(uint64 => uint256)) public withdrawnCash;
+
+    /// @notice 逃生模式：超過這段時間沒有新的承諾上鏈，使用者不必等營運方點頭就能提領。
+    ///
+    /// @dev 72 小時 ＝ 3 個 epoch，和帳戶復原的等待期同一個數量級（刻意的：
+    ///      兩者回答的是同一類問題——「多久沒有動靜才算出事」）。
+    ///
+    ///      **沒有任何角色關得掉它**，連主權角色也不行。這一點是設計的重心而不是疏漏：
+    ///      資產池的法律性質是商業託管，沒有信託那種法定的破產隔離，
+    ///      所以「拿得回來」這件事不能靠法律地位撐，只能靠一個誰都關不掉的機制撐。
+    ///      一個營運方關得掉的逃生門，在最需要它的那一天剛好不存在。
+    uint64 public constant ESCAPE_AFTER = 72 hours;
 
     /// @notice 這個合約實際持有多少（跨所有批次）。餘額樹的總額要對得上它。
     /// @dev 自己記而不是每次去掃 ERC-1155：1155 沒有「某地址的所有 id 總和」這種查詢，
@@ -113,6 +132,14 @@ contract Bank is AccessControl, ERC1155Holder {
     event Withdrawn(address indexed account, uint256 indexed batchId, uint256 amountKg, uint64 epoch);
     event CashWithdrawn(address indexed account, uint256 amount, uint64 epoch);
     event WithdrawalsToggled(bool enabled);
+    /// @notice 逃生模式下領不滿的部分。
+    ///
+    /// @dev 「先到先得、不足由平台補足」這個決策，只有在領不到的人**拿得到一份
+    ///      可證明的欠款紀錄**時才追得回來——否則義務存在，證據卻散落在各處。
+    ///      所以池子不夠時不是 revert，而是能領多少領多少，剩下的記在鏈上。
+    ///      這筆紀錄就是之後向平台請求補足的依據。
+    event Shortfall(address indexed account, uint256 indexed batchId, uint256 owedKg, uint256 paidKg, uint64 epoch);
+    event CashShortfall(address indexed account, uint256 owed, uint256 paid, uint64 epoch);
     event RetiredFor(address indexed account, uint256 indexed batchId, uint256 amountKg, uint256 certId);
 
     error ZeroAmount();
@@ -120,7 +147,7 @@ contract Bank is AccessControl, ERC1155Holder {
     error EpochOutOfOrder(uint64 expected, uint64 got);
     error UnknownEpoch(uint64 epoch);
     error NotLatestEpoch(uint64 latest, uint64 got);
-    error AlreadyWithdrawnThisEpoch(address account, uint64 epoch);
+    error NothingLeftToWithdraw(address account, uint64 epoch);
     error BadProof();
     error SumMismatch(uint256 expected, uint256 got);
     error WithdrawalsDisabled();
@@ -248,6 +275,29 @@ contract Bank is AccessControl, ERC1155Holder {
         emit RetiredFor(account, batchId, amountKg, certId);
     }
 
+    // ───────────────────────── 逃生模式 ─────────────────────────
+
+    /// @notice 營運方已經停擺多久沒有提交承諾？超過 `ESCAPE_AFTER` 就進逃生模式。
+    ///
+    /// @dev 純粹看時間，不看任何開關——這正是它的價值。判斷依據是**最後一期的提交時間**：
+    ///      營運方只要還在正常運作（每 24 小時提交一次），這個值永遠是 false。
+    ///
+    ///      還沒有任何一期承諾時回 false：那時候沒有 root，也就沒有東西可以憑據提領。
+    ///      剛部署完的合約不應該一開始就是逃生狀態。
+    function escapeActive() public view returns (bool) {
+        Commitment memory c = commitments[epoch];
+        if (c.committedAt == 0) return false;
+        return block.timestamp > uint256(c.committedAt) + ESCAPE_AFTER;
+    }
+
+    /// @notice 距離逃生模式開啟還有多久（秒）。0 = 已經開啟。給揭露頁用。
+    function escapeIn() external view returns (uint256) {
+        Commitment memory c = commitments[epoch];
+        if (c.committedAt == 0) return type(uint256).max;
+        uint256 at = uint256(c.committedAt) + ESCAPE_AFTER;
+        return block.timestamp >= at ? 0 : at - block.timestamp;
+    }
+
     // ───────────────────────── 提領 ─────────────────────────
 
     /// @notice 提領的證據。兩段路徑：帳戶在餘額樹裡、批次在該帳戶的資產小樹裡。
@@ -265,33 +315,69 @@ contract Bank is AccessControl, ERC1155Holder {
 
     /// @notice 憑證據提領某一個批次的額度。
     ///
-    /// @dev 一個 epoch 只能提領一次。理由是葉子記的是**當期餘額**而不是累計量：
-    ///      同一份證據用兩次就等於領兩倍。用累計量可以讓提領冪等，但那要求帳本
-    ///      永久保存每個帳戶的累計提領額，而且遇到「餘額因為交易而減少」就對不起來。
-    ///      每個 epoch 一次是比較笨但不會錯的做法——epoch 是 24 小時，
-    ///      而這個系統本來就不是高頻進出的地方。
+    /// @dev 上限是「最新的 root 說你有多少，減掉你已經對同一個 root 領走的」。
+    ///      下一期的樹會把已領的扣掉（`Withdrawn` 事件會進帳本），所以換了 root
+    ///      上限自動重算，不會重複計算。
+    ///
+    ///      **逃生模式下池子不夠時不 revert，能領多少領多少，剩下的記成欠款。**
+    ///      這是「先到先得、不足由平台補足」那個決策的實作：先到先得會讓後到的人
+    ///      領不滿，而如果那時候只是交易失敗，後到的人手上什麼都沒有——
+    ///      義務存在，證據卻不存在。所以差額要留在鏈上，成為請求補足的依據。
+    ///
+    ///      正常模式不做部分給付：`commit()` 已經擋掉了「宣稱的比持有的多」，
+    ///      所以正常模式下池子不夠一定是別的地方出了錯，那時候應該大聲失敗。
     function withdraw(uint256 batchId, uint256 amountKg, WithdrawProof calldata p) external {
-        if (!withdrawalsEnabled) revert WithdrawalsDisabled();
+        bool escape = escapeActive();
+        if (!withdrawalsEnabled && !escape) revert WithdrawalsDisabled();
         if (amountKg == 0) revert ZeroAmount();
         _checkProof(msg.sender, p);
-        if (amountKg > p.batchKg) revert SumMismatch(p.batchKg, amountKg);
         _verifyAsset(batchId, p);
 
-        lastWithdrawEpoch[msg.sender] = p.proofEpoch;
-        totalHeldKg -= amountKg;
-        credit.safeTransferFrom(address(this), msg.sender, batchId, amountKg, "");
-        emit Withdrawn(msg.sender, batchId, amountKg, p.proofEpoch);
+        uint256 already = withdrawnKg[msg.sender][p.proofEpoch][batchId];
+        if (already >= p.batchKg) revert NothingLeftToWithdraw(msg.sender, p.proofEpoch);
+        uint256 owed = p.batchKg - already;
+        if (amountKg > owed) revert SumMismatch(owed, amountKg);
+
+        uint256 pay = amountKg;
+        if (escape) {
+            uint256 available = credit.balanceOf(address(this), batchId);
+            if (available < pay) {
+                emit Shortfall(msg.sender, batchId, amountKg, available, p.proofEpoch);
+                pay = available;
+            }
+        }
+        if (pay == 0) revert NothingLeftToWithdraw(msg.sender, p.proofEpoch);
+
+        withdrawnKg[msg.sender][p.proofEpoch][batchId] = already + pay;
+        totalHeldKg -= pay;
+        credit.safeTransferFrom(address(this), msg.sender, batchId, pay, "");
+        emit Withdrawn(msg.sender, batchId, pay, p.proofEpoch);
     }
 
     function withdrawCash(uint256 amount, WithdrawProof calldata p) external {
-        if (!withdrawalsEnabled) revert WithdrawalsDisabled();
+        bool escape = escapeActive();
+        if (!withdrawalsEnabled && !escape) revert WithdrawalsDisabled();
         if (amount == 0) revert ZeroAmount();
         _checkProof(msg.sender, p);
-        if (amount > p.leafCash) revert SumMismatch(p.leafCash, amount);
 
-        lastWithdrawEpoch[msg.sender] = p.proofEpoch;
-        cash.safeTransfer(msg.sender, amount);
-        emit CashWithdrawn(msg.sender, amount, p.proofEpoch);
+        uint256 already = withdrawnCash[msg.sender][p.proofEpoch];
+        if (already >= p.leafCash) revert NothingLeftToWithdraw(msg.sender, p.proofEpoch);
+        uint256 owed = p.leafCash - already;
+        if (amount > owed) revert SumMismatch(owed, amount);
+
+        uint256 pay = amount;
+        if (escape) {
+            uint256 available = cash.balanceOf(address(this));
+            if (available < pay) {
+                emit CashShortfall(msg.sender, amount, available, p.proofEpoch);
+                pay = available;
+            }
+        }
+        if (pay == 0) revert NothingLeftToWithdraw(msg.sender, p.proofEpoch);
+
+        withdrawnCash[msg.sender][p.proofEpoch] = already + pay;
+        cash.safeTransfer(msg.sender, pay);
+        emit CashWithdrawn(msg.sender, pay, p.proofEpoch);
     }
 
     /// @dev 驗證帳戶那片葉子確實在**最新** epoch 的餘額樹裡。
@@ -302,7 +388,6 @@ contract Bank is AccessControl, ERC1155Holder {
         if (p.proofEpoch != epoch) revert NotLatestEpoch(epoch, p.proofEpoch);
         Commitment memory c = commitments[p.proofEpoch];
         if (c.balanceRoot == bytes32(0)) revert UnknownEpoch(p.proofEpoch);
-        if (lastWithdrawEpoch[account] == p.proofEpoch) revert AlreadyWithdrawnThisEpoch(account, p.proofEpoch);
 
         MerkleSumTree.Node memory node =
             MerkleSumTree.leaf(account, p.proofEpoch, p.assetsRoot, p.leafKg, p.leafCash);
@@ -323,8 +408,10 @@ contract Bank is AccessControl, ERC1155Holder {
     // ───────────────────────── 開關 ─────────────────────────
 
     /// @dev 提領的開關在營運角色手上（Phase 0 關著）。
-    ///      C 期會加的逃生門**不能**由營運角色關——那一顆歸主權角色，
-    ///      否則「營運方跑掉時還領得到」這句話沒有意義。
+    ///
+    ///      逃生模式**不受這個開關影響**，而且沒有任何角色關得掉它——它只看
+    ///      「最後一次提交承諾到現在過了多久」。營運方關得掉的逃生門，
+    ///      在最需要它的那一天剛好不存在。
     function setWithdrawalsEnabled(bool enabled) external onlyRole(OPERATOR_ROLE) {
         withdrawalsEnabled = enabled;
         emit WithdrawalsToggled(enabled);

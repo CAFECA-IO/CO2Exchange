@@ -199,13 +199,36 @@ contract KYCRegistry is Initializable, UUPSUpgradeable, AccessControlUpgradeable
         return id.expiry > block.timestamp;
     }
 
+    /// @notice 轉移前的白名單檢查。
+    ///
+    /// @dev **身分到期擋交易，不鎖資產。** 這是政策層一開始就定下來的原則
+    ///      （見架構決策紀錄），但原本的實作沒有完整實現它：到期之後連「從託管把
+    ///      自己的東西拿回來」都會被擋下。
+    ///
+    ///      在資產放在自己錢包裡的模型下，這個落差看不出來——到期的人不能交易，
+    ///      但東西本來就在他名下。換成交易所資產池（綜合帳戶託管）之後，
+    ///      「拿回自己的東西」變成一次轉移，於是到期就等於鎖住資產。
+    ///
+    ///      這個落差在逃生模式下最致命：營運方消失之後沒有人會再簽發 attestation，
+    ///      所有人的身分遲早到期——逃生門會在它唯一會被用到的那一天失效。
+    ///
+    ///      所以放行一種情況：**從系統合約轉回一個「有身分、未凍結、只是過期」的帳戶**。
+    ///      這不是網開一面：
+    ///        · 凍結仍然擋（凍結是主管機關的處分，和效期是兩回事）
+    ///        · 從來沒有身分的地址仍然擋（tier == None）
+    ///        · 過期的人**拿回來之後仍然不能交易**（他當 from 的時候照樣被擋）
+    ///      改變的只有「能不能把已經屬於他的東西還給他」，而答案本來就該是能。
     function checkTransfer(address from, address to) external view {
         Identity memory f = _identities[from];
         Identity memory t = _identities[to];
         if (f.frozen) revert Frozen(from);
         if (t.frozen) revert Frozen(to);
         if (!_active(f)) revert NotActive(from);
-        if (!_active(t)) revert NotActive(to);
+        if (!_active(t)) {
+            bool returningFromCustody = f.tier == Tier.SystemContract && t.tier != Tier.None
+                && t.tier != Tier.SystemContract;
+            if (!returningFromCustody) revert NotActive(to);
+        }
         if (f.tier == Tier.Individual && !individualTransferEnabled) revert IndividualTransferDisabled(from);
     }
 

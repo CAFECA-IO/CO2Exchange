@@ -40,6 +40,7 @@ type Solvency = {
   epoch: string;
   head: string;
   withdrawalsEnabled: boolean;
+  escape: { active: boolean; inSeconds: string | null };
   commitment: { balanceRoot: string; totalKg: string; totalCash: string; upToBlock: string; committedAt: string } | null;
   solvency: { owedKg: string; heldKg: string; owedCash: string; heldCash: string; surplusKg: string; surplusCash: string };
 };
@@ -124,6 +125,16 @@ export function BankSolvency() {
           <dt className="text-ink-300">提領</dt>
           <dd className="text-ink-200">{d.withdrawalsEnabled ? "開放" : "尚未開放（機制已在鏈上）"}</dd>
         </div>
+        <div className="flex justify-between gap-4">
+          <dt className="text-ink-300">逃生模式</dt>
+          <dd className={d.escape.active ? "text-warn" : "text-ink-200"}>
+            {d.escape.active
+              ? "已開啟——營運方超過 72 小時沒有提交承諾"
+              : d.escape.inSeconds === null
+                ? "待第一期承諾"
+                : `未開啟（${Math.ceil(Number(d.escape.inSeconds) / 3600)} 小時後開啟）`}
+          </dd>
+        </div>
       </dl>
 
       <p className="mt-3 text-xs leading-6 text-ink-300">
@@ -135,10 +146,29 @@ export function BankSolvency() {
       <p className="mt-2 text-xs leading-6 text-ink-300">
         <span className="text-ink-200">法律性質：商業託管。</span>
         資產登記在資產池合約名下，您對本站擁有返還請求權。
+        存入是交付託管、成立約定移轉權利，池內成交是該權利的讓與，提領是返還託管物——
+        三者都不是額度本身的「移轉」，整個過程對一單位額度只發生一次移轉
+        （從最初存入的人到最後提領的人）。
         這與信託不同——信託有法定的破產隔離，商業託管沒有同等保障。
         因此「識別得出哪一份是誰的」由上面那棵每日上鏈的餘額樹負責，
         「拿得回來」由提領機制負責（尚未開放，見下）。
         <span className="text-ink-200">這兩項不是附加保障，是這個法律性質下必要的補強。</span>
+      </p>
+      <p className="mt-2 text-xs leading-6 text-ink-300">
+        <span className="text-ink-200">營運方停擺時怎麼辦：</span>
+        超過 72 小時沒有新的承諾上鏈，資產池會自動進入逃生模式——
+        任何人都能憑最後一期的 Merkle 分支提領，<span className="text-ink-200">不需要本站同意，
+        本站也關不掉</span>（它只看「最後一次提交到現在過了多久」）。
+        提領依<span className="text-ink-200">先到先得</span>；池子不足時能領多少領多少，
+        差額會以 Shortfall 事件記在鏈上，作為向本站請求補足的依據——
+        不足的部分由本站負責償還。
+      </p>
+      <p className="mt-2 text-xs leading-6 text-ink-300">
+        <span className="text-ink-200">請保存您每一期的證據。</span>
+        逃生模式要能用，前提是您手上有自己的 Merkle 分支。
+        本站每一期都會提供，並同時交付查核機構與主管機關的鏡像節點——
+        如果產生證據的唯一途徑是本站的伺服器，那麼本站消失時證據也跟著消失，
+        而那正是逃生門唯一會被用到的時候。
       </p>
       <p className="mt-2 text-xs leading-6 text-ink-300">
         這串數字不必相信本站：<code className="text-ink-200">npm run bank:verify</code> 會從鏈上事件

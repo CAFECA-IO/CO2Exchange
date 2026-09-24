@@ -33,28 +33,37 @@ import { ApiError } from "./api";
 /// 而 viem 給的是 "insufficient funds for gas * price + value"——訊息裡沒有一個字
 /// 告訴維運的人「去領測試幣」。這裡把它轉成 RELAYER_UNFUNDED。
 
-type Queue = { tail: Promise<unknown>; next?: number };
+type Queue = { tail: Promise<unknown> };
 const queues = new Map<string, Queue>();
 
 /// 同一把金鑰的送出動作接成一條鏈；不同金鑰互不影響。
-async function serialise<T>(address: string, fn: (q: Queue) => Promise<T>): Promise<T> {
+async function serialise<T>(address: string, fn: () => Promise<T>): Promise<T> {
   const key = address.toLowerCase();
   const q = queues.get(key) ?? { tail: Promise.resolve() };
   queues.set(key, q);
-  const run = q.tail.then(() => fn(q), () => fn(q));
+  const run = q.tail.then(() => fn(), () => fn());
   // tail 只用來排隊，不能讓失敗往下傳染，所以把 rejection 吞掉（呼叫端仍會拿到）
   q.tail = run.catch(() => {});
   return run;
 }
 
-/// 下一個該用的 nonce。以本地記的為準，但不得低於鏈上的 pending——
-/// 重啟、別的程序也在用同一把金鑰（例如模擬器）都會讓本地那份落後。
-async function nextNonce(address: `0x${string}`, q: Queue): Promise<number> {
-  const onchain = await publicClient.getTransactionCount({ address, blockTag: "pending" });
-  const n = q.next === undefined ? onchain : Math.max(q.next, onchain);
-  q.next = n + 1;
-  return n;
-}
+/// 下一個該用的 nonce：**每次都問鏈**，不在本地記。
+///
+/// 一開始這裡有一份本地快取（記住上次用到幾號，取它和鏈上 pending 的較大值）。
+/// 那份快取是錯的，而且錯得很難查：
+///
+///   · **鏈重開之後**本地的號碼會遠高於鏈上。於是每一筆交易都用一個過高的 nonce
+///     送出去，節點把它們掛在佇列裡等前面的號碼補上——永遠不會補上。
+///     症狀是每一筆都等到逾時（TX_TIMEOUT），而鏈本身完全正常。
+///     這在開發與展示機上不是邊角案例：`demo-box.sh rebuild` 每跑一次就發生一次。
+///   · **同一把金鑰有別的使用者**（模擬器、`cast send`、排程）。本專案的 relayer
+///     正好就是這種情況，本地快取會和它們互相打架。
+///
+/// 而快取本來就沒有存在的必要：`submit()` 在**同一個序列化區段裡等到收據**才放下一筆，
+/// 所以這個行程對同一把金鑰永遠只有一筆在途。既然如此，鏈上的 pending 數字
+/// 在計算的那一刻就是正確答案。多一次 RPC 換掉一整類 bug，划算。
+const nextNonce = (address: `0x${string}`) =>
+  publicClient.getTransactionCount({ address, blockTag: "pending" });
 
 const has = (e: unknown, re: RegExp): boolean => {
   for (let cur: unknown = e, i = 0; cur && i < 8; i++) {
@@ -75,14 +84,12 @@ export async function submit(
   const account = wallet.account;
   if (!account) throw new ApiError("INTERNAL", "送交易的 client 沒有帳戶");
 
-  return serialise(account.address, async (q) => {
+  return serialise(account.address, async () => {
     let hash: Hex;
     try {
-      const nonce = await nextNonce(account.address, q);
+      const nonce = await nextNonce(account.address);
       hash = await wallet.writeContract({ ...request, nonce } as Parameters<WalletClient["writeContract"]>[0]);
     } catch (e) {
-      // 送失敗就不知道那個序號用掉了沒，下一筆重新問鏈上。
-      q.next = undefined;
       if (has(e, /insufficient funds/i)) {
         throw new ApiError(
           "RELAYER_UNFUNDED",

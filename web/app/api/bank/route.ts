@@ -10,11 +10,13 @@ import { handleError, ok } from "@/lib/server/api";
 export async function GET() {
   try {
     const bank = bankAddress();
-    const [head, epoch, solvency, withdrawalsEnabled] = await Promise.all([
+    const [head, epoch, solvency, withdrawalsEnabled, escapeActive, escapeIn] = await Promise.all([
       publicClient.readContract({ address: bank, abi: bankAbi, functionName: "head" }),
       publicClient.readContract({ address: bank, abi: bankAbi, functionName: "epoch" }),
       publicClient.readContract({ address: bank, abi: bankAbi, functionName: "solvency" }),
       publicClient.readContract({ address: bank, abi: bankAbi, functionName: "withdrawalsEnabled" }),
+      publicClient.readContract({ address: bank, abi: bankAbi, functionName: "escapeActive" }),
+      publicClient.readContract({ address: bank, abi: bankAbi, functionName: "escapeIn" }),
     ]);
     const c = epoch > 0n
       ? await publicClient.readContract({ address: bank, abi: bankAbi, functionName: "commitments", args: [epoch] })
@@ -29,6 +31,9 @@ export async function GET() {
       epoch,
       head,
       withdrawalsEnabled,
+      /// 逃生模式：營運方超過 72 小時沒有提交承諾，使用者不必等誰同意就能提領。
+      /// 沒有任何角色關得掉它——這是商業託管這個法律性質下，「拿得回來」唯一的靠山。
+      escape: { active: escapeActive, inSeconds: escapeIn > 10n ** 18n ? null : escapeIn },
       commitment: c
         ? {
             orderLogRoot: c[0], balanceRoot: c[1], totalKg: c[2], totalCash: c[3],

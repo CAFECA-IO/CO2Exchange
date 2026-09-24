@@ -10,6 +10,7 @@
 //   ④ 揭露頁把「帳本說欠多少」與「池子裡有多少」並列顯示
 //   ⑤ 提領關著，但證據拿得到、而且合約驗得過
 //   ⑥ B 期：委託單 log 重播出同一棵樹，而且**動過 log 就驗不過**
+//   ⑦ C 期：營運方停擺 72 小時後，使用者不需要任何人同意就領得走
 //
 // ⑤ 是「不提供提領但保留機制」真正的內容。提領的函式關著沒關係，
 // 但如果使用者拿不到 Merkle 分支、或那份分支合約不認，那個機制在營運方
@@ -30,6 +31,8 @@ const cast = (...args) =>
     encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
     env: { ...process.env, PATH: `${FOUNDRY}:${process.env.PATH}` },
   }).trim();
+const rpc = (method, params = []) =>
+  cast("rpc", "--rpc-url", RPC, method, ...params.map((p) => (typeof p === "string" ? p : JSON.stringify(p))));
 const npmRun = (...args) =>
   execFileSync("npm", ["run", "--silent", ...args], {
     encoding: "utf8", cwd: process.cwd(),
@@ -179,7 +182,49 @@ try {
   }
   ok(cast("call", "--rpc-url", RPC, D.bank, "withdrawalsEnabled()(bool)") === "false", "測完關回去");
 
-  console.log("\n資產池、餘額樹與委託單 log：全部通過");
+  // ── ⑦ 逃生模式：營運方消失之後 ────────────────────────────
+  //
+  // 這一段是整個 C 期的重點，也是「商業託管」這個法律性質下唯一的靠山：
+  // 沒有信託那種法定的破產隔離，所以「拿得回來」不能靠法律地位，只能靠一個
+  // 誰都關不掉的機制。這裡驗的就是它真的關不掉。
+  //
+  // 要動鏈上的時鐘，所以先快照、測完 revert 回來——時間往前推是推不回來的，
+  // 而鏈上時間一旦領先真實時間 72 小時，伺服器簽出來的 attestation 全部會「過期」，
+  // 下一個跑 KYC 的人會看到 register revert，完全看不出跟這支測試有關。
+  // （recovery.mjs 檔頭講的是同一件事。）
+  {
+    const snapshot = rpc("evm_snapshot").replace(/"/g, "");
+    try {
+      ok(cast("call", "--rpc-url", RPC, D.bank, "escapeActive()(bool)") === "false",
+         "營運方正常提交時，逃生模式是關的");
+
+      // 先把證據匯出來——這一步的順序有意義：逃生門要能用，前提是使用者
+      // **在營運方還在的時候**就已經拿到自己那一份。事後才想拿就來不及了。
+      const exported = npmRun("bank:proofs");
+      ok(/個帳戶各一份/.test(exported), `每個帳戶的證據都匯出成自足的檔案（${exported.split("\n").find((l) => l.includes("帳戶各一份"))?.trim()}）`);
+
+      rpc("evm_increaseTime", ["0x" + (73 * 3600).toString(16)]);
+      rpc("evm_mine");
+      ok(cast("call", "--rpc-url", RPC, D.bank, "escapeActive()(bool)") === "true",
+         "超過 72 小時沒有新的承諾，逃生模式自動開啟");
+      ok(cast("call", "--rpc-url", RPC, D.bank, "withdrawalsEnabled()(bool)") === "false",
+         "而且提領開關仍然是關的——逃生模式不受它影響");
+
+      // 真的領。不是模擬——這一條要證明的就是「沒有任何人同意也拿得回來」。
+      const full = execFileSync("node",
+        ["--experimental-strip-types", "--no-warnings", "scripts/check-proof-onchain.mjs",
+         "--account", holder.addr, "--batch", String(holder.batchId), "--amount", "1"],
+        { encoding: "utf8", env: { ...process.env, RPC_URL: RPC } });
+      ok(/合約接受這份證據/.test(full),
+         "營運方關著提領開關，使用者照樣領得走（合約接受證據，沒有被開關擋下）");
+    } finally {
+      rpc("evm_revert", [snapshot]);
+    }
+    ok(cast("call", "--rpc-url", RPC, D.bank, "escapeActive()(bool)") === "false",
+       "時鐘復原，逃生模式關回去（沒有把 73 小時留給下一個人）");
+  }
+
+  console.log("\n資產池、餘額樹、委託單 log 與逃生門：全部通過");
 } catch (e) {
   failed = e;
 } finally {
