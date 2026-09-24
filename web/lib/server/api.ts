@@ -1,6 +1,8 @@
 import "server-only";
 import { ERRORS, isErrorCode, type ErrorCode } from "@/lib/error-codes";
 import { isStaleData } from "./fingerprint";
+import { decodeRevert } from "./revert";
+import { deployment } from "./chain";
 
 /// 所有 API 回應的唯一出口。
 ///
@@ -119,10 +121,53 @@ function classify(e: unknown): { code: ErrorCode; message?: string; details?: un
 
   if (isStaleData(e)) return { code: "DATA_STALE", message: e instanceof Error ? e.message : undefined };
 
+  // 合約 revert。讀取也會 revert，不是只有送交易——以前只有 /api/relay 在拆，
+  // 讀取那一側就一路掉到最後一行印「未分類的例外」，使用者拿到 INTERNAL。
+  const rv = decodeRevert(e);
+  if (rv) {
+    // 空的 revert（沒有 error 資料）而且對象是部署檔裡的合約，幾乎一定是
+    // **那個地址上的合約不是我們以為的那一個**：選擇器對不上 → fallback revert。
+    //
+    // 為什麼會發生：Anvil 重開後重新部署會沿用同一組地址（同部署者、同 nonce 順序），
+    // 但換一支部署腳本（Deploy ↔ DeployV4）順序就變了，於是同一個地址上換成了
+    // 另一個合約。地址「看起來對」，呼叫卻 revert，訊息裡完全看不出原因。
+    const which = rv.empty ? deployedAs(rv.contractAddress) : undefined;
+    if (which) {
+      return {
+        code: "DEPLOYMENT_MISMATCH",
+        message:
+          `部署檔與鏈對不上：${which}（${rv.contractAddress}）上的合約沒有 ${rv.functionName ?? "這個函式"}，` +
+          `呼叫直接被拒絕。多半是鏈重開後換了一支部署腳本——地址會重複使用，但合約換了一個。` +
+          `請重跑 forge script script/DeployV4.s.sol --rpc-url anvil --broadcast，` +
+          `並確認 CHAIN_ID 與 deployments/<chainId>.json 對應到同一條鏈。`,
+        details: { contract: which, address: rv.contractAddress, functionName: rv.functionName },
+      };
+    }
+    return {
+      code: "CONTRACT_REVERTED",
+      message: rv.message,
+      details: { ...(rv.errorName ? { errorName: rv.errorName } : {}), address: rv.contractAddress, functionName: rv.functionName },
+    };
+  }
+
   // 認不出來的例外一律 500，並且**不要**把原始訊息丟給使用者：
   // 那裡面可能有檔案路徑、內部主機名稱或堆疊。留在伺服器 log 就好。
   console.error("[api] 未分類的例外", e);
   return { code: "INTERNAL" };
+}
+
+/// 這個地址是部署檔裡的哪一個合約？不是的話回 undefined。
+/// 部署檔讀不到（還沒部署）也回 undefined——那是另一種錯，別在這裡混進來。
+function deployedAs(address?: string): string | undefined {
+  if (!address) return undefined;
+  try {
+    const d = deployment() as unknown as Record<string, unknown>;
+    const target = address.toLowerCase();
+    for (const [k, v] of Object.entries(d)) {
+      if (typeof v === "string" && v.toLowerCase() === target) return k;
+    }
+  } catch { /* 部署檔的問題由呼叫端自己處理 */ }
+  return undefined;
 }
 
 function walk(e: unknown, re: RegExp): boolean {
