@@ -62,6 +62,7 @@ contract Deploy is Script {
         uint256 operatorThreshold;
         uint256 timelockDelay;
         uint256 recoveryDelay;
+        address committer;
     }
 
     Config internal cfg;
@@ -137,6 +138,9 @@ contract Deploy is Script {
         // 復原等待期。正式環境 72 小時，寫在約定書裡；公開測試鏈上的展示要能在一次
         // 示範裡跑完，所以可以調短。調短是**部署決定**，不是合約後門——合約端不可改。
         cfg.recoveryDelay = vm.envOr("RECOVERY_DELAY", uint256(72 hours));
+        // 提交 epoch 承諾的服務金鑰。與營運 Safe 分開：提交是每天的例行動作，
+        // 不該動用治理鑰匙，而它能做的也只有提交——關不掉提領、動不了資產。
+        cfg.committer = vm.envOr("COMMITTER", cfg.operator);
 
         _requireNoWellKnownKeys();
         _requireFundedDeployer();
@@ -314,7 +318,23 @@ contract Deploy is Script {
         // Bank：使用者在交易所期間的資產池。內部買賣是帳本更新，每個 epoch 把餘額樹
         // root 提交上鏈。提領預設關閉（Phase 0 不提供），但機制完整且測過。
         bank = new Bank(address(credit), address(twd), address(nationalSafe), cfg.operator);
+
+        // 每 24 小時提交一次承諾的服務金鑰。COMMITTER_ROLE 的 admin 是 OPERATOR_ROLE，
+        // 所以這一步要由營運角色做——Phase 0 部署者就是營運方，順手在這裡給掉。
+        //
+        // 不給的話，部署看起來完全成功，但第一次 `npm run bank:commit` 會撞
+        // AccessControl 而失敗，而那時候人已經在別的脈絡裡了，很難聯想到是部署少一步。
+        if (cfg.deployer == cfg.operator) {
+            bank.grantRole(bank.COMMITTER_ROLE(), cfg.committer);
+        }
         vm.stopBroadcast();
+
+        if (cfg.deployer != cfg.operator) {
+            console2.log("");
+            console2.log(unicode"⚠ 部署者不是營運方，COMMITTER_ROLE 沒有授予。請以營運角色執行：");
+            console2.log(unicode"   cast send <bank> 'grantRole(bytes32,address)' $(cast keccak COMMITTER_ROLE) <committer>");
+            console2.log("");
+        }
 
         // Bank 要登錄成系統合約——存入那一筆 transfer 走 CarbonCredit1155._update，
         // 沒有身分就進不來。用 SystemContract（和 Listing、CarbonPool 同一類）而不是
@@ -515,6 +535,7 @@ contract Deploy is Script {
         // 手續費的收款人。資產池模型下它也是餘額樹裡的一個帳戶——
         // 手續費留在池子裡、記在國庫名下，所以樹的總額才對得上池子實際持有。
         vm.serializeAddress(j, "treasury", cfg.treasury);
+        vm.serializeAddress(j, "committer", cfg.committer);
         vm.serializeAddress(j, "nationalSafe", address(nationalSafe));
         vm.serializeAddress(j, "operatorSafe", address(operatorSafe));
         vm.serializeUint(j, "timelockDelay", cfg.timelockDelay);
