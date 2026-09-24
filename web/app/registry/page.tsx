@@ -5,6 +5,7 @@ import { Card, Notice, fmtKg, fmtTwd } from "@/components/ui";
 import { useReload } from "@/lib/client/useReload";
 import { flagOf } from "@/lib/deployment";
 import type { Announcement, Bulletin } from "@/lib/server/bulletin";
+import { fetchJson } from "@/lib/client/fetchJson";
 
 /// 公開資訊（公告欄）。
 ///
@@ -51,11 +52,12 @@ export default function RegistryPage() {
   useEffect(() => {
     let ignore = false;
     (async () => {
-      const r = await fetch("/api/bulletin");
-      const j = await r.json();
-      if (ignore) return;
-      if (!r.ok) setErr(j.error ?? "讀取失敗");
-      else { setB(j); setErr(null); }
+      try {
+        const j = await fetchJson<Bulletin>("/api/bulletin");
+        if (!ignore) { setB(j); setErr(null); }
+      } catch (e) {
+        if (!ignore) setErr(e instanceof Error ? e.message : "讀取失敗");
+      }
     })();
     return () => { ignore = true; };
   }, [reloadKey]);

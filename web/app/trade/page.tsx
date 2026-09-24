@@ -10,6 +10,7 @@ import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/componen
 import { bidWriteAbi, erc1155ApprovalAbi, erc20Abi, listingAbi, listingWriteAbi, poolAbi, routerAbi } from "@/lib/abis";
 import { flagOf } from "@/lib/deployment";
 import { type Call } from "@/lib/client/passkey";
+import { fetchJson, postJson } from "@/lib/client/fetchJson";
 
 /// 交易頁：買進與賣出同一頁，各自再分限價與市價。
 ///
@@ -111,8 +112,9 @@ export default function TradePage() {
   useEffect(() => {
     let ignore = false;
     (async () => {
-      const r = await fetch(`/api/market${credential ? `?account=${credential.address}` : ""}`);
-      if (!ignore && r.ok) setM(await r.json());
+      const j = await fetchJson<Market>(`/api/market${credential ? `?account=${credential.address}` : ""}`)
+        .catch(() => null);
+      if (!ignore && j) setM(j);
     })();
     return () => { ignore = true; };
   }, [credential, reloadKey]);
@@ -126,8 +128,7 @@ export default function TradePage() {
     let ignore = false;
     const id = setTimeout(async () => {
       try {
-        const r = await fetch(`/api/market/quote?account=${address}&kg=${kg}&side=buy`);
-        const j = (await r.json()) as Quote;
+        const j = await fetchJson<Quote>(`/api/market/quote?account=${address}&kg=${kg}&side=buy`);
         if (!ignore) setQuoted({ key: quoteKey, value: j });
       } catch { if (!ignore) setQuoted({ key: quoteKey, value: { ok: false, reason: "liquidity" } }); }
     }, 350);
@@ -155,7 +156,7 @@ export default function TradePage() {
 
   async function faucet() {
     setBusy("領取"); setMsg(null);
-    try { await fetch("/api/faucet", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ account: credential!.address }) }); reload(); }
+    try { await postJson("/api/faucet", { account: credential!.address }); reload(); }
     finally { setBusy(null); }
   }
 
@@ -214,9 +215,8 @@ export default function TradePage() {
       { target: d.listing, value: 0n, data: encodeFunctionData({ abi: listingWriteAbi, functionName: "list", args: [
         BigInt(b.batchId), kg, BigInt(Math.round(Number(f.price) * 1e6)), BigInt(Math.max(0, Math.round(Number(f.minFill) * 1000))),
       ] }) },
-    ], () => fetch("/api/listing-meta", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ batchId: b.batchId, seller: credential!.address, usageDeadline: f.usageDeadline, amountKg: Number(kg) }),
+    ], () => postJson("/api/listing-meta", {
+      batchId: b.batchId, seller: credential!.address, usageDeadline: f.usageDeadline, amountKg: Number(kg),
     }));
   }
 

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAccount } from "./AccountProvider";
 import { Button } from "./ui";
+import { postJson } from "@/lib/client/fetchJson";
 
 /// 費思：站內的對話助理。掛在 layout，所以每一頁都在。
 ///
@@ -97,12 +98,9 @@ export function Faith() {
     setMsgs(history);
     setBusy(true);
     try {
-      const r = await fetch("/api/faith", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path, messages: history.map((m) => ({ role: m.role, content: m.content })) }),
+      const j = await postJson<{ reply?: string; action?: Action }>("/api/faith", {
+        path, messages: history.map((m) => ({ role: m.role, content: m.content })),
       });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error ?? "費思沒有回應");
       setMsgs((m) => [...m, { role: "assistant", content: j.reply ?? "", action: j.action }]);
     } catch (e) {
       setMsgs((m) => [...m, { role: "assistant", content: e instanceof Error ? e.message : String(e) }]);
@@ -116,12 +114,7 @@ export function Faith() {
       if (a.href) { router.push(a.href); setOpen(false); return; }
 
       // ① 重算。過了幾分鐘的掛單、餘額、身分都可能不一樣了。
-      const r = await fetch("/api/faith/act", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kind: a.kind, params: a.params ?? {} }),
-      });
-      const fresh = (await r.json()) as Action & { error?: string };
-      if (!r.ok) throw new Error(fresh.error ?? "這個動作現在做不了");
+      const fresh = await postJson<Action>("/api/faith/act", { kind: a.kind, params: a.params ?? {} });
 
       // ② 比對。數字變了就換一張卡、重新要求確認——不要拿使用者沒看過的條件去簽。
       if (JSON.stringify(fresh.rows) !== JSON.stringify(a.rows)) {
@@ -134,17 +127,12 @@ export function Faith() {
       // ③ 執行。三條路：平台代送、領水、以及需要 passkey 簽章的那一類。
       let note = "";
       if (a.kind === "freeze_wallet") {
-        const res = await fetch("/api/account/freeze", { method: "POST" });
-        if (!res.ok) throw new Error((await res.json()).error ?? "凍結失敗");
+        await postJson("/api/account/freeze", {});
         refreshWallet();
         note = "錢包已凍結。解凍要一把還在錢包裡的 passkey。";
       } else if (a.kind === "claim_faucet") {
         if (!credential) throw new Error("這台裝置沒有 passkey，無法領取");
-        const res = await fetch("/api/faucet", {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ account: credential.address }),
-        });
-        if (!res.ok) throw new Error((await res.json()).error ?? "領取失敗");
+        await postJson("/api/faucet", { account: credential.address });
         note = "已領取測試用 mTWD。";
       } else {
         if (!fresh.calls?.length) throw new Error("這個動作沒有可執行的內容");

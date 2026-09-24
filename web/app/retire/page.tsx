@@ -10,6 +10,7 @@ import { creditAbi, poolAbi } from "@/lib/abis";
 import { PURPOSE_LABEL, flagOf, purposeAllowed } from "@/lib/deployment";
 import { type Call } from "@/lib/client/passkey";
 import { useReload } from "@/lib/client/useReload";
+import { fetchJson } from "@/lib/client/fetchJson";
 
 /// 註銷並取得憑證。
 ///
@@ -68,8 +69,9 @@ export default function RetirePage() {
   useEffect(() => {
     let ignore = false;
     (async () => {
-      const r = await fetch(`/api/market${credential ? `?account=${credential.address}` : ""}`);
-      if (!ignore && r.ok) setM(await r.json());
+      const j = await fetchJson<Market>(`/api/market${credential ? `?account=${credential.address}` : ""}`)
+        .catch(() => null);
+      if (!ignore && j) setM(j);
     })();
     return () => { ignore = true; };
   }, [credential, reloadKey]);

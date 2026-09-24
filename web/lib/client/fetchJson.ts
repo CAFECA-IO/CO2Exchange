@@ -1,82 +1,103 @@
 "use client";
+import type { ErrorCode } from "@/lib/error-codes";
 
-/// 會重試、而且**失敗時說得出原因**的 fetch。
+/// 前端呼叫本站 API 的唯一入口。
 ///
-/// 為什麼需要它：原本各處都是
-/// `fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => {})`。
-/// 那一行有三個問題疊在一起：
-///   1. `r.ok` 是 false 就得到 null，呼叫端多半寫 `if (x) setState(x)`——於是失敗＝什麼都沒發生。
-///   2. `catch` 是空的，錯誤被吞掉，主控台也看不到。
-///   3. 沒有重試。
-/// 結果是：任何一次暫時性的失敗（RPC 抖一下、serverless 冷啟動逾時、
-/// session cookie 與第一個請求的競態）都會讓畫面**永久**停在載入中，
-/// 沒有訊息、沒有重試、沒有出口。使用者只能重新整理——如果他猜得到要這麼做。
+/// 它做三件事，每一件都對應到一個真的發生過的問題：
 ///
-/// 這支把三件事一起修掉：分得出「還在載入」與「失敗了」、會自己退避重試、
-/// 而且把伺服器已經寫好的那些人話訊息（CHAIN_UNREACHABLE、DATA_STALE…）帶回來。
+/// 1. **拆信封。** 所有 API 回的都是 `{ok:true,data}` 或 `{ok:false,error}`
+///    （見 lib/server/api.ts）。呼叫端拿到的是 `data`，不必每次都寫一次拆解。
+/// 2. **失敗就丟，而且帶著錯誤碼。** 以前各處都是
+///    `fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => {})`——
+///    失敗變成 null，呼叫端的 `if (x)` 擋掉，於是畫面永遠停在載入中，
+///    沒有訊息也沒有重試。那個 bug 讓「錢包尚未建立」的人卡在門檻畫面上。
+/// 3. **會重試。** 退避 0.4s → 1.2s。要不要重試由**伺服器**說了算
+///    （`error.retriable`），前端不自己維護一張會漂移的重試表。
 
-export class FetchError extends Error {
-  constructor(message: string, readonly status: number, readonly code?: string) {
+export class ApiClientError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    /// 伺服器給的錯誤碼。用它做邏輯判斷，**不要比對 message**——
+    /// message 是給人看的，隨時會被改寫。
+    readonly code?: ErrorCode,
+    readonly details?: unknown,
+    readonly retriable = false,
+  ) {
     super(message);
-    this.name = "FetchError";
+    this.name = "ApiClientError";
   }
 }
 
-/// 值得再試一次的失敗：連不上、逾時、被限流，以及 5xx。
-/// 401/403/404 重試沒有意義——那是「你不能」或「沒有這個東西」，再問一百次答案一樣。
-const retriable = (status: number) => status === 0 || status === 408 || status === 429 || status >= 500;
+/// 舊名稱，沿用以免一次改動太多呼叫端。
+export { ApiClientError as FetchError };
 
+/// 連不上、逾時、被限流與 5xx 值得再試；401/403/404 不值得——
+/// 那是「你不能」或「沒有這個東西」，再問一百次答案一樣。
+const retriableStatus = (s: number) => s === 0 || s === 408 || s === 429 || s >= 500;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+type Envelope<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: { code: ErrorCode; message: string; details?: unknown; retriable?: boolean } };
 
 export async function fetchJson<T>(
   url: string,
-  opts: RequestInit & { retries?: number; signal?: AbortSignal } = {},
+  opts: RequestInit & { retries?: number } = {},
 ): Promise<T> {
   const { retries = 2, ...init } = opts;
-  let last: FetchError | undefined;
+  let last: ApiClientError | undefined;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     if (attempt > 0) {
-      // 0.4s → 1.2s。退避是為了給對面喘息，不是為了拖時間，所以上限壓得很低：
-      // 使用者正盯著一個載入中的畫面。
       await sleep(400 * 3 ** (attempt - 1));
       if (init.signal?.aborted) throw new DOMException("aborted", "AbortError");
     }
     try {
       const res = await fetch(url, init);
-      // 先拿文字再自己 parse：`res.json()` 失敗時分不出「伺服器回了壞東西」與
-      // 「網路斷在一半」，而這兩種都不該被當成「成功，值是 null」。
       const text = await res.text();
-      let body: (Record<string, unknown> & { error?: string; code?: string }) | null = null;
+      let body: Envelope<T> | null = null;
       let parsed = false;
-      try { body = text ? JSON.parse(text) : null; parsed = true; } catch { /* 下面處理 */ }
+      try { body = text ? (JSON.parse(text) as Envelope<T>) : null; parsed = true; } catch { /* 下面處理 */ }
 
-      if (res.ok) {
-        // **200 但解不出 JSON，或解出來是 null，不算成功。**
-        // 這裡曾經直接 `return body as T`，於是呼叫端拿到 null 並把它設進 state，
-        // 畫面在讀那個物件的欄位時整個炸掉——比原本的錯誤更難查。
-        if (parsed && body !== null) return body as T;
-        last = new FetchError("伺服器回了一個讀不懂的回應", 0);
+      if (!parsed || body === null) {
+        // 200 但讀不懂也算失敗。曾經在這裡直接回傳 null，呼叫端把它設進 state，
+        // 畫面讀欄位時整個白掉——比原本的錯誤更難查。
+        last = new ApiClientError("伺服器回了一個讀不懂的回應", res.status || 0, undefined, undefined, true);
+      } else if (body.ok) {
+        return body.data;
       } else {
-        last = new FetchError(
-          (typeof body?.error === "string" && body.error) || `伺服器回應 ${res.status}`,
-          res.status,
-          body?.code,
-        );
-        if (!retriable(res.status)) break;
+        const e = body.error;
+        last = new ApiClientError(e.message, res.status, e.code, e.details, !!e.retriable);
+        // 伺服器說不值得重試就不重試，即使狀態碼看起來像暫時性的。
+        if (!e.retriable && !retriableStatus(res.status)) break;
       }
     } catch (e) {
-      // 連 fetch 本身都失敗（離線、DNS、CORS、被中止）
       if (e instanceof DOMException && e.name === "AbortError") throw e;
-      last = new FetchError(e instanceof Error ? e.message : String(e), 0);
+      last = new ApiClientError(e instanceof Error ? e.message : String(e), 0, undefined, undefined, true);
     }
   }
-  throw last ?? new FetchError("未知的錯誤", 0);
+  throw last ?? new ApiClientError("未知的錯誤", 0);
 }
 
-/// 三態。`null` 一個值兼差「還沒問到」與「問不到」是上面那個 bug 的根源，
-/// 所以型別層就把它們分開，讓畫面不可能把兩者畫成同一件事。
+/// 送 JSON 出去。**預設不重試**，和 fetchJson 相反。
+///
+/// 因為寫入不是冪等的：/api/relay 會送出一筆真的交易、/api/faucet 會撥款、
+/// /api/kyc 會簽發身分。那些請求在「連線斷掉」或「回了 502」的時候，
+/// 伺服器端很可能已經做完了——重試一次就是做第二次。讀取重試最多是多問一次，
+/// 寫入重試是多做一件事，兩者不該共用同一個預設值。
+///
+/// 真的冪等的寫入（例如「把這批同意記下來」）可以自己傳 `retries`。
+export const postJson = <T>(url: string, body: unknown, opts: RequestInit & { retries?: number } = {}) =>
+  fetchJson<T>(url, {
+    retries: 0,
+    ...opts,
+    method: opts.method ?? "POST",
+    headers: { "content-type": "application/json", ...opts.headers },
+    body: JSON.stringify(body),
+  });
+
 export type Loadable<T> =
   | { state: "loading" }
-  | { state: "error"; error: FetchError }
+  | { state: "error"; error: ApiClientError }
   | { state: "ready"; value: T };

@@ -2,7 +2,8 @@ import { chat, disabledReason, faithEnabled, type FaithTool, type Turn } from "@
 import { runTool, toolSpecs, type Ctx } from "@/lib/server/faith/tools";
 import { systemPrompt } from "@/lib/server/faith/prompt";
 import { buildAction, isActionKind, type ActionKind } from "@/lib/server/faith/actions";
-import { handle, HttpError, me } from "@/lib/server/roles";
+import { me } from "@/lib/server/roles";
+import { ApiError, handleError, ok } from "@/lib/server/api";
 import { walletOf } from "@/lib/server/wallet";
 
 /// 費思的對話端點。工具迴圈跑在**伺服器端**，不是前端。
@@ -25,7 +26,7 @@ const PER_WINDOW = Number(process.env.FAITH_RATE_PER_MIN ?? 12);
 function rateLimit(key: string) {
   const now = Date.now();
   const hits = (HITS.get(key) ?? []).filter((t) => now - t < WINDOW_MS);
-  if (hits.length >= PER_WINDOW) throw new HttpError(429, "問得太快了，休息一下再問。");
+  if (hits.length >= PER_WINDOW) throw new ApiError("RATE_LIMITED", "問得太快了，休息一下再問。");
   hits.push(now);
   HITS.set(key, hits);
   if (HITS.size > 5000) HITS.clear(); // 別讓這張表無限長大
@@ -51,11 +52,13 @@ const PROPOSE: FaithTool = {
 
 export async function POST(req: Request) {
   try {
-    if (!faithEnabled()) return Response.json({ enabled: false, reply: disabledReason }, { status: 200 });
+    // 未啟用不是錯誤，是一個狀態：費思沒設金鑰時本站其餘功能完全正常，
+    // 所以回 200 + data.enabled=false，讓前端照常顯示那句說明。
+    if (!faithEnabled()) return ok({ enabled: false, reply: disabledReason });
 
     const body = (await req.json()) as { messages?: WireTurn[]; path?: string };
     const history = (body.messages ?? []).filter((m) => typeof m.content === "string" && m.content.trim());
-    if (!history.length) throw new HttpError(400, "沒有訊息");
+    if (!history.length) throw new ApiError("MISSING_PARAM", "沒有訊息", { param: "messages" });
     // 上下文長度自己管：對話越長成本越高，而十輪以前的寒暄對回答沒有幫助。
     const recent = history.slice(-12);
 
@@ -91,7 +94,7 @@ export async function POST(req: Request) {
         // 所以停下來、記一筆、照實告訴使用者。
         if (!isActionKind(kind)) {
           console.warn(`[faith] 白名單以外的動作被擋下：${kind} ${JSON.stringify(params).slice(0, 200)}`);
-          return Response.json({
+          return ok({
             enabled: true,
             reply: `我想做的那件事（${kind || "未命名動作"}）不在我能做的範圍內，所以沒有執行，也不會有確認卡。` +
               `我能做的只有查詢、解說，以及買賣、掛單、註銷、掛失這幾件事。` +
@@ -102,7 +105,7 @@ export async function POST(req: Request) {
 
         try {
           const preview = await buildAction(kind as ActionKind, params, ctx);
-          return Response.json({
+          return ok({
             enabled: true,
             reply: r.text || String(proposal.args.why ?? ""),
             // params 原樣帶回去：確認的那一刻要用它**重算**一次（見 /api/faith/act）。
@@ -113,7 +116,7 @@ export async function POST(req: Request) {
         } catch (e) {
           // 動作組不起來（參數不對、掛單沒了、餘額不夠）不是錯誤畫面，
           // 是對話的一部分：把原因餵回去讓模型改口或改問。
-          const why = e instanceof HttpError ? e.message : e instanceof Error ? e.message : String(e);
+          const why = e instanceof Error ? e.message : String(e);
           turns.push({ role: "assistant", content: r.text, toolCalls: r.toolCalls });
           turns.push({ role: "tool", id: proposal.id, name: proposal.name, content: JSON.stringify({ error: why }) });
           used.push(`propose_action(${kind})✗`);
@@ -122,7 +125,7 @@ export async function POST(req: Request) {
       }
 
       if (!r.toolCalls.length) {
-        return Response.json({ enabled: true, reply: r.text || "（沒有回應，再問一次看看）", usedTools: used });
+        return ok({ enabled: true, reply: r.text || "（沒有回應，再問一次看看）", usedTools: used });
       }
 
       turns.push({ role: "assistant", content: r.text, toolCalls: r.toolCalls });
@@ -132,10 +135,10 @@ export async function POST(req: Request) {
       }
     }
 
-    return Response.json({
+    return ok({
       enabled: true,
       reply: "這個問題我查了幾輪還是收斂不了。換個更具體的問法，或告訴我你想看哪一頁的資料。",
       usedTools: used,
     });
-  } catch (e) { return handle(e); }
+  } catch (e) { return handleError(e); }
 }

@@ -1,7 +1,8 @@
 import { isHex, type Hex } from "viem";
 import { passkeyAccountAbi } from "@/lib/abis";
 import { isAddress, publicClient } from "@/lib/server/chain";
-import { handle, HttpError, requireRole } from "@/lib/server/roles";
+import { requireRole } from "@/lib/server/roles";
+import { ApiError, fail, handleError, ok } from "@/lib/server/api";
 import { callsFor, walletOf, type Intent } from "@/lib/server/wallet";
 
 /// 簽章前要問鏈的那兩件事：這個帳戶的 nonce，以及這批 call 對應的 digest。
@@ -38,26 +39,26 @@ export async function POST(req: Request) {
       // 金鑰管理是這個系統裡最敏感的一組操作，沒有理由讓它接受外來的目標地址。
       const m = await requireRole("user");
       const w = await walletOf(m.email, m.id);
-      if (!w.exists) throw new HttpError(400, "還沒有鏈上錢包");
+      if (!w.exists) throw new ApiError("WALLET_NOT_DEPLOYED", "還沒有鏈上錢包");
       account = w.address;
       typed = callsFor(w.address, body.intent);
       mode = "self";
     } else {
       const calls = body.calls;
       if (!isAddress(account) || !Array.isArray(calls) || calls.length === 0) {
-        throw new HttpError(400, "bad request");
+        throw new ApiError("INVALID_PARAM", "要有 account 與至少一個 call", { params: ["account", "calls"] });
       }
       typed = calls.map((c) => {
-        if (!isAddress(c.target) || !isHex(c.data)) throw new HttpError(400, "bad call");
+        if (!isAddress(c.target) || !isHex(c.data)) throw new ApiError("INVALID_PARAM", "call 的 target 或 data 格式不正確", { param: "calls" });
         return { target: c.target, value: BigInt(c.value ?? "0"), data: c.data as Hex };
       });
     }
 
-    // 帳戶不在這條鏈上（多半是重新部署過）是**可預期**的狀態，不是錯誤：
-    // 呼叫端據此重新建立，再問一次。用 409 而不是 500，
-    // 是為了讓它在前端的 catch 裡不必去比對字串。
+    // 帳戶不在這條鏈上（多半是重新部署過）是**可預期**的狀態，不是伺服器壞了：
+    // 呼叫端據此重新建立，再問一次。用專屬的 WALLET_NOT_DEPLOYED 錯誤碼，
+    // 前端就不必去比對訊息字串——字串是給人看的，隨時會被改掉。
     const code = await publicClient.getCode({ address: account as `0x${string}` });
-    if (!code || code === "0x") return Response.json({ error: "no-code" }, { status: 409 });
+    if (!code || code === "0x") return fail("WALLET_NOT_DEPLOYED", { details: { account } });
 
     const nonce = await publicClient.readContract({
       address: account as `0x${string}`, abi: passkeyAccountAbi, functionName: "nonce",
@@ -65,9 +66,9 @@ export async function POST(req: Request) {
     const digest = await publicClient.readContract({
       address: account as `0x${string}`, abi: passkeyAccountAbi, functionName: "getDigest", args: [typed, nonce],
     });
-    return Response.json({
+    return ok({
       account, mode, nonce: nonce.toString(), digest,
       calls: typed.map((c) => ({ target: c.target, value: c.value.toString(), data: c.data })),
     });
-  } catch (e) { return handle(e); }
+  } catch (e) { return handleError(e); }
 }

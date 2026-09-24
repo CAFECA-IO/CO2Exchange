@@ -1,5 +1,6 @@
 import { buildAction, type ActionKind } from "@/lib/server/faith/actions";
-import { handle, HttpError, me } from "@/lib/server/roles";
+import { me } from "@/lib/server/roles";
+import { ApiError, handleError, ok } from "@/lib/server/api";
 import { walletOf } from "@/lib/server/wallet";
 
 /// 確認的那一刻，把動作**重新**算一次。
@@ -15,13 +16,13 @@ import { walletOf } from "@/lib/server/wallet";
 export async function POST(req: Request) {
   try {
     const { kind, params } = (await req.json()) as { kind?: string; params?: Record<string, unknown> };
-    if (!kind) throw new HttpError(400, "缺少 kind");
+    if (!kind) throw new ApiError("MISSING_PARAM", "缺少 kind", { param: "kind" });
     const who = await me();
     const wallet = who ? await walletOf(who.email, who.id).catch(() => null) : null;
     const preview = await buildAction(kind as ActionKind, params ?? {}, {
       address: wallet?.exists ? wallet.address : undefined,
       email: who?.email, userId: who?.id,
     });
-    return Response.json(preview);
-  } catch (e) { return handle(e); }
+    return ok(preview);
+  } catch (e) { return handleError(e); }
 }

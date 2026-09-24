@@ -2,7 +2,8 @@ import { certificateAbi } from "@/lib/abis";
 import { deployment, publicClient } from "@/lib/server/chain";
 import { retiredLogs } from "@/lib/server/certs";
 import { existingPdf } from "@/lib/server/certpdf";
-import { handle, requireRole } from "@/lib/server/roles";
+import { requireRole } from "@/lib/server/roles";
+import { handleError, ok } from "@/lib/server/api";
 
 /// 管理員：所有憑證 + PDF / 回寫狀態
 export async function GET() {
@@ -21,6 +22,6 @@ export async function GET() {
         anchored: !!pdf && pdf.sha256.toLowerCase() === onchain.toLowerCase(),
       };
     }));
-    return Response.json({ certificates: rows.sort((a, b) => b.certId - a.certId) });
-  } catch (e) { return handle(e); }
+    return ok({ certificates: rows.sort((a, b) => b.certId - a.certId) });
+  } catch (e) { return handleError(e); }
 }

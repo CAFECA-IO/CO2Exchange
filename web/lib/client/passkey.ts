@@ -2,6 +2,7 @@
 import { createWebAuthnCredential, toWebAuthnAccount } from "viem/account-abstraction";
 import { bytesToBigInt, encodeAbiParameters, hexToBytes, type Address, type Hex } from "viem";
 import { webAuthnAuthType } from "@/lib/abis";
+import { ApiClientError, fetchJson, postJson } from "@/lib/client/fetchJson";
 
 /// 這台裝置上的 passkey。**不是**「我的帳戶」——帳戶在鏈上，地址由登入帳號決定；
 /// 這裡只記「這台裝置用哪一把鑰匙、對應鏈上的哪一個 keyId」。
@@ -76,13 +77,11 @@ const wire = (calls: Call[]) => calls.map((c) => ({ ...c, value: c.value.toStrin
 /// （重新部署、換一條鏈），同一個登入帳號會對到不同地址。localStorage 裡存的舊地址
 /// 就成了空地址。呼叫端據此重新建立。
 export async function hasCode(address: Address): Promise<boolean> {
-  try {
-    const r = await fetch(`/api/account?address=${address}`);
-    if (!r.ok) return true; // 問不到是另一回事，別誤判成帳戶不存在
-    return !!(await r.json()).exists;
-  } catch {
-    return true;
-  }
+  // 問不到是另一回事，別誤判成帳戶不存在——回 true 讓呼叫端照原路走，
+  // 真的不存在的話下一步（prepare）會用 WALLET_NOT_DEPLOYED 講清楚。
+  return fetchJson<{ exists: boolean }>(`/api/account?address=${address}`)
+    .then((d) => !!d.exists)
+    .catch(() => true);
 }
 
 /// 把一個 digest 交給這台裝置上的 passkey 簽，編成合約要的 WebAuthnAuth。
@@ -107,31 +106,28 @@ export type RelayResult = { txHash: Hex; status: string; gasUsed: string };
 type Prepared = { account: Address; mode: "execute" | "self"; digest: Hex; calls: { target: Address; value: string; data: Hex }[] };
 
 async function prepare(body: unknown, cred: StoredCredential): Promise<Prepared> {
-  const res = await fetch("/api/relay/prepare", {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
-  });
-  if (res.status === 409) {
-    throw new Error(
-      // 正常路徑不會走到這裡：AccountProvider.relay 在送出前就會確認並重建。
-      // 會到這裡表示確認之後帳戶才消失（例如剛好在這中間重新部署），
-      // 所以不要再說「重新整理就會自動修好」——那句話在這個時點是空頭支票。
-      `這個錢包（${cred.address.slice(0, 8)}…）在目前這條鏈上不存在，多半是剛剛重新部署過。` +
-        `請重新整理頁面；若仍失敗，按「移除此裝置的紀錄」後用同一個登入帳號重新建立。`,
-    );
+  try {
+    return await postJson<Prepared>("/api/relay/prepare", body);
+  } catch (e) {
+    // 帳戶不在這條鏈上：伺服器用 WALLET_NOT_DEPLOYED 講這件事，不靠狀態碼也不靠訊息字串。
+    //
+    // 正常路徑不會走到這裡：AccountProvider.relay 在送出前就會確認並重建。
+    // 會到這裡表示確認之後帳戶才消失（例如剛好在這中間重新部署），
+    // 所以不要再說「重新整理就會自動修好」——那句話在這個時點是空頭支票。
+    if (e instanceof ApiClientError && e.code === "WALLET_NOT_DEPLOYED") {
+      throw new Error(
+        `這個錢包（${cred.address.slice(0, 8)}…）在目前這條鏈上不存在，多半是剛剛重新部署過。` +
+          `請重新整理頁面；若仍失敗，按「移除此裝置的紀錄」後用同一個登入帳號重新建立。`,
+      );
+    }
+    throw e;
   }
-  const json = await res.json();
-  if (!res.ok) throw new Error(json.error ?? "prepare failed");
-  return json as Prepared;
 }
 
 async function send(p: Prepared, keyId: Hex, signature: Hex): Promise<RelayResult> {
-  const res = await fetch("/api/relay", {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ account: p.account, calls: p.calls, keyId, signature, mode: p.mode }),
+  return postJson<RelayResult>("/api/relay", {
+    account: p.account, calls: p.calls, keyId, signature, mode: p.mode,
   });
-  const json = await res.json();
-  if (!res.ok) throw new Error(json.error ?? "relay failed");
-  return json as RelayResult;
 }
 
 /// 後端算 digest → passkey 在這台裝置上簽 → 交給 relayer。

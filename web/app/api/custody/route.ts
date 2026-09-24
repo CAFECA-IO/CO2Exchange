@@ -1,9 +1,9 @@
 import { custody } from "@/lib/server/reserve";
-import { handle } from "@/lib/server/roles";
+import { handleError, ok } from "@/lib/server/api";
 
 /// 託管揭露是公開資訊：不需要登入。
 export async function GET() {
   try {
-    return Response.json(await custody());
-  } catch (e) { return handle(e); }
+    return ok(await custody());
+  } catch (e) { return handleError(e); }
 }

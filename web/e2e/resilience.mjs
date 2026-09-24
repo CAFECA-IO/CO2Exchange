@@ -22,7 +22,7 @@ try {
     let n = 0;
     await u.page.route("**/api/account", (route) => {
       // 只擋第一次（且只擋不帶查詢字串的那一支，避免影響 ?address= 的檢查）
-      if (n++ === 0) return route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"chain unreachable","code":"CHAIN_UNREACHABLE"}' });
+      if (n++ === 0) return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ ok: false, error: { code: "CHAIN_UNREACHABLE", message: "chain unreachable", retriable: true } }) });
       return route.continue();
     });
     await u.page.goto(`${BASE}/trade`);
@@ -42,7 +42,7 @@ try {
     let calls = 0;
     await u.page.route("**/api/account", (route) => {
       calls++;
-      if (down) return route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"無法連線到區塊鏈節點（http://127.0.0.1:28545）。","code":"CHAIN_UNREACHABLE"}' });
+      if (down) return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ ok: false, error: { code: "CHAIN_UNREACHABLE", message: "無法連線到區塊鏈節點（http://127.0.0.1:28545）。", retriable: true } }) });
       return route.continue();
     });
 

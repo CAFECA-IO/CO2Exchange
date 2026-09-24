@@ -2,7 +2,8 @@ import { type Hex } from "viem";
 import { accountFactoryAbi } from "@/lib/abis";
 import { deployment, isAddress, publicClient, relayerClient } from "@/lib/server/chain";
 import { keyByCredential, putKey } from "@/lib/server/accounts";
-import { handle, HttpError, requireRole } from "@/lib/server/roles";
+import { requireRole } from "@/lib/server/roles";
+import { ApiError, fail, handleError, ok } from "@/lib/server/api";
 import { keyIdOf, splitPublicKey, walletOf } from "@/lib/server/wallet";
 
 /// 這個登入帳號的錢包。**一個登入帳號一個錢包**，所以這裡不再回「帳戶清單」。
@@ -18,22 +19,22 @@ export async function GET(req: Request) {
 
     const address = u.searchParams.get("address");
     if (address) {
-      if (!isAddress(address)) return Response.json({ error: "address" }, { status: 400 });
+      if (!isAddress(address)) return fail("INVALID_ADDRESS", { details: { param: "address" } });
       const code = await publicClient.getCode({ address });
-      return Response.json({ address, exists: !!code && code !== "0x" });
+      return ok({ address, exists: !!code && code !== "0x" });
     }
 
     const credentialId = u.searchParams.get("credentialId");
     if (credentialId) {
       const row = keyByCredential(credentialId);
       return row
-        ? Response.json({ address: row.address, publicKey: row.publicKey, keyId: row.keyId, label: row.label })
-        : Response.json({ error: "unknown credential" }, { status: 404 });
+        ? ok({ address: row.address, publicKey: row.publicKey, keyId: row.keyId, label: row.label })
+        : fail("CREDENTIAL_NOT_FOUND", { details: { credentialId } });
     }
 
     const m = await requireRole("user");
-    return Response.json(await walletOf(m.email, m.id));
-  } catch (e) { return handle(e); }
+    return ok(await walletOf(m.email, m.id));
+  } catch (e) { return handleError(e); }
 }
 
 /// POST { credentialId, publicKey, label? }
@@ -49,7 +50,7 @@ export async function POST(req: Request) {
     const m = await requireRole("user");
     const { credentialId, publicKey, label } = (await req.json()) as
       { credentialId?: string; publicKey?: string; label?: string };
-    if (!credentialId || !publicKey) throw new HttpError(400, "credentialId 與 publicKey 必填");
+    if (!credentialId || !publicKey) throw new ApiError("MISSING_PARAM", "credentialId 與 publicKey 必填", { params: ["credentialId", "publicKey"] });
     const { qx, qy } = splitPublicKey(publicKey);
     const keyId = keyIdOf(qx, qy);
     const name = (label ?? "這台裝置").slice(0, 64);
@@ -67,7 +68,7 @@ export async function POST(req: Request) {
         credentialId, publicKey: publicKey as Hex, keyId, accountRef: before.accountRef,
         address: before.address, label: name, userId: m.id, email: m.email,
       });
-      return Response.json({ ...(await walletOf(m.email, m.id)), created: true, txHash, keyId });
+      return ok({ ...(await walletOf(m.email, m.id)), created: true, txHash, keyId });
     }
 
     // 錢包已經在鏈上。這把金鑰已經註冊過的話，補上本機對照就好——
@@ -78,7 +79,7 @@ export async function POST(req: Request) {
         credentialId, publicKey: publicKey as Hex, keyId, accountRef: before.accountRef,
         address: before.address, label: known.label || name, userId: m.id, email: m.email,
       });
-      return Response.json({ ...(await walletOf(m.email, m.id)), created: false, keyId });
+      return ok({ ...(await walletOf(m.email, m.id)), created: false, keyId });
     }
 
     // 新的一把金鑰，但錢包已經有主人了。**不能**就這樣加進去——
@@ -88,6 +89,6 @@ export async function POST(req: Request) {
       credentialId, publicKey: publicKey as Hex, keyId, accountRef: before.accountRef,
       address: before.address, label: name, userId: m.id, email: m.email, pending: true,
     });
-    return Response.json({ ...(await walletOf(m.email, m.id)), created: false, keyId, needsExistingKey: true });
-  } catch (e) { return handle(e); }
+    return ok({ ...(await walletOf(m.email, m.id)), created: false, keyId, needsExistingKey: true });
+  } catch (e) { return handleError(e); }
 }

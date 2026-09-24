@@ -2,7 +2,7 @@ import { deployment, isAddress } from "@/lib/server/chain";
 import { holdings, listBids, listOrders, poolKey, poolSpotPricePerTonne } from "@/lib/server/market";
 import { listingAbi } from "@/lib/abis";
 import { publicClient } from "@/lib/server/chain";
-import { handle } from "@/lib/server/roles";
+import { handleError, ok } from "@/lib/server/api";
 
 export async function GET(req: Request) {
   try {
@@ -13,8 +13,8 @@ export async function GET(req: Request) {
       publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "feeBps" }),
     ]);
     const h = isAddress(account) ? await holdings(account) : null;
-    return Response.json({ orders, bids, spotPricePerTonne: spot, listingFeeBps: Number(feeBps), poolKey: poolKey(), holdings: h });
+    return ok({ orders, bids, spotPricePerTonne: spot, listingFeeBps: Number(feeBps), poolKey: poolKey(), holdings: h });
   } catch (e) {
-    return handle(e);
+    return handleError(e);
   }
 }

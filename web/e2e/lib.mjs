@@ -11,6 +11,11 @@ export const BASE = process.env.BASE_URL ?? "http://localhost:10010";
 /// 爆的不是功能，是測試自己留下的狀態。
 /// 管理員與查驗機構不能這樣做：它們的權限是 ADMIN_EMAILS / VERIFIER_EMAILS 白名單。
 const RUN = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+/// 所有 API 都回 `{ok,data}` / `{ok,error}` 的信封（見 lib/server/api.ts）。
+/// e2e 想看的幾乎都是信封裡那一層，所以在這裡拆一次，各個測試就不必各拆各的。
+export const unwrap = (body) =>
+  body && typeof body === "object" && "ok" in body ? (body.ok ? body.data : body.error) : body;
+
 export const who = (name) => `${name}-${RUN}@example.com`;
 
 export async function launch() {

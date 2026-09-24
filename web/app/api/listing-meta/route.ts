@@ -1,6 +1,6 @@
 import { all, insert } from "@/lib/server/store";
 import type { WithId } from "@/lib/server/store";
-import { handle } from "@/lib/server/roles";
+import { fail, handleError, ok } from "@/lib/server/api";
 import { isAddress } from "@/lib/server/chain";
 import { auth } from "@/auth";
 
@@ -15,20 +15,20 @@ export async function GET(req: Request) {
   try {
     const batchId = new URL(req.url).searchParams.get("batchId");
     const rows = all<ListingMeta>("listing-meta");
-    return Response.json({ meta: batchId ? rows.filter((r) => r.batchId === Number(batchId)) : rows });
-  } catch (e) { return handle(e); }
+    return ok({ meta: batchId ? rows.filter((r) => r.batchId === Number(batchId)) : rows });
+  } catch (e) { return handleError(e); }
 }
 
 export async function POST(req: Request) {
   try {
     const session = await auth();
-    if (!session?.user) return Response.json({ error: "unauthenticated" }, { status: 401 });
+    if (!session?.user) return fail("UNAUTHENTICATED");
     const b = (await req.json()) as Partial<ListingMeta>;
     if (!isAddress(b.seller) || typeof b.batchId !== "number") {
-      return Response.json({ error: "batchId 與 seller 必填" }, { status: 400 });
+      return fail("MISSING_PARAM", { message: "batchId 與 seller 必填", details: { params: ["batchId", "seller"] } });
     }
-    return Response.json(insert<ListingMeta>("listing-meta", {
+    return ok(insert<ListingMeta>("listing-meta", {
       batchId: b.batchId, seller: b.seller, usageDeadline: b.usageDeadline ?? "", amountKg: b.amountKg ?? 0,
     }));
-  } catch (e) { return handle(e); }
+  } catch (e) { return handleError(e); }
 }

@@ -1,6 +1,7 @@
 import { passkeyAccountAbi } from "@/lib/abis";
 import { publicClient, relayerClient } from "@/lib/server/chain";
-import { handle, HttpError, requireRole } from "@/lib/server/roles";
+import { requireRole } from "@/lib/server/roles";
+import { ApiError, handleError, ok } from "@/lib/server/api";
 import { walletOf } from "@/lib/server/wallet";
 
 /// 掛失。只要**登得進來**就按得下去。
@@ -18,14 +19,14 @@ export async function POST() {
   try {
     const m = await requireRole("user");
     const w = await walletOf(m.email, m.id);
-    if (!w.exists) throw new HttpError(400, "還沒有鏈上錢包");
-    if (w.frozen) return Response.json({ ...w, alreadyFrozen: true });
+    if (!w.exists) throw new ApiError("WALLET_NOT_DEPLOYED", "還沒有鏈上錢包，沒有東西可以凍結");
+    if (w.frozen) return ok({ ...w, alreadyFrozen: true });
 
     const { request } = await publicClient.simulateContract({
       address: w.address, abi: passkeyAccountAbi, functionName: "freeze", account: relayerClient.account,
     });
     const txHash = await relayerClient.writeContract(request);
     await publicClient.waitForTransactionReceipt({ hash: txHash });
-    return Response.json({ ...(await walletOf(m.email, m.id)), txHash });
-  } catch (e) { return handle(e); }
+    return ok({ ...(await walletOf(m.email, m.id)), txHash });
+  } catch (e) { return handleError(e); }
 }

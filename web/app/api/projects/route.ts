@@ -1,6 +1,6 @@
 import { registryAbi, registryWriteAbi } from "@/lib/abis";
 import { deployment, isAddress, publicClient } from "@/lib/server/chain";
-import { handle } from "@/lib/server/roles";
+import { handleError, ok } from "@/lib/server/api";
 
 /// GET [?owner=] → 專案清單（鏈上）
 export async function GET(req: Request) {
@@ -14,6 +14,6 @@ export async function GET(req: Request) {
     if (isAddress(owner) && p.owner.toLowerCase() !== owner.toLowerCase()) continue;
     out.push({ projectId: Number(i), owner: p.owner, name: p.name, methodology: p.methodology, location: p.location, metadataURI: p.metadataURI, active: p.active });
   }
-  return Response.json({ projects: out });
-  } catch (e) { return handle(e); }
+  return ok({ projects: out });
+  } catch (e) { return handleError(e); }
 }

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import type { GlobeCountry } from "@/components/Globe";
 import { PriceSpark, type SparkPoint } from "@/components/PriceSpark";
+import { fetchJson } from "@/lib/client/fetchJson";
 
 /// 地球是純瀏覽器的東西（canvas、rAF、DecompressionStream），伺服器端算不出來，
 /// 所以動態載入並關掉 SSR。地球還沒到之前，右邊的清單已經是完整可用的頁面——
@@ -81,8 +82,7 @@ export default function GlobeHero() {
 
   useEffect(() => {
     let alive = true;
-    fetch("/api/market/by-country?hours=8760")
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+    fetchJson<{ countries: CountryRow[] }>("/api/market/by-country?hours=8760")
       .then((d) => alive && setRows(d.countries))
       .catch(() => alive && setErr(true));
     return () => { alive = false; };

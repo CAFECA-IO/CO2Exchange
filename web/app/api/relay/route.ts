@@ -2,7 +2,7 @@ import { BaseError, ContractFunctionRevertedError, decodeErrorResult, isHex, typ
 import { passkeyAccountAbi } from "@/lib/abis";
 import { errorAbi } from "@/lib/error-abi";
 import { isAddress, publicClient, relayerClient } from "@/lib/server/chain";
-import { handle, isChainUnreachable, isDeploymentMismatch } from "@/lib/server/roles";
+import { fail, handleError, ok } from "@/lib/server/api";
 
 /// 把 revert 拆到看得懂為止。
 ///
@@ -95,7 +95,10 @@ export async function POST(req: Request) {
   const { account, calls, keyId, signature, mode } = (await req.json()) as
     { account?: string; calls?: Call[]; keyId?: string; signature?: string; mode?: string };
   if (!isAddress(account) || !Array.isArray(calls) || !isHex(signature) || !isHex(keyId) || keyId.length !== 66) {
-    return Response.json({ error: "bad request" }, { status: 400 });
+    return fail("INVALID_PARAM", {
+      message: "account、calls、keyId 與 signature 都必填，且格式要正確",
+      details: { params: ["account", "calls", "keyId", "signature"] },
+    });
   }
   const fn = mode === "self" ? "executeSelf" : "execute";
   const typed = calls.map((c) => {
@@ -108,15 +111,15 @@ export async function POST(req: Request) {
     });
     const hash = await relayerClient.writeContract(request);
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
-    return Response.json({ txHash: hash, status: receipt.status, gasUsed: receipt.gasUsed.toString() });
+    return ok({ txHash: hash, status: receipt.status, gasUsed: receipt.gasUsed });
   } catch (e) {
-    // 環境問題（節點連不上、部署檔對不上）先分流，不要被當成合約 revert
-    if (isChainUnreachable(e) || isDeploymentMismatch(e)) return handle(e);
-    let reason = e instanceof Error ? e.message : String(e);
+    // 合約 revert 才是這一支要特別處理的：把它拆到看得懂為止（見上面的 unwrap）。
+    // 其他的（節點連不上、部署檔對不上、未知例外）交給 handleError 去分類，
+    // 這樣「環境壞了」與「交易被拒絕」在前端拿到的是不同的錯誤碼。
     if (e instanceof BaseError) {
       const r = e.walk((x) => x instanceof ContractFunctionRevertedError) as ContractFunctionRevertedError | null;
-      reason = r?.data ? unwrap(r.data.errorName, r.data.args ?? []) : e.shortMessage;
+      if (r?.data) return fail("CONTRACT_REVERTED", { message: unwrap(r.data.errorName, r.data.args ?? []), details: { errorName: r.data.errorName } });
     }
-    return Response.json({ error: reason }, { status: 400 });
+    return handleError(e);
   }
 }

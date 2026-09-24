@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { AreaChart, BarList, Donut, StatTile } from "./charts";
 import { Card } from "./ui";
 import type { Bulletin } from "@/lib/server/bulletin";
+import { fetchJson } from "@/lib/client/fetchJson";
 
 /// 首頁的市場概況。
 ///
@@ -26,12 +27,13 @@ export function MarketOverview() {
     (async () => {
       try {
         const [bj, mj] = await Promise.all([
-          fetch("/api/bulletin").then((r) => r.json()),
-          fetch("/api/market").then((r) => r.json()),
+          fetchJson<Bulletin>("/api/bulletin"),
+          fetchJson<{ orders: Order[] }>("/api/market"),
         ]);
         if (!live) return;
-        if (!bj.error) setB(bj);
-        if (!mj.error) setOrders(mj.orders ?? []);
+        // 失敗現在是丟例外，不是回一個帶 error 欄位的物件——所以這裡拿到的一定是成功的資料。
+        setB(bj);
+        setOrders(mj.orders ?? []);
       } catch { /* 首頁的補充資訊，讀不到就不顯示，不要擋住主要內容 */ }
     })();
     return () => { live = false; };

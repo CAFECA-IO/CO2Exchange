@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Notice } from "./ui";
 import { useReload } from "@/lib/client/useReload";
+import { fetchJson, postJson } from "@/lib/client/fetchJson";
 
 /// 定型化契約的簽署關卡。
 ///
@@ -40,9 +41,9 @@ export function useAgreementGate(account: string | undefined, ids: readonly stri
     (async () => {
       setLoading(true);
       try {
-        const r = await fetch(`/api/agreements?account=${account}&need=${need}`);
-        const j = await r.json();
-        if (!ignore && r.ok) setMissing(j.missing ?? []);
+        const j = await fetchJson<{ missing: AgreementMeta[] }>(`/api/agreements?account=${account}&need=${need}`)
+          .catch(() => null);
+        if (!ignore && j) setMissing(j.missing ?? []);
       } finally {
         if (!ignore) setLoading(false);
       }
@@ -62,17 +63,12 @@ export function useAgreementGate(account: string | undefined, ids: readonly stri
 
   const accept = useCallback(async (context?: string) => {
     if (!account || missing.length === 0) return;
-    const r = await fetch("/api/agreements", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        account,
-        ids: missing.map((m) => m.id),
-        reviewStartedAt: openedAt[missing[0].id],
-        context,
-      }),
+    await postJson("/api/agreements", {
+      account,
+      ids: missing.map((m) => m.id),
+      reviewStartedAt: openedAt[missing[0].id],
+      context,
     });
-    if (!r.ok) throw new Error((await r.json()).error ?? "契約簽署失敗");
     reload();
   }, [account, missing, openedAt, reload]);
 

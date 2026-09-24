@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, u
 import { SessionProvider, useSession } from "next-auth/react";
 import type { Deployment } from "@/lib/deployment";
 import { useReload } from "@/lib/client/useReload";
-import { fetchJson, type FetchError } from "@/lib/client/fetchJson";
+import { fetchJson, postJson, type ApiClientError } from "@/lib/client/fetchJson";
 import {
   clearCredential, credentialServerSnapshot, credentialSnapshot, discoverPasskey, hasCode,
   registerPasskey, saveCredential, signAndRelay, signSelfIntent, subscribeCredential,
@@ -56,7 +56,7 @@ type Ctx = {
   /// 問不到錢包狀態的原因。**這個欄位存在的理由**：以前失敗與「還在問」都是 null，
   /// 畫面只能一直顯示「讀取中」，於是一次暫時性的失敗＝永久卡住。
   /// 有了它，畫面能說出發生什麼事，使用者也才有東西可以按。
-  walletError: FetchError | null;
+  walletError: ApiClientError | null;
   refreshWallet: () => void;
   /// 設定讀不到時也要能重試（同一個 bug 的另一半）。
   refreshConfig: () => void;
@@ -115,7 +115,7 @@ function Inner({ children }: { children: React.ReactNode }) {
   const [walletFor, setWalletFor] = useState<{ userId: string; wallet: Wallet } | null>(null);
   // 失敗也要連同「這是誰的、第幾次嘗試」一起記，理由跟 walletFor 一樣：
   // 換帳號或重試時不必在 effect 裡先同步清空。
-  const [walletFail, setWalletFail] = useState<{ userId: string; key: number; error: FetchError } | null>(null);
+  const [walletFail, setWalletFail] = useState<{ userId: string; key: number; error: ApiClientError } | null>(null);
 
   // 憑證的真實來源是 localStorage，不是 React state：訂閱它，不要複製一份再想辦法同步。
   const stored = useSyncExternalStore(subscribeCredential, credentialSnapshot, credentialServerSnapshot);
@@ -151,7 +151,7 @@ function Inner({ children }: { children: React.ReactNode }) {
     const ctl = new AbortController();
     fetchJson<Wallet>("/api/account", { signal: ctl.signal })
       .then((w) => setWalletFor({ userId, wallet: w }))
-      .catch((e: FetchError) => {
+      .catch((e: ApiClientError) => {
         if (e?.name === "AbortError") return;
         // **重試都用完了才會走到這裡。** 記下來讓畫面說得出話——
         // 這一行就是「卡住非常久」與「告訴你發生什麼事」的差別。
@@ -197,9 +197,9 @@ function Inner({ children }: { children: React.ReactNode }) {
     if (!address || !wallet?.exists) return;
     let ignore = false;
     (async () => {
-      const r = await fetch(`/api/kyc?account=${address}`);
-      if (ignore || !r.ok) return;
-      setIdFor({ address, identity: (await r.json()) as Identity, at: Date.now() });
+      const identity = await fetchJson<Identity>(`/api/kyc?account=${address}`).catch(() => null);
+      if (ignore || !identity) return;
+      setIdFor({ address, identity, at: Date.now() });
     })();
     return () => { ignore = true; };
   }, [wallet?.address, wallet?.exists, tierKey]);
@@ -227,14 +227,11 @@ function Inner({ children }: { children: React.ReactNode }) {
   /// created=true → 錢包剛剛被部署，這把是第一把金鑰。
   /// needsExistingKey=true → 錢包已經存在，這把進了待核准區。
   const post = useCallback(async (credentialId: string, publicKey: `0x${string}`, label: string) => {
-    const res = await fetch("/api/account", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ credentialId, publicKey, label }),
-    });
-    const j = await res.json();
-    if (!res.ok) throw new Error(j.error ?? "account failed");
-    setWalletFor({ userId: userId!, wallet: j as Wallet });
-    return j as Wallet & { created?: boolean; needsExistingKey?: boolean; keyId: `0x${string}` };
+    const j = await postJson<Wallet & { created?: boolean; needsExistingKey?: boolean; keyId: `0x${string}` }>(
+      "/api/account", { credentialId, publicKey, label },
+    );
+    setWalletFor({ userId: userId!, wallet: j });
+    return j;
   }, [userId]);
 
   const deviceName = useCallback(() => {
@@ -268,9 +265,13 @@ function Inner({ children }: { children: React.ReactNode }) {
     setBusy("等待 passkey…");
     try {
       const id = await discoverPasskey();
-      const res = await fetch(`/api/account?credentialId=${encodeURIComponent(id)}`);
-      if (!res.ok) throw new Error("這把 passkey 沒有對應的錢包紀錄，請改用「在這台裝置新增 passkey」");
-      const j = (await res.json()) as { address: `0x${string}`; publicKey: `0x${string}`; keyId: `0x${string}` };
+      const j = await fetchJson<{ address: `0x${string}`; publicKey: `0x${string}`; keyId: `0x${string}` }>(
+        `/api/account?credentialId=${encodeURIComponent(id)}`,
+      ).catch((e: ApiClientError) => {
+        // 這一個錯誤要換成使用者看得懂的下一步，所以特別攔。其餘照原訊息拋出去。
+        if (e.code === "CREDENTIAL_NOT_FOUND") throw new Error("這把 passkey 沒有對應的錢包紀錄，請改用「在這台裝置新增 passkey」");
+        throw e;
+      });
       saveCredential({ id, publicKey: j.publicKey, address: j.address, userId, keyId: j.keyId });
       refreshWallet();
     } finally { setBusy(null); }
@@ -301,14 +302,12 @@ function Inner({ children }: { children: React.ReactNode }) {
     await selfAction("核准新裝置…", { kind: "addKey", publicKey, label });
     // 鏈上成功之後才把待核准旗標拿掉。順序反過來的話，交易失敗就會留下
     // 一台「顯示已核准、其實簽不了字」的裝置。
-    await fetch("/api/account/pending", {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ keyId }),
-    }).catch(() => {});
+    await postJson("/api/account/pending", { keyId }).catch(() => {});
     refreshWallet();
   }, [selfAction, refreshWallet]);
 
   const rejectDevice = useCallback(async (keyId: `0x${string}`) => {
-    await fetch(`/api/account/pending?keyId=${keyId}`, { method: "DELETE" });
+    await fetchJson(`/api/account/pending?keyId=${keyId}`, { method: "DELETE", retries: 0 });
     refreshWallet();
   }, [refreshWallet]);
 
@@ -321,9 +320,7 @@ function Inner({ children }: { children: React.ReactNode }) {
   const freeze = useCallback(async () => {
     setBusy("凍結錢包…");
     try {
-      const res = await fetch("/api/account/freeze", { method: "POST" });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error ?? "freeze failed");
+      await postJson("/api/account/freeze", {});
     } finally { setBusy(null); refreshWallet(); }
   }, [refreshWallet]);
 

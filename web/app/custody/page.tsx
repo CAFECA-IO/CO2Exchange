@@ -4,6 +4,7 @@ import { BarList, StatTile } from "@/components/charts";
 import { Card, Notice, fmtKg } from "@/components/ui";
 import { flagOf } from "@/lib/deployment";
 import type { Custody } from "@/lib/server/reserve";
+import { fetchJson } from "@/lib/client/fetchJson";
 
 /// 託管與資產稽核揭露。
 ///
@@ -30,10 +31,9 @@ export default function CustodyPage() {
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/custody")
-      .then((r) => r.json())
-      .then((j) => (j.error ? setErr(j.error) : setC(j)))
-      .catch((e) => setErr(String(e)));
+    fetchJson<Custody>("/api/custody")
+      .then(setC)
+      .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
   }, []);
 
   const r = c?.latest;

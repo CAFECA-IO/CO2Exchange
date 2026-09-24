@@ -4,7 +4,7 @@ import { accountFactoryAbi, passkeyAccountAbi } from "@/lib/abis";
 import { deployment, publicClient } from "./chain";
 import { keysOfRef, pendingOfRef } from "./accounts";
 import { accountRef as refOf } from "./account-ref";
-import { HttpError } from "./roles";
+import { ApiError } from "./api";
 
 /// 錢包的伺服器端視圖：把「鏈上怎麼樣」與「這台伺服器記得什麼」合成一份答案。
 ///
@@ -49,7 +49,7 @@ export const keyIdOf = (qx: Hex, qy: Hex): Hex =>
 /// 64-byte 未壓縮公鑰（x||y）拆成合約要的兩個 bytes32
 export function splitPublicKey(publicKey: string): { qx: Hex; qy: Hex } {
   const hex = publicKey.replace(/^0x/, "").replace(/^04/, "");
-  if (hex.length !== 128) throw new HttpError(400, "publicKey 必須是 64 bytes 的 x||y");
+  if (hex.length !== 128) throw new ApiError("INVALID_PUBLIC_KEY", undefined, { param: "publicKey" });
   return { qx: `0x${hex.slice(0, 64)}` as Hex, qy: `0x${hex.slice(64)}` as Hex };
 }
 
@@ -134,7 +134,7 @@ export function callsFor(address: Address, intent: Intent) {
       case "cancelRecovery":
         return encodeFunctionData({ abi: passkeyAccountAbi, functionName: "cancelRecovery" });
       default:
-        throw new HttpError(400, "未知的操作");
+        throw new ApiError("UNSUPPORTED_ACTION");
     }
   })();
   return [{ target: address, value: 0n, data }];

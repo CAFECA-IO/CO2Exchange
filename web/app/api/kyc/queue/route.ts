@@ -1,6 +1,7 @@
 import { all } from "@/lib/server/store";
 import type { KycRequest } from "@/lib/server/kyc";
-import { handle, requireRole } from "@/lib/server/roles";
+import { requireRole } from "@/lib/server/roles";
+import { handleError, ok } from "@/lib/server/api";
 
 export async function GET(req: Request) {
   try {
@@ -15,6 +16,6 @@ export async function GET(req: Request) {
         ...r,
         idNumberMasked: idNumber.slice(0, 3) + "****" + idNumber.slice(-2),
       }));
-    return Response.json({ requests: rows });
-  } catch (e) { return handle(e); }
+    return ok({ requests: rows });
+  } catch (e) { return handleError(e); }
 }

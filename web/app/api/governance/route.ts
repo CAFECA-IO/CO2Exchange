@@ -2,7 +2,8 @@ import { keccak256, toBytes, type Address } from "viem";
 import { accessControlAbi, hookViewAbi, listingWriteAbi, ownedAbi, safeViewAbi, timelockAbi } from "@/lib/abis";
 import { deployment, publicClient } from "@/lib/server/chain";
 import { hasV4 } from "@/lib/deployment";
-import { handle, requireRole } from "@/lib/server/roles";
+import { requireRole } from "@/lib/server/roles";
+import { handleError, ok } from "@/lib/server/api";
 
 const ADMIN = "0x0000000000000000000000000000000000000000000000000000000000000000" as const;
 const SOV = keccak256(toBytes("SOVEREIGN_ROLE")); const OP = keccak256(toBytes("OPERATOR_ROLE"));
@@ -44,7 +45,7 @@ export async function GET() {
       ]);
       return { id, target: l.args.target, data: l.args.data, state: STATE[st], readyAt: Number(ts), txHash: l.transactionHash };
     }));
-    return Response.json({
+    return ok({
       hasV4: v4,
       matrix, poolManagerOwner: pmOwner, poolManagerOwnerIsTimelock: !!pmOwner && pmOwner.toLowerCase() === d.timelock.toLowerCase(),
       listingPaused, poolPaused, trustedRouter, swapsEnabled: !!trustedRouter && trustedRouter.toLowerCase() === d.router.toLowerCase(),
@@ -52,5 +53,5 @@ export async function GET() {
       operatorSafe: { address: d.operatorSafe, owners: opOwners, threshold: Number(opThreshold) },
       timelock: { address: d.timelock, delay: Number(delay), ...tlRoles, operations: ops.reverse() },
     });
-  } catch (e) { return handle(e); }
+  } catch (e) { return handleError(e); }
 }

@@ -1,5 +1,6 @@
 import { deployment } from "@/lib/server/chain";
 import { providerIds } from "@/auth";
+import { handleError, ok } from "@/lib/server/api";
 
 /// 前端啟動需要知道的兩件事：合約地址表，以及有哪些登入方式。
 ///
@@ -11,5 +12,7 @@ import { providerIds } from "@/auth";
 ///     公司防火牆之下，兩邊看到的根本不是同一份狀態。
 ///   · 合約 ABI 只留在伺服器端，改版時不必擔心某個瀏覽器還快取著舊的那一份。
 export async function GET() {
-  return Response.json({ deployment: deployment(), providers: providerIds });
+  try {
+    return ok({ deployment: deployment(), providers: providerIds });
+  } catch (e) { return handleError(e); }
 }

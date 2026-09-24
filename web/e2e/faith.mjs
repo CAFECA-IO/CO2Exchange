@@ -22,7 +22,7 @@ const BASE = `http://localhost:${PORT}`;
 /// 不這樣做的話，`applyKyc`、`waitKycActive` 這些共用步驟會跑去打 :10010——
 /// 那個實例上這個使用者根本沒登入，而錯誤訊息只會說某個元素等不到。
 process.env.BASE_URL = BASE;
-const { adminApproveAllKyc, applyKyc, createPasskeyAccount, launch, login, newUser, waitKycActive, who } =
+const { adminApproveAllKyc, applyKyc, createPasskeyAccount, launch, login, newUser, unwrap, waitKycActive, who } =
   await import("./lib.mjs");
 
 const stub = await startStub(STUB_PORT);
@@ -82,7 +82,7 @@ try {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ messages: [{ role: "user", content: "嗨" }], path: "/" }),
     });
-    const j = await r.json();
+    const j = unwrap(await r.json());
     ok(r.ok && j.enabled === false, "沒設金鑰時回 enabled:false 而不是 500");
     ok(String(j.reply).includes("FAITH_API_KEY"), "而且說清楚要設哪一個環境變數");
   }
@@ -127,9 +127,9 @@ try {
   ok(/公噸/.test(cardText) && /mTWD/.test(cardText), "確認卡上有具體的數量與金額，不是「依市價」");
   ok(/你要付/.test(cardText), "而且標出使用者實際要付多少");
 
-  const before = await page.evaluate(async (a) => (await (await fetch(`/api/portfolio?account=${a}`)).json()), address);
+  const before = await page.evaluate(async (a) => (await (await fetch(`/api/portfolio?account=${a}`)).json()).data, address);
   await page.waitForTimeout(1500);
-  const afterNoConfirm = await page.evaluate(async (a) => (await (await fetch(`/api/portfolio?account=${a}`)).json()), address);
+  const afterNoConfirm = await page.evaluate(async (a) => (await (await fetch(`/api/portfolio?account=${a}`)).json()).data, address);
   ok(JSON.stringify(before) === JSON.stringify(afterNoConfirm), "沒按確認，鏈上什麼都沒發生");
 
   // 取消之後卡片就消失，不留一個「還能按」的殘影
@@ -142,7 +142,7 @@ try {
   await card.waitFor({ timeout: 40_000 });
   await page.locator('[data-testid="faith-do"]').click();
   await page.locator('[data-testid="faith-log"]').getByText(/已送出，交易 0x/).waitFor({ timeout: 90_000 });
-  const afterBuy = await page.evaluate(async (a) => (await (await fetch(`/api/portfolio?account=${a}`)).json()), address);
+  const afterBuy = await page.evaluate(async (a) => (await (await fetch(`/api/portfolio?account=${a}`)).json()).data, address);
   ok(JSON.stringify(afterBuy) !== JSON.stringify(before), "按下確認之後才真的成交（持倉變了）");
   ok(!(await card.isVisible().catch(() => false)), "成交之後確認卡收起來，不會被按第二次");
 
@@ -162,20 +162,21 @@ try {
       });
       return { status: res.status, body: await res.json() };
     });
-    ok(r.status >= 400, `導向站外被擋（${r.body.error}）`);
+    // 錯誤也是信封：{ok:false,error:{code,message}}。測的是**錯誤碼**，不是那句話。
+    ok(r.status >= 400 && r.body.ok === false, `導向站外被擋（${r.body.error?.code}）`);
   }
 
   // ── ⑥ 伺服器端重算：前端送什麼參數，金額都由伺服器決定 ──
   {
     const r = await page.evaluate(async () => {
-      const book = await (await fetch("/api/market")).json();
+      const book = (await (await fetch("/api/market")).json()).data;
       const o = book.orders?.[0];
       if (!o) return { skip: true };
       const res = await fetch("/api/faith/act", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ kind: "buy_listing", params: { orderId: o.orderId, tonnes: 0.25 } }),
       });
-      return { preview: await res.json(), order: o };
+      return { preview: (await res.json()).data, order: o };
     });
     if (!r.skip) {
       const paid = r.preview.rows.find((x) => x.label === "你要付")?.value ?? "";
@@ -191,7 +192,7 @@ try {
   {
     await page.evaluate((a) => { window.__addr = a; }, address);
     const r = await page.evaluate(async () => {
-      const h = await (await fetch(`/api/portfolio?account=${window.__addr}`)).json();
+      const h = (await (await fetch(`/api/portfolio?account=${window.__addr}`)).json()).data;
       const b = (h.batches ?? h.holdings?.batches ?? [])[0];
       if (!b) return { skip: true };
       const res = await fetch("/api/faith/act", {
@@ -201,6 +202,7 @@ try {
       return { status: res.status, body: await res.json() };
     });
     if (!r.skip && r.status === 200) {
+      r.body = r.body.data ?? r.body;
       ok(r.body.warnings.some((w) => w.includes("不可逆")), "註銷的確認卡明說不可逆");
       ok(r.body.rows.some((x) => x.label === "受益人"), "並且列出受益人");
     }

@@ -4,7 +4,7 @@ import { bidWriteAbi, creditAbi, erc20Abi, erc1155ApprovalAbi, listingAbi, listi
 import { PURPOSE_LABEL, countryToBytes2, flagOf, purposeAllowed } from "@/lib/deployment";
 import { deployment, publicClient } from "../chain";
 import { holdings } from "../market";
-import { HttpError } from "../roles";
+import { ApiError } from "../api";
 import type { Ctx } from "./tools";
 
 /// 費思可以**提議**的動作。這一支檔案是那條界線。
@@ -65,7 +65,7 @@ const tonnes = (kg: number | bigint) => `${(Number(kg) / 1000).toLocaleString("z
 
 function need(v: unknown, name: string): number {
   const n = typeof v === "number" ? v : Number(v);
-  if (!Number.isFinite(n) || n <= 0) throw new HttpError(400, `${name} 要是大於 0 的數字`);
+  if (!Number.isFinite(n) || n <= 0) throw new ApiError("INVALID_PARAM", `${name} 要是大於 0 的數字`, { param: name });
   return n;
 }
 
@@ -81,12 +81,12 @@ export async function buildAction(kind: ActionKind, p: Record<string, unknown>, 
       const path = String(p.path ?? "");
       // 只准站內的絕對路徑。少了這一行，被注入的模型就能把使用者導到站外的釣魚頁，
       // 而畫面上那顆按鈕看起來跟其他按鈕一模一樣。
-      if (!/^\/[A-Za-z0-9\-/_]*$/.test(path)) throw new HttpError(400, "只能導向本站頁面");
+      if (!/^\/[A-Za-z0-9\-/_]*$/.test(path)) throw new ApiError("INVALID_PARAM", "只能導向本站頁面", { param: "path" });
       return { kind, title: `前往 ${path}`, rows: [], warnings: [], href: path };
     }
 
     case "claim_faucet": {
-      if (!me) throw new HttpError(401, "要先登入");
+      if (!me) throw new ApiError("UNAUTHENTICATED", "要先登入");
       return {
         kind, title: "領取測試用 mTWD",
         rows: [{ label: "收款帳戶", value: me }, { label: "用途", value: "Phase 0 展示用的模擬結算幣" }],
@@ -95,14 +95,14 @@ export async function buildAction(kind: ActionKind, p: Record<string, unknown>, 
     }
 
     case "buy_listing": {
-      if (!me) throw new HttpError(401, "要先登入");
+      if (!me) throw new ApiError("UNAUTHENTICATED", "要先登入");
       const orderId = Math.trunc(need(p.orderId, "orderId"));
       const want = need(p.tonnes, "tonnes");
       const o = await publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "orderOf", args: [BigInt(orderId)] });
-      if (!o.active || o.remainingKg === 0n) throw new HttpError(409, `第 ${orderId} 號掛單已經被買走或取消了。`);
+      if (!o.active || o.remainingKg === 0n) throw new ApiError("ORDER_INACTIVE", `第 ${orderId} 號掛單已經被買走或取消了。`, { orderId });
       const kg = BigInt(Math.min(Number(o.remainingKg), Math.max(1, Math.round(want * 1000))));
       if (o.minFillKg > 0n && kg < o.minFillKg) {
-        throw new HttpError(400, `這張單的最小成交量是 ${tonnes(o.minFillKg)}，買不了 ${tonnes(kg)}。`);
+        throw new ApiError("INVALID_PARAM", `這張單的最小成交量是 ${tonnes(o.minFillKg)}，買不了 ${tonnes(kg)}。`, { param: "tonnes", minFillKg: Number(o.minFillKg) });
       }
       const cost = (kg * o.pricePerTonne) / 1000n;
       const feeBps = await publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "feeBps" });
@@ -131,11 +131,11 @@ export async function buildAction(kind: ActionKind, p: Record<string, unknown>, 
     }
 
     case "place_bid": {
-      if (!me) throw new HttpError(401, "要先登入");
+      if (!me) throw new ApiError("UNAUTHENTICATED", "要先登入");
       const t = need(p.tonnes, "tonnes");
       const price = need(p.pricePerTonne, "pricePerTonne");
       const c = String(p.country ?? "").toUpperCase();
-      if (c && c !== "ANY" && !/^[A-Z]{2}$/.test(c)) throw new HttpError(400, "country 要是兩碼國別或 ANY");
+      if (c && c !== "ANY" && !/^[A-Z]{2}$/.test(c)) throw new ApiError("INVALID_COUNTRY", "country 要是兩碼國別或 ANY", { param: "country" });
       const kg = BigInt(Math.round(t * 1000));
       const pricePerTonne = BigInt(Math.round(price * 1e6));
       const cost = (kg * pricePerTonne) / 1000n;
@@ -162,11 +162,11 @@ export async function buildAction(kind: ActionKind, p: Record<string, unknown>, 
     }
 
     case "cancel_bid": {
-      if (!me) throw new HttpError(401, "要先登入");
+      if (!me) throw new ApiError("UNAUTHENTICATED", "要先登入");
       const bidId = Math.trunc(need(p.bidId, "bidId"));
       const b = await publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "bidOf", args: [BigInt(bidId)] });
-      if (!b.active) throw new HttpError(409, `第 ${bidId} 號買單已經不在了。`);
-      if (b.buyer.toLowerCase() !== me.toLowerCase()) throw new HttpError(403, "這不是你的買單。");
+      if (!b.active) throw new ApiError("ORDER_INACTIVE", `第 ${bidId} 號買單已經不在了。`, { bidId });
+      if (b.buyer.toLowerCase() !== me.toLowerCase()) throw new ApiError("FORBIDDEN", "這不是你的買單。");
       return {
         kind, title: `取消買單 #${bidId}`,
         rows: [
@@ -179,13 +179,13 @@ export async function buildAction(kind: ActionKind, p: Record<string, unknown>, 
     }
 
     case "sell_batch": {
-      if (!me) throw new HttpError(401, "要先登入");
+      if (!me) throw new ApiError("UNAUTHENTICATED", "要先登入");
       const batchId = Math.trunc(need(p.batchId, "batchId"));
       const t = need(p.tonnes, "tonnes");
       const price = need(p.pricePerTonne, "pricePerTonne");
       const h = await holdings(me);
       const held = h.batches.find((b) => b.batchId === batchId);
-      if (!held) throw new HttpError(400, `你沒有批次 #${batchId}。`);
+      if (!held) throw new ApiError("INVALID_PARAM", `你沒有批次 #${batchId}。`, { param: "batchId", batchId });
       const kg = BigInt(Math.min(held.kg, Math.round(t * 1000)));
       const pricePerTonne = BigInt(Math.round(price * 1e6));
       return {
@@ -209,18 +209,18 @@ export async function buildAction(kind: ActionKind, p: Record<string, unknown>, 
     }
 
     case "retire": {
-      if (!me) throw new HttpError(401, "要先登入");
+      if (!me) throw new ApiError("UNAUTHENTICATED", "要先登入");
       const batchId = Math.trunc(need(p.batchId, "batchId"));
       const t = need(p.tonnes, "tonnes");
       const purpose = Math.trunc(Number(p.purpose ?? -1));
       if (!(purpose >= 0 && purpose < PURPOSE_LABEL.length)) {
-        throw new HttpError(400, `purpose 要是 0–${PURPOSE_LABEL.length - 1}：${PURPOSE_LABEL.map((l, i) => `${i}=${l}`).join("、")}`);
+        throw new ApiError("INVALID_PARAM", `purpose 要是 0–${PURPOSE_LABEL.length - 1}：${PURPOSE_LABEL.map((l, i) => `${i}=${l}`).join("、")}`, { param: "purpose" });
       }
       const beneficiary = String(p.beneficiary ?? "").trim();
-      if (!beneficiary) throw new HttpError(400, "註銷一定要指名受益人——憑證上會載明，而且不能改。");
+      if (!beneficiary) throw new ApiError("MISSING_PARAM", "註銷一定要指名受益人——憑證上會載明，而且不能改。", { param: "beneficiary" });
       const h = await holdings(me);
       const held = h.batches.find((b) => b.batchId === batchId);
-      if (!held) throw new HttpError(400, `你沒有批次 #${batchId}。`);
+      if (!held) throw new ApiError("INVALID_PARAM", `你沒有批次 #${batchId}。`, { param: "batchId", batchId });
       const kg = BigInt(Math.min(held.kg, Math.round(t * 1000)));
       // 用途 × 轄區的檢查在合約裡也會做一次，但**這裡要先做**：
       // 讓使用者在確認卡上就看到「這個轄區不允許這個用途」，
@@ -254,7 +254,7 @@ export async function buildAction(kind: ActionKind, p: Record<string, unknown>, 
     }
 
     case "freeze_wallet": {
-      if (!me) throw new HttpError(401, "要先登入");
+      if (!me) throw new ApiError("UNAUTHENTICATED", "要先登入");
       return {
         kind, title: "凍結我的錢包",
         rows: [{ label: "錢包", value: me }, { label: "效果", value: "所有交易與註銷立刻被擋下" }],
@@ -267,7 +267,7 @@ export async function buildAction(kind: ActionKind, p: Record<string, unknown>, 
       };
     }
   }
-  throw new HttpError(400, `不支援的動作：${kind}`);
+  throw new ApiError("UNSUPPORTED_ACTION", `不支援的動作：${kind}`, { kind });
 }
 
 /// 給模型看的動作說明。**只有這些**——清單以外的事情費思只能解釋與導航。

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useReload } from "@/lib/client/useReload";
 import { useAccount } from "@/components/AccountProvider";
 import { Button, Card, Notice, fmtKg } from "@/components/ui";
+import { fetchJson, postJson } from "@/lib/client/fetchJson";
 
 type Issuance = { id: string; projectId: number; projectName: string; owner: string; submittedBy: string; monitoringStart: string; monitoringEnd: string; amountKg: number; reportName: string; reportHash: string; reportFile: string; note?: string; status: string; reason?: string; batchId?: number; txHash?: string; createdAt: string; decidedBy?: string };
 
@@ -18,8 +19,8 @@ export default function VerifierPage() {
     if (!me.isVerifier) return;
     let ignore = false;
     (async () => {
-      const r = await fetch("/api/issuance");
-      if (!ignore && r.ok) setRows((await r.json()).requests ?? []);
+      const j = await fetchJson<{ requests: Issuance[] }>("/api/issuance").catch(() => null);
+      if (!ignore && j) setRows(j.requests ?? []);
     })();
     return () => { ignore = true; };
   }, [me.isVerifier, reloadKey]);
@@ -29,9 +30,7 @@ export default function VerifierPage() {
   async function decide(id: string, approve: boolean) {
     setBusy(id); setMsg(null);
     try {
-      const r = await fetch(`/api/issuance/${id}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ approve, reason: reason[id] ?? "" }) });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error ?? "失敗");
+      const j = await postJson<{ batchId: number; txHash: string }>(`/api/issuance/${id}`, { approve, reason: reason[id] ?? "" });
       setMsg({ kind: "ok", text: approve ? `已簽章核發：批次 #${j.batchId}，tx ${j.txHash.slice(0, 10)}…` : "已退回" });
       reload();
     } catch (e) { setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) }); }

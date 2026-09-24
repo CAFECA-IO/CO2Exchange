@@ -520,6 +520,37 @@ RPC 位址——前端根本不知道節點在哪。
 擋下 `createPublicClient`、指向節點的 `http()`、`rpcUrl` 與 `@/lib/server/*` 的值匯入。
 這條規則很容易在某次「先動起來再說」的修改裡被破掉，而破掉時不會有任何測試變紅。
 
+### API 只有一種形狀
+
+每一支 `web/app/api/*` 都用 `lib/server/api.ts` 回應，回的一定是這兩種之一：
+
+```jsonc
+{ "ok": true,  "data": { … } }
+{ "ok": false, "error": { "code": "WALLET_NOT_DEPLOYED", "message": "還沒有鏈上錢包", "details": {…}, "retriable": false } }
+```
+
+`code` 取自 `lib/error-codes.ts` 的一張固定清單（33 個），每一個碼綁定它的 HTTP 狀態與
+預設人話訊息。伺服器端要讓某件事失敗，就 `throw new ApiError("KYC_REQUIRED")` 或
+`return fail("ORDER_INACTIVE")`；未預期的例外由 `handleError` 收尾，並在收尾時判讀
+viem 的連線錯誤（→ `CHAIN_UNREACHABLE`，`retriable: true`）與部署檔不符（→ `DEPLOYMENT_MISMATCH`）。
+
+**為什麼值得做一次。** 原本每支 API 各回各的形狀：有的 `{error:"…"}`、有的 `{message:…}`、
+有的乾脆只給狀態碼。前端於是只能比對訊息字串來分辨情況——而訊息是給人看的，
+改一個字就會讓一段邏輯悄悄失效。`retriable` 也一樣：前端本來自己維護一張「哪些該重試」的表，
+那張表跟伺服器的實際行為必然會漂移。現在這兩件事都由伺服器說了算。
+
+前端只有一個入口 `lib/client/fetchJson.ts`：它拆信封、把 `{ok:false}` 丟成帶 `code` 的
+`ApiClientError`、並依伺服器的 `retriable` 退避重試（0.4s → 1.2s）。
+呼叫端判斷情況一律看 `e.code`，不看訊息。
+
+> 讀取預設重試兩次，**寫入（`postJson`）預設不重試**。`/api/relay` 會送出一筆真交易、
+> `/api/faucet` 會撥款——連線斷掉時伺服器很可能已經做完了，重試一次就是做第二次。
+
+`npm run check:api-envelope`（已併進 `npm run e2e`）擋下 `route.ts` 裡的
+`Response.json` / `NextResponse.json` / `new Response`，並檢查每一個 `fail("…")`、
+`new ApiError("…")` 用的碼都真的存在。少數本來就不回 JSON 的端點（PDF、檔案下載、
+NextAuth handler）用 `@api-envelope-exempt: <理由>` 標註豁免。
+
 ### 頁面
 
 四種角色、十一個頁面：

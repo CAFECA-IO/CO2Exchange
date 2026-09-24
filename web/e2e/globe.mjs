@@ -125,8 +125,9 @@ const browser = await launch();
   // 只改 providers，其餘照伺服器原本回的走——這裡要測的是畫面怎麼反應，不是設定怎麼讀。
   await page.route("**/api/config", async (route) => {
     const res = await route.fetch();
+    // 信封在外面，設定在 data 裡：要改的是 data.providers，不是最外層。
     const body = await res.json();
-    await route.fulfill({ response: res, json: { ...body, providers: [] } });
+    await route.fulfill({ response: res, json: { ...body, data: { ...body.data, providers: [] } } });
   });
   await page.goto(BASE, { waitUntil: "networkidle" });
   await page.waitForTimeout(1200);

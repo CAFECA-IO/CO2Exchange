@@ -9,6 +9,7 @@ import { AgreementCheck, useAgreementGate } from "@/components/AgreementGate";
 import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/components/ui";
 import { erc1155ApprovalAbi, listingWriteAbi, poolWriteAbi, registryWriteAbi } from "@/lib/abis";
 import { type Call } from "@/lib/client/passkey";
+import { fetchJson, postJson } from "@/lib/client/fetchJson";
 
 type Project = { projectId: number; name: string; methodology: string; location: string; active: boolean };
 type Issuance = { id: string; projectId: number; projectName: string; monitoringStart: string; monitoringEnd: string; amountKg: number; reportName: string; reportHash: string; reportFile: string; status: string; reason?: string; batchId?: number; txHash?: string; createdAt: string };
@@ -48,13 +49,17 @@ export default function EnterprisePage() {
     let ignore = false;
     (async () => {
       const [p, i, m] = await Promise.all([
-        fetch(`/api/projects?owner=${a}`).then((r) => r.json()),
-        fetch(`/api/issuance?owner=${a}`).then((r) => r.json()),
-        fetch(`/api/market?account=${a}`).then((r) => r.json()),
+        fetchJson<{ projects: Project[] }>(`/api/projects?owner=${a}`).catch(() => null),
+        fetchJson<{ requests: Issuance[] }>(`/api/issuance?owner=${a}`).catch(() => null),
+        fetchJson<{ holdings: { batches: Holding[] } | null; orders: Order[] }>(`/api/market?account=${a}`).catch(() => null),
       ]);
       if (ignore) return;
-      setProjects(p.projects ?? []); setIssuances(i.requests ?? []); setHoldings(m.holdings?.batches ?? []);
-      setOrders((m.orders ?? []).filter((o: Order) => o.seller.toLowerCase() === a.toLowerCase()));
+      if (p) setProjects(p.projects ?? []);
+      if (i) setIssuances(i.requests ?? []);
+      if (m) {
+        setHoldings(m.holdings?.batches ?? []);
+        setOrders((m.orders ?? []).filter((o) => o.seller.toLowerCase() === a.toLowerCase()));
+      }
     })();
     return () => { ignore = true; };
   }, [credential, reloadKey]);
@@ -89,9 +94,8 @@ export default function EnterprisePage() {
       fd.set("projectId", rf.projectId); fd.set("owner", credential!.address);
       fd.set("monitoringStart", rf.monitoringStart); fd.set("monitoringEnd", rf.monitoringEnd); fd.set("amountTonnes", rf.amountTonnes); fd.set("note", rf.note);
       fd.set("report", report);
-      const r = await fetch("/api/issuance", { method: "POST", body: fd });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error ?? "失敗");
+      // FormData 不能走 postJson（那會把 content-type 設成 json），但回應一樣是信封。
+      const j = await fetchJson<{ reportHash: string }>("/api/issuance", { method: "POST", body: fd });
       setMsg({ kind: "ok", text: `核發申請已送出（報告雜湊 ${j.reportHash.slice(0, 12)}…），待查驗機構審核。` });
       setReport(null); reload();
     } catch (e) { setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) }); }
@@ -104,9 +108,8 @@ export default function EnterprisePage() {
     relay(`掛單批次 #${h.batchId} ${fmtKg(Number(kg))}`, [
       { target: d.carbonCredit1155, value: 0n, data: encodeFunctionData({ abi: erc1155ApprovalAbi, functionName: "setApprovalForAll", args: [d.listing, true] }) },
       { target: d.listing, value: 0n, data: encodeFunctionData({ abi: listingWriteAbi, functionName: "list", args: [BigInt(h.batchId), kg, BigInt(Math.round(Number(f.price) * 1e6)), BigInt(Math.max(0, Math.round(Number(f.minFill) * 1000)))] }) },
-    ], () => fetch("/api/listing-meta", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ batchId: h.batchId, seller: credential!.address, usageDeadline: f.usageDeadline, amountKg: Number(kg) }),
+    ], () => postJson("/api/listing-meta", {
+      batchId: h.batchId, seller: credential!.address, usageDeadline: f.usageDeadline, amountKg: Number(kg),
     }));
   }
 

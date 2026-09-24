@@ -4,6 +4,7 @@ import { useReload } from "@/lib/client/useReload";
 import { useAccount } from "@/components/AccountProvider";
 import { Button, Card, Field, Notice, fmtKg, inputCls } from "@/components/ui";
 import { PURPOSE_LABEL, TIER_LABEL, flagOf } from "@/lib/deployment";
+import { fetchJson, postJson } from "@/lib/client/fetchJson";
 
 type KycReq = { id: string; account: string; tier: number; idNumberMasked: string; name: string; email: string; status: string; reason?: string; txHash?: string; createdAt: string; decidedBy?: string };
 type Cert = { certId: number; batchId: number; amountKg: number; beneficiary: string; purpose: number; retiredAt: number; owner: string; pdfHash: string | null; onchainHash: string | null; anchored: boolean };
@@ -49,31 +50,34 @@ export default function AdminPage() {
     if (!me.isAdmin) return;
     let ignore = false;
     (async () => {
+      // 四個區塊互相獨立：其中一個讀不到不該把整頁弄空，所以各自 catch。
       const [k, c, g, f] = await Promise.all([
-        fetch("/api/kyc/queue"), fetch("/api/certificates/all"), fetch("/api/governance"), fetch("/api/fees"),
+        fetchJson<{ requests: KycReq[] }>("/api/kyc/queue").catch(() => null),
+        fetchJson<{ certificates: Cert[] }>("/api/certificates/all").catch(() => null),
+        fetchJson<Gov>("/api/governance").catch(() => null),
+        fetchJson<Fees>("/api/fees").catch(() => null),
       ]);
       if (ignore) return;
-      if (k.ok) setKyc((await k.json()).requests ?? []);
-      if (c.ok) setCerts((await c.json()).certificates ?? []);
-      if (g.ok) setGov(await g.json());
-      if (f.ok) setFees(await f.json());
+      if (k) setKyc(k.requests ?? []);
+      if (c) setCerts(c.certificates ?? []);
+      if (g) setGov(g);
+      if (f) setFees(f);
     })();
     return () => { ignore = true; };
   }, [me.isAdmin, reloadKey]);
 
   if (!me.isAdmin) return <Notice>此頁面限管理員帳號。</Notice>;
 
-  async function act(label: string, fn: () => Promise<Response>) {
+  async function act(label: string, fn: () => Promise<unknown>) {
     setBusy(label); setMsg(null);
     try {
-      const r = await fn(); const j = await r.json();
-      if (!r.ok) throw new Error(j.error ?? "失敗");
+      const j = (await fn()) as { txHash?: string; sha256?: string };
       setMsg({ kind: "ok", text: `${label}完成${j.txHash ? ` · tx ${j.txHash.slice(0, 10)}…` : ""}${j.sha256 ? ` · SHA-256 ${j.sha256.slice(0, 14)}…` : ""}` });
       reload();
     } catch (e) { setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) }); }
     finally { setBusy(null); }
   }
-  const post = (url: string, body?: unknown) => fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const post = (url: string, body?: unknown) => postJson<unknown>(url, body ?? {});
 
   const pendingKyc = kyc.filter((r) => r.status === "pending");
 

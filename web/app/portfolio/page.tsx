@@ -8,6 +8,7 @@ import { Card, Notice, fmtKg } from "@/components/ui";
 import { useReload } from "@/lib/client/useReload";
 import { PURPOSE_LABEL, flagOf } from "@/lib/deployment";
 import type { Movement, Portfolio } from "@/lib/server/portfolio";
+import { fetchJson } from "@/lib/client/fetchJson";
 
 /// 我的資產。
 ///
@@ -43,16 +44,17 @@ export default function PortfolioPage() {
     if (!credential) return;
     let ignore = false;
     (async () => {
-      const [r, rc] = await Promise.all([
-        fetch(`/api/portfolio?account=${credential.address}`),
-        fetch(`/api/certificates?account=${credential.address}`),
+      // 持倉是主角，讀不到要說；憑證是附帶資訊，讀不到就不顯示，不要因此讓整頁變成錯誤。
+      const [p, c] = await Promise.all([
+        fetchJson<Portfolio>(`/api/portfolio?account=${credential.address}`).then(
+          (v) => ({ v, e: null as string | null }),
+          (e: Error) => ({ v: null, e: e.message }),
+        ),
+        fetchJson<{ certificates: Cert[] }>(`/api/certificates?account=${credential.address}`).catch(() => null),
       ]);
-      const j = await r.json();
-      const jc = await rc.json();
       if (ignore) return;
-      if (!r.ok) setErr(j.error ?? "讀取失敗");
-      else { setP(j); setErr(null); }
-      setCerts(jc.certificates ?? []);
+      if (p.v) { setP(p.v); setErr(null); } else setErr(p.e ?? "讀取失敗");
+      if (c) setCerts(c.certificates ?? []);
     })();
     return () => { ignore = true; };
   }, [credential, reloadKey]);

@@ -1,13 +1,13 @@
 import { parseAbiItem, type Address } from "viem";
 import { certificateAbi } from "@/lib/abis";
 import { deployment, isAddress, publicClient } from "@/lib/server/chain";
-import { handle } from "@/lib/server/roles";
+import { fail, handleError, ok } from "@/lib/server/api";
 import { countryCode } from "@/lib/deployment";
 import { addWorkingDays } from "@/lib/server/bulletin";
 
 export async function GET(req: Request) {
   const account = new URL(req.url).searchParams.get("account");
-  if (!isAddress(account)) return Response.json({ error: "account" }, { status: 400 });
+  if (!isAddress(account)) return fail("INVALID_ADDRESS", { details: { param: "account" } });
   try {
   const d = deployment();
   const logs = await publicClient.getLogs({
@@ -28,6 +28,6 @@ export async function GET(req: Request) {
       claimableFrom: Number(c.officialAnnouncedAt) > 0 ? addWorkingDays(Number(c.officialAnnouncedAt), 5) : null,
     };
   }));
-  return Response.json({ certificates: certs.sort((a, b) => b.certId - a.certId) });
-  } catch (e) { return handle(e); }
+  return ok({ certificates: certs.sort((a, b) => b.certId - a.certId) });
+  } catch (e) { return handleError(e); }
 }

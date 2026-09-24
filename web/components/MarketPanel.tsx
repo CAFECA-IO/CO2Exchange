@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { PriceChart } from "./PriceChart";
 import { Delta } from "./ui";
 import type { Ticker } from "@/lib/server/ticker";
+import { fetchJson } from "@/lib/client/fetchJson";
 
 const RANGES = [
   { label: "24H", hours: 24 },
@@ -36,12 +37,12 @@ export function MarketPanel() {
     (async () => {
       setLoading(true);
       try {
-        const d = await (await fetch(`/api/market/ticker?hours=${hours}`)).json();
+        const d = await fetchJson<Ticker>(`/api/market/ticker?hours=${hours}`);
         if (!live) return;
-        if (d.error) setErr(d.error);
-        else { setT(d); setErr(null); }
+        setT(d);
+        setErr(null);
       } catch (e) {
-        if (live) setErr(String(e));
+        if (live) setErr(e instanceof Error ? e.message : String(e));
       } finally {
         if (live) setLoading(false);
       }

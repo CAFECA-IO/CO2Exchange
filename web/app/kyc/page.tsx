@@ -5,6 +5,7 @@ import { AccountGate } from "@/components/AccountGate";
 import { Button, Card, Field, Notice, inputCls } from "@/components/ui";
 import { TIER, TIER_LABEL } from "@/lib/deployment";
 import Link from "next/link";
+import { postJson } from "@/lib/client/fetchJson";
 
 export default function KycPage() {
   // 身分從 AccountProvider 拿，不要自己再 fetch 一份。
@@ -30,9 +31,7 @@ export default function KycPage() {
     e.preventDefault();
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch("/api/kyc", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ account: credential!.address, tier, idNumber, name }) });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error ?? "失敗");
+      const j = await postJson<{ status: string; txHash: string }>("/api/kyc", { account: credential!.address, tier, idNumber, name });
       setMsg(j.status === "approved"
         ? { kind: "ok", text: `身分已綁定帳戶。交易 ${j.txHash.slice(0, 10)}…` }
         : { kind: "ok", text: "申請已送出，待身分驗證服務審核。" });
