@@ -16,6 +16,7 @@ import {CarbonCreditToken} from "../src/market/CarbonCreditToken.sol";
 import {CarbonPool} from "../src/market/CarbonPool.sol";
 import {MockTWD} from "../src/mocks/MockTWD.sol";
 import {PasskeyAccountFactory} from "../src/account/PasskeyAccountFactory.sol";
+import {Bank} from "../src/bank/Bank.sol";
 import {GovernanceLib} from "../src/governance/GovernanceLib.sol";
 import {Safe} from "safe-smart-account/Safe.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
@@ -82,6 +83,7 @@ contract Deploy is Script {
     address public hook;
     address public router;
     PasskeyAccountFactory public accountFactory;
+    Bank public bank;
     Safe public nationalSafe;
     Safe public operatorSafe;
     TimelockController public timelock;
@@ -308,7 +310,17 @@ contract Deploy is Script {
     function _deployAccountFactory() internal {
         vm.startBroadcast(cfg.pk);
         accountFactory = new PasskeyAccountFactory(address(nationalSafe), cfg.operator, cfg.recoveryDelay);
+
+        // Bank：使用者在交易所期間的資產池。內部買賣是帳本更新，每個 epoch 把餘額樹
+        // root 提交上鏈。提領預設關閉（Phase 0 不提供），但機制完整且測過。
+        bank = new Bank(address(credit), address(twd), address(nationalSafe), cfg.operator);
         vm.stopBroadcast();
+
+        // Bank 要登錄成系統合約——存入那一筆 transfer 走 CarbonCredit1155._update，
+        // 沒有身分就進不來。用 SystemContract（和 Listing、CarbonPool 同一類）而不是
+        // 簽一張 KYC attestation 給它：Bank 不是一個「通過身分驗證的法人」，
+        // 它是平台基礎設施，而這兩件事在登錄簿上的意義完全不同。
+        // 這一步在 _wireAsSovereign 裡做（需要主權角色）。
     }
 
     /// @dev v4 展示模組的掛載點。核心部署不含 v4（這樣才能在沒有 EIP-1153 的鏈上編譯與執行）；
@@ -339,6 +351,7 @@ contract Deploy is Script {
         kyc.addRecoverableToken(address(credit));
         kyc.addRecoverableToken(address(cct));
         kyc.setSystemContract(address(listing), true);
+        kyc.setSystemContract(address(bank), true);
         kyc.setSystemContract(address(pool), true);
         if (poolManager != address(0)) kyc.setSystemContract(poolManager, true);
         vm.stopBroadcast();
@@ -498,6 +511,7 @@ contract Deploy is Script {
         vm.serializeUint(j, "poolFee", 3000);
         vm.serializeUint(j, "tickSpacing", 60);
         vm.serializeAddress(j, "accountFactory", address(accountFactory));
+        vm.serializeAddress(j, "bank", address(bank));
         vm.serializeAddress(j, "nationalSafe", address(nationalSafe));
         vm.serializeAddress(j, "operatorSafe", address(operatorSafe));
         vm.serializeUint(j, "timelockDelay", cfg.timelockDelay);

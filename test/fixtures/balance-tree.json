@@ -1,0 +1,178 @@
+{
+  "note": "由 web/scripts/gen-tree-fixture.mjs 產生。改雜湊格式就要重跑，並確認 test/BankTree.t.sol 仍然通過。",
+  "epoch": "7",
+  "root": "0x5691741a4720559f53a55d8315b1dbb81c8b506ed998b031111599726a87f120",
+  "totalKg": "251592",
+  "totalCash": "1234681",
+  "totalsHash": "0x0afffeaeafc332c1eda6c4df8a66a37f488e99d2bc1ddf1ff15a3d793d1e4dda",
+  "totalsByBatch": [
+    {
+      "batchId": "7",
+      "kg": "1500"
+    },
+    {
+      "batchId": "42",
+      "kg": "250012"
+    },
+    {
+      "batchId": "900",
+      "kg": "80"
+    }
+  ],
+  "caseCount": 5,
+  "cases": [
+    {
+      "account": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "assetsRoot": "0x9bfc5ee9502c809dc1a99b449f80fbce27d034f9953fbec821905b2dc4b1bfc2",
+      "leafKg": "251003",
+      "leafCash": "1234567",
+      "siblings": [
+        {
+          "hash": "0x8fa1ae61b12ff639a3828fe085f546e003c3899c019118f8134b6ff2957ea0b2",
+          "kg": "589",
+          "cash": "114"
+        }
+      ],
+      "path": "1",
+      "siblingCount": 1,
+      "hasAsset": true,
+      "asset": {
+        "batchId": "7",
+        "kg": "1000",
+        "siblings": [
+          "0x60f74800f65ed030a612f4c26b401f6f38dce9ffc14fad787c38b3412bcf91c2",
+          "0x04caeb13b98cefa372a63aed96a0fa697fb2992ddb645d5ad1d72b22741f9e15"
+        ],
+        "path": "0"
+      }
+    },
+    {
+      "account": "0x1111111111111111111111111111111111111111",
+      "assetsRoot": "0x6392f0feacdce7675f742ad215616213b0a4a854abaaec9548be36d15cb17149",
+      "leafKg": "500",
+      "leafCash": "0",
+      "siblings": [
+        {
+          "hash": "0xb1b00f26ef74e6dd3ecd8a588759140ec92ff2f05ef64f02d65e803bae4669a7",
+          "kg": "12",
+          "cash": "5"
+        },
+        {
+          "hash": "0x72b0e325046d32678c5cec3781398aa6b437cb21c672301b027cae3e9e1e19c0",
+          "kg": "77",
+          "cash": "109"
+        },
+        {
+          "hash": "0x4f94259e3c51053d9c2ad83d7061b213d90cb75cfa01da54efa6f03187689586",
+          "kg": "251003",
+          "cash": "1234567"
+        }
+      ],
+      "path": "0",
+      "siblingCount": 3,
+      "hasAsset": true,
+      "asset": {
+        "batchId": "7",
+        "kg": "500",
+        "siblings": [],
+        "path": "0"
+      }
+    },
+    {
+      "account": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "assetsRoot": "0xf2ee15ea639b73fa3db9b34a245bdfa015c260c598b211bf05a1ecc4b3e3b4f2",
+      "leafKg": "0",
+      "leafCash": "99",
+      "siblings": [
+        {
+          "hash": "0xab5a2d8e04ebd9521f46ff020dbd727b3d013e2d2ea614711fa3d671a2e2faba",
+          "kg": "77",
+          "cash": "10"
+        },
+        {
+          "hash": "0xed2a8915a45ef96e41c4e4580a12d6b2b4abb003e8c3271af172055d598c3d62",
+          "kg": "512",
+          "cash": "5"
+        },
+        {
+          "hash": "0x4f94259e3c51053d9c2ad83d7061b213d90cb75cfa01da54efa6f03187689586",
+          "kg": "251003",
+          "cash": "1234567"
+        }
+      ],
+      "path": "2",
+      "siblingCount": 3,
+      "hasAsset": false,
+      "asset": {
+        "batchId": "0",
+        "kg": "0",
+        "siblings": [],
+        "path": "0"
+      }
+    },
+    {
+      "account": "0x2222222222222222222222222222222222222222",
+      "assetsRoot": "0xfbe999e84f1bfc83c59513a250f038146e4884935b089544676d5e3c78902e10",
+      "leafKg": "12",
+      "leafCash": "5",
+      "siblings": [
+        {
+          "hash": "0x08a4aa62f736567aebaa254595d10895bc33719c0aeb8dafb9c7ba338519cb85",
+          "kg": "500",
+          "cash": "0"
+        },
+        {
+          "hash": "0x72b0e325046d32678c5cec3781398aa6b437cb21c672301b027cae3e9e1e19c0",
+          "kg": "77",
+          "cash": "109"
+        },
+        {
+          "hash": "0x4f94259e3c51053d9c2ad83d7061b213d90cb75cfa01da54efa6f03187689586",
+          "kg": "251003",
+          "cash": "1234567"
+        }
+      ],
+      "path": "1",
+      "siblingCount": 3,
+      "hasAsset": true,
+      "asset": {
+        "batchId": "42",
+        "kg": "12",
+        "siblings": [],
+        "path": "0"
+      }
+    },
+    {
+      "account": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "assetsRoot": "0x6a0c239845b2078cb7fbdf5e6dc1fc8d8861495edc2ed125b6181048bf24bd85",
+      "leafKg": "77",
+      "leafCash": "10",
+      "siblings": [
+        {
+          "hash": "0x510143991fab0a0319ebc7d5877732ef3b255cb99f24c9ad59a4e9c59fc2ccad",
+          "kg": "0",
+          "cash": "99"
+        },
+        {
+          "hash": "0xed2a8915a45ef96e41c4e4580a12d6b2b4abb003e8c3271af172055d598c3d62",
+          "kg": "512",
+          "cash": "5"
+        },
+        {
+          "hash": "0x4f94259e3c51053d9c2ad83d7061b213d90cb75cfa01da54efa6f03187689586",
+          "kg": "251003",
+          "cash": "1234567"
+        }
+      ],
+      "path": "3",
+      "siblingCount": 3,
+      "hasAsset": true,
+      "asset": {
+        "batchId": "900",
+        "kg": "77",
+        "siblings": [],
+        "path": "0"
+      }
+    }
+  ]
+}

@@ -9,7 +9,12 @@ optimizer_runs = 200
 via_ir = false
 bytecode_hash = "none"
 gas_limit = "300000000"
-fs_permissions = [{ access = "read", path = "./out" }, { access = "read-write", path = "./deployments" }]
+fs_permissions = [
+  { access = "read", path = "./out" },
+  { access = "read-write", path = "./deployments" },
+  # 餘額樹的跨語言一致性 fixture，由 web/scripts/gen-tree-fixture.mjs 產生
+  { access = "read", path = "./test/fixtures" },
+]
 
 # v4-core 的 PoolManager 需要 via_ir 才能通過合約大小限制；
 # 測試以 --code-size-limit 放寬，正式部署改用 profile.production。

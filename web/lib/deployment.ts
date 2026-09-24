@@ -11,6 +11,9 @@ export type Deployment = {
   feeSchedule: Address;
   settlementToken: Address; listing: Address; cct: Address; carbonPool: Address;
   poolManager: Address; hook: Address; router: Address; accountFactory: Address;
+  /// 交易所資產池。使用者在交易所期間，碳權與結算幣都在這裡；每個 epoch 提交餘額樹 root。
+  /// 舊的部署檔沒有這個欄位——Bank 是後來才加的，沒有它就代表這條鏈還沒有資產池。
+  bank?: Address;
   poolFee: number; tickSpacing: number;
 };
 

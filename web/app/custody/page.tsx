@@ -5,6 +5,7 @@ import { Card, Notice, fmtKg } from "@/components/ui";
 import { flagOf } from "@/lib/deployment";
 import type { Custody } from "@/lib/server/reserve";
 import { fetchJson } from "@/lib/client/fetchJson";
+import { BankSolvency } from "@/components/BankSolvency";
 
 /// 託管與資產稽核揭露。
 ///
@@ -15,6 +16,12 @@ import { fetchJson } from "@/lib/client/fetchJson";
 /// 各國官方登錄簿託管帳戶裡實際有多少、信託專戶裡實際有多少，由查核機構簽署後上鏈。
 ///
 /// 兩層並列顯示，不合併。合併之後就看不出「我們說的」與「可驗證的」哪裡不一樣了。
+///
+/// 第三層是**平台內部的託管**（交易所資產池）。上面兩層講的是國家級託管：
+/// 額度在核發國的登錄簿帳戶、入金在信託專戶。但使用者在交易所期間，他的資產是放在
+/// 平台的資產池裡的，鏈上看不到個別持有人——那是同一個概念再往下一層，
+/// 而且是使用者離自己最近的那一層，所以也要揭露，用同一套語言：
+/// 「帳本說欠多少」與「池子裡實際有多少」並列，不合併。
 
 const STATUS = [
   { label: "待查核", cls: "text-warn", desc: "營運方已填報，尚未經查核機構簽署" },
@@ -151,6 +158,8 @@ export default function CustodyPage() {
                 Phase 0 的結算幣是測試代幣，這裡的數字只是把機制跑一次給你看。
               </p>
             </Card>
+
+            <BankSolvency />
 
             <Card title="鏈上流通量（依核發國）" action={<span className="text-xs text-ink-300">即時，不經報告</span>}>
               <BarList

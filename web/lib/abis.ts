@@ -1,4 +1,4 @@
-import { parseAbiItem } from "viem";
+import { parseAbi, parseAbiItem } from "viem";
 
 // 前端只需要的最小 ABI 子集（與 Solidity 介面一致）
 
@@ -375,4 +375,33 @@ export const EVENTS = {
   filled: parseAbiItem(
     "event Filled(uint256 indexed orderId, address indexed buyer, uint256 amountKg, uint256 cost, uint256 fee)",
   ),
+  // Bank（交易所資產池）。A 期的餘額樹完全由這三個事件推導出來，
+  // 所以任何人都算得出同一棵樹——這是 A 期可被驗證的基礎。
+  bankDeposited: parseAbiItem(
+    "event Deposited(address indexed account, uint256 indexed batchId, uint256 amountKg)",
+  ),
+  bankCashDeposited: parseAbiItem("event CashDeposited(address indexed account, uint256 amount)"),
+  bankRetiredFor: parseAbiItem(
+    "event RetiredFor(address indexed account, uint256 indexed batchId, uint256 amountKg, uint256 certId)",
+  ),
+  bankCommitted: parseAbiItem(
+    "event Committed(uint64 indexed epoch, bytes32 anchor, bytes32 orderLogRoot, bytes32 balanceRoot, uint256 totalKg, uint256 totalCash, bytes32 totalsHash, uint64 upToBlock)",
+  ),
 } as const;
+
+/// Bank（交易所資產池）。只放伺服器端真的會呼叫的那幾支。
+export const bankAbi = parseAbi([
+  "function head() view returns (bytes32)",
+  "function epoch() view returns (uint64)",
+  "function totalHeldKg() view returns (uint256)",
+  "function withdrawalsEnabled() view returns (bool)",
+  "function commitments(uint64) view returns (bytes32 orderLogRoot, bytes32 balanceRoot, uint256 totalKg, uint256 totalCash, bytes32 totalsHash, uint64 upToBlock, uint64 committedAt)",
+  "function solvency() view returns (uint256 owedKg, uint256 heldKg, uint256 owedCash, uint256 heldCash)",
+  "function commit(bytes32 prev, uint64 newEpoch, bytes32 orderLogRoot, bytes32 balanceRoot, uint256 totalKg, uint256 totalCash, bytes32 totalsHash, uint64 upToBlock) returns (bytes32)",
+  "function deposit(uint256 batchId, uint256 amountKg)",
+  "function depositCash(uint256 amount)",
+  "event Deposited(address indexed account, uint256 indexed batchId, uint256 amountKg)",
+  "event CashDeposited(address indexed account, uint256 amount)",
+  "event Committed(uint64 indexed epoch, bytes32 anchor, bytes32 orderLogRoot, bytes32 balanceRoot, uint256 totalKg, uint256 totalCash, bytes32 totalsHash, uint64 upToBlock)",
+  "event RetiredFor(address indexed account, uint256 indexed batchId, uint256 amountKg, uint256 certId)",
+]);
