@@ -65,7 +65,17 @@ contract PasskeyAccount is IERC1155Receiver, IERC721Receiver, IERC1271 {
     address public immutable factory;
 
     /// @notice 復原提案的等待期。這段時間的意義是「讓真正的持有人有機會否決」。
-    uint256 public constant RECOVERY_DELAY = 72 hours;
+    ///
+    /// @dev 由 Factory 在部署時決定，整組帳戶共用同一個值，之後不能改——
+    ///      能改的話，治理方就可以在提出復原的同一筆交易裡把等待期設成 0，
+    ///      而等待期的全部意義就是治理方**不能**這樣做。
+    ///
+    ///      為什麼不是常數：正式環境是 72 小時（政策值，寫在約定書裡），
+    ///      但公開測試鏈上的展示沒辦法讓人等三天才看得到復原怎麼運作，
+    ///      而本機測試更不可能。以前靠 anvil 的 `evm_increaseTime` 跳過去，
+    ///      換到公開鏈之後那條路不存在了——時間只能真的流逝。
+    ///      所以把它變成部署參數：鏈與用途決定值，合約只負責「不能被改」。
+    uint256 public immutable RECOVERY_DELAY;
 
     uint256 public nonce;
     bool public frozen;
@@ -118,11 +128,12 @@ contract PasskeyAccount is IERC1155Receiver, IERC721Receiver, IERC1271 {
     ///      地址取決於 initCode，initCode 含建構子參數——金鑰放進建構子，地址就會隨金鑰變動，
     ///      「同一個登入帳號永遠同一個地址」這句話就不成立了。所以金鑰在部署之後由
     ///      Factory 呼叫 `initialise` 補上，只能補一次。
-    constructor(bytes32 accountRef_, address recoveryAgent_, address operator_) {
+    constructor(bytes32 accountRef_, address recoveryAgent_, address operator_, uint256 recoveryDelay_) {
         accountRef = accountRef_;
         recoveryAgent = recoveryAgent_;
         operator = operator_;
         factory = msg.sender;
+        RECOVERY_DELAY = recoveryDelay_;
     }
 
     /// @notice 設定第一把金鑰。只有 Factory、且只有在還沒有任何金鑰時能呼叫。

@@ -48,5 +48,15 @@ runs = 256
 
 [rpc_endpoints]
 anvil = "http://127.0.0.1:28545"
-# 既有私有鏈：export RPC_URL=http://127.0.0.1:20024 後用 --rpc-url chain
+# 公開測試鏈：Base Sepolia（chainId 84532）。Cancun 齊備，2 秒出塊，gas 幾乎免費。
+# 自己的 RPC 供應商端點放 BASE_SEPOLIA_RPC_URL；不設就走公共端點（有速率限制，
+# 回填模擬資料時務必換成自己的，否則會被限流打斷）。
+base_sepolia = "${BASE_SEPOLIA_RPC_URL:-https://sepolia.base.org}"
+# 任何其他鏈：export RPC_URL=… 後用 --rpc-url chain
 chain = "${RPC_URL}"
+
+# 合約原始碼驗證。公開鏈上這一步不是裝飾——國家單位要能自己比對
+# 「鏈上跑的位元組碼」和「repo 裡的原始碼」是同一份，否則治理揭露沒有意義。
+#   forge script … --broadcast --verify
+[etherscan]
+base_sepolia = { key = "${BASESCAN_API_KEY}", chain = 84532, url = "https://api-sepolia.basescan.org/api" }

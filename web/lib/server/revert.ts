@@ -96,7 +96,29 @@ export type RevertInfo = {
   message: string;
   /// revert 了，但沒有帶任何資料。
   empty: boolean;
+  /// 這是一個唯讀呼叫（view / pure）。
+  ///
+  /// 這個旗標決定「空的 revert」該怎麼解讀，而那個差別很重要：
+  ///   · **唯讀**函式空手 revert —— 本專案的 view 沒有一個會 revert，所以這幾乎
+  ///     一定是「那個地址上的合約不是我們以為的那一個」（選擇器對不上 → fallback）。
+  ///   · **寫入**函式空手 revert —— 太常見了：沒帶訊息的 require、gas 不足、
+  ///     estimateGas 拿不到 revert data。斷言成「部署檔對不上」會給出一個
+  ///     **有自信而且錯的**診斷，那比講不清楚更糟：它會讓人去重新部署，
+  ///     而真正的原因（例如 attestation 過期）原封不動。
+  ///
+  /// 這一條是實際踩到才加的：一次 attestation 過期被說成「kycRegistry 上的合約
+  /// 沒有 register」，而地址其實完全正確。
+  isRead: boolean;
 };
+
+/// 這個函式在 ABI 裡是不是唯讀的。
+function isReadOnly(abi: unknown, functionName?: string): boolean {
+  if (!Array.isArray(abi) || !functionName) return false;
+  const item = abi.find(
+    (x) => typeof x === "object" && x !== null && (x as { name?: string }).name === functionName,
+  ) as { stateMutability?: string } | undefined;
+  return item?.stateMutability === "view" || item?.stateMutability === "pure";
+}
 
 /// 從任何一個丟出來的東西裡找出 revert。不是 revert 就回 null。
 export function decodeRevert(e: unknown): RevertInfo | null {
@@ -105,6 +127,7 @@ export function decodeRevert(e: unknown): RevertInfo | null {
   const where = {
     contractAddress: exec?.contractAddress,
     functionName: exec?.functionName,
+    isRead: isReadOnly(exec?.abi, exec?.functionName),
   };
 
   const r = e.walk((x) => x instanceof ContractFunctionRevertedError) as ContractFunctionRevertedError | null;
@@ -118,7 +141,7 @@ export function decodeRevert(e: unknown): RevertInfo | null {
   const reason = r.reason && r.reason !== "execution reverted" ? r.reason : undefined;
   return {
     ...where,
-    message: reason ?? "合約拒絕了這個操作，而且沒有說明原因",
+    message: reason ?? "合約拒絕了這個操作，而且沒有說明原因（多半是沒帶訊息的 require，或條件在送出前就變了）",
     empty: !reason,
   };
 }

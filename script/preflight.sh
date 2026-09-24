@@ -11,6 +11,7 @@
 #   3. EIP-5656（MCOPY）—— Cancun 的另一個指令，solc 0.8.26 + evm_version=cancun 會用到
 #   4. EIP-1559 —— 決定 forge script 要不要加 --legacy
 #   5. 部署者餘額 —— 私有鏈上 Anvil 預設金鑰通常是 0 餘額
+#   6. 公開鏈的金鑰檢查 —— 有沒有人還在用 Anvil 的公開金鑰
 #
 # 結尾會印出建議的部署指令。
 
@@ -108,6 +109,31 @@ echo "  注意：前端的 RELAYER_PK / CARBON_VERIFIER_PK / DOCUMENT_SIGNER_PK 
 echo "  它們要替使用者代送交易（Phase 0 的 gas 由平台付）。"
 echo
 
+# --- 6. 公開鏈上不准用公開金鑰 -------------------------------------------
+# Anvil 的十把金鑰印在它的啟動畫面上。在本機那是便利，在任何別人也連得到的鏈上
+# 那是把鑰匙插在門上：operator 那把能凍結所有人的錢包，identityVerifier 那把能
+# 替自己簽發身分。部署腳本本身也會擋（Deploy.s.sol 的 _requireNoWellKnownKeys），
+# 這裡先講，是為了讓人在花時間之前就知道要準備什麼。
+PUBLIC_CHAIN=1
+case "$CHAIN_ID" in 31337|1337) PUBLIC_CHAIN=0;; esac
+if [ "$PUBLIC_CHAIN" = "1" ]; then
+  echo "5b. 公開鏈的金鑰"
+  ANVIL0=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+  if [ "$(echo "$DEPLOYER" | tr 'A-F' 'a-f')" = "$(echo "$ANVIL0" | tr 'A-F' 'a-f')" ]; then
+    bad "部署者是 Anvil 的預設帳戶，而這條鏈不是本機鏈"
+    echo "    那把金鑰全世界都有。部署腳本會直接拒絕。請先產一把新的："
+    echo "      cast wallet new"
+    echo "      export DEPLOYER_PK=0x<新私鑰>"
+  else
+    ok "部署者不是 Anvil 預設帳戶"
+  fi
+  echo "    治理 owners 也一樣：NATIONAL_OWNERS / OPERATOR_OWNERS 不設的話，"
+  echo "    預設值是 Anvil 的帳戶 5–9，部署會被擋下來。"
+  echo "    復原等待期預設 72 小時；要在展示裡跑完復原流程就設短一點："
+  echo "      export RECOVERY_DELAY=600"
+  echo
+fi
+
 # --- 結論 ----------------------------------------------------------------
 echo "────────────────────────────────────────────────────────"
 if [ "$HAS_MCOPY" = "0" ] || [ "$HAS_TSTORE" = "0" ]; then
@@ -140,4 +166,8 @@ echo
 echo "部署後前端（web/.env.local）："
 echo "  RPC_URL=$RPC"
 echo "  CHAIN_ID=$CHAIN_ID"
+if [ "${PUBLIC_CHAIN:-0}" = "1" ]; then
+  echo "  RELAYER_PK / IDENTITY_VERIFIER_PK / CARBON_VERIFIER_PK / DOCUMENT_SIGNER_PK=<這條鏈專用的金鑰>"
+  echo "  IDENTITY_SALT=<換掉，別用範例值——鏈上存的是身分證號的雜湊>"
+fi
 echo "────────────────────────────────────────────────────────"

@@ -2,7 +2,9 @@ import "server-only";
 import { keccak256, toBytes, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { registryWriteAbi } from "@/lib/abis";
-import { deployment, publicClient, relayerClient } from "./chain";
+import { deployment, publicClient, relayerClient, requireOwnKey } from "./chain";
+import { submit } from "./tx";
+import { ApiError } from "./api";
 
 export type IssuanceRequest = {
   id: string; createdAt: string; updatedAt: string;
@@ -14,8 +16,9 @@ export type IssuanceRequest = {
 
 // Phase 0：查驗機構的簽章金鑰放在本站（CARBON_VERIFIER_PK，預設 Anvil account0）。
 // 正式環境：查驗機構在自己的系統簽 IssuanceAttestation，本站只收簽章並送出 issue()。
-const ANVIL_PK0 = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-export const carbonVerifier = privateKeyToAccount((process.env.CARBON_VERIFIER_PK ?? process.env.RELAYER_PK ?? ANVIL_PK0) as Hex);
+export const carbonVerifier = privateKeyToAccount(
+  requireOwnKey("CARBON_VERIFIER_PK", process.env.CARBON_VERIFIER_PK ?? process.env.RELAYER_PK) as Hex,
+);
 
 export async function signAndIssue(r: IssuanceRequest) {
   const d = deployment();
@@ -35,8 +38,7 @@ export async function signAndIssue(r: IssuanceRequest) {
     primaryType: "IssuanceAttestation", message: a,
   });
   const { request, result } = await publicClient.simulateContract({ address: d.carbonRegistry, abi: registryWriteAbi, functionName: "issue", args: [a, signature], account: relayerClient.account });
-  const hash = await relayerClient.writeContract(request);
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  if (receipt.status !== "success") throw new Error("issue reverted");
+  const { hash, receipt } = await submit(request);
+  if (receipt.status !== "success") throw new ApiError("CONTRACT_REVERTED", "核發交易被鏈上拒絕");
   return { txHash: hash, batchId: Number(result), serialHash, serial };
 }

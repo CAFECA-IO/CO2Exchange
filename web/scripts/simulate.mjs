@@ -15,12 +15,25 @@
  *   --seed S         人物種子（預設 co2x）；同一個種子一定產生同一批人
  *   --mnemonic M     推導帳戶的助記詞（預設 anvil 的測試助記詞）
  *   --rpc URL        預設 $RPC_URL 或 http://127.0.0.1:28545
+ *   --pace SEC       縮時模式下每一輪之間實際等待幾秒（預設 0＝全速）
  *   --quiet          只印每一輪的摘要
  *
- * ⚠️ 回填會把鏈的時間往前推（anvil_setTime）。**區塊時間只能往前，不能倒退**，
- *    所以 --from 必須晚於鏈上現在的時間。要回填一整年，anvil 得從一年前起算：
- *      anvil --timestamp $(( $(date +%s) - 365*86400 ))
- *    腳本會先檢查，對不上會直接告訴你該怎麼開。
+ * ## 兩種回填，看鏈讓不讓你調時間
+ *
+ * **anvil**：把鏈的時間一輪一輪往前推（anvil_setTime），所以交易的時間戳就是
+ * 劇本的時間戳，K 線的橫軸真的是一整年。區塊時間只能往前不能倒退，所以 --from
+ * 必須晚於鏈上現在的時間，anvil 要從一年前起算：
+ *   anvil --timestamp $(( $(date +%s) - 365*86400 ))
+ *
+ * **公開鏈**：調不動時間，而且沒有替代方案——區塊時間由出塊的人決定。
+ * 腳本會自己偵測並切換到**縮時模式**：劇本照樣走一年（申報季、每月對帳、
+ * 人物陸續加入都照劇本），但交易全部發生在現在。
+ *
+ *   npm run simulate -- --from 2025-09-25 --tick 8h --pace 60
+ *
+ * 換來的是「行為上是一整年、時間戳上是這幾天」。量能分布、各國佔比、掛單結構
+ * 都對；K 線的橫軸是真實日期，想拉長就把 --pace 調大讓它跑好幾天。
+ * 這是公開鏈的固有限制，不是實作偷懶——寫在這裡，免得下一個人以為可以修好。
  *
  * 設計上的兩個決定：
  *
@@ -64,6 +77,9 @@ function parseDuration(s, dflt) {
   return Math.round(Number(m[1]) * { s: 1, m: 60, h: 3600, d: 86400 }[m[2]]);
 }
 const TICK = parseDuration(arg("tick", "6h"), 6 * 3600);
+/// 縮時模式下每一輪之間實際等待幾秒。0 = 全速跑完（幾分鐘內結束，K 線會擠在一個點上）；
+/// 設大一點並讓它在背景跑好幾天，橫軸才拉得開。
+const PACE = Number(arg("pace", 0));
 
 // ───────────────────────── 人物 ─────────────────────────
 
@@ -152,12 +168,15 @@ const erc20Abi = parseAbi([
 
 /// anvil 每筆交易當場出塊，viem 預設 4 秒的輪詢間隔等於每筆交易白等四秒。
 /// 一年份的回填是幾千筆交易——這一個參數的差別是「四小時」與「二十分鐘」。
-const POLL = 50;
+/// 公開鏈上反過來：問太快只是把 RPC 的額度燒掉，而出塊時間本來就是兩秒起跳。
+let POLL = 50;
 const pub0 = createPublicClient({ transport: http(RPC), pollingInterval: POLL });
 const chainId = await pub0.getChainId().catch(() => {
-  console.error(`連不上 ${RPC} —— anvil 起來了嗎？`);
+  console.error(`連不上 ${RPC} —— 節點起來了嗎？`);
   process.exit(1);
 });
+const LOCAL_CHAIN = chainId === 31337 || chainId === 1337;
+if (!LOCAL_CHAIN) POLL = 1000;
 const chain = defineChain({
   id: chainId, name: "sim",
   nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
@@ -174,7 +193,7 @@ const D = JSON.parse(fs.readFileSync(depFile, "utf8"));
 
 const operator = privateKeyToAccount(OPERATOR_PK);
 const opClient = createWalletClient({ account: operator, chain, transport: http(RPC), pollingInterval: POLL });
-const opWallet = { account: operator, client: opClient, nonce: 0 };
+const opWallet = { account: operator, client: opClient, nonce: -1 };
 
 // ───────────────────────── 交易小工具 ─────────────────────────
 
@@ -219,6 +238,22 @@ async function chainNow() {
 async function setChainTime(ts) {
   await pub.request({ method: "anvil_setTime", params: [toHex(ts)] });
 }
+
+/// 這條鏈讓不讓我們調時間？
+///
+/// anvil 讓，公開鏈不讓——而且**沒有任何替代方案**：區塊時間由出塊的人決定，
+/// 我們只是一個送交易的客戶端。所以回填在公開鏈上要換一種做法（見下面的縮時模式），
+/// 不是換一個 RPC 方法。
+async function canTimeTravel() {
+  if (!LOCAL_CHAIN) return false;
+  try {
+    await pub.request({ method: "anvil_setTime", params: [toHex(await chainNow())] });
+    return true;
+  } catch { return false; }
+}
+
+/// 一次決定，之後到處用。放在這裡而不是每次現問：探測本身要送一筆 RPC。
+const TIME_TRAVEL = await canTimeTravel();
 
 // ───────────────────────── 市場模型 ─────────────────────────
 
@@ -353,12 +388,26 @@ const clampPrice = (p) => (p < PRICE_FLOOR ? PRICE_FLOOR : p > PRICE_CEIL ? PRIC
 
 const TIER = { individual: 1, corporate: 2 };
 
+/// 公開鏈上每個人物帳戶要自己付 gas，而 anvil_setBalance 不存在——
+/// 只能由營運金鑰真的轉一筆過去。金額刻意小：Base Sepolia 這種 L2 上
+/// 一筆交易大約是 1e-5 ETH 等級，GAS_TOPUP 夠跑幾百筆。
+/// 太大則是把 faucet 領來的測試幣鎖在一百個地址裡拿不回來。
+const GAS_TOPUP = BigInt(process.env.SIM_GAS_TOPUP ?? (LOCAL_CHAIN ? 10n ** 19n : 10n ** 15n));
+const GAS_FLOOR = GAS_TOPUP / 5n;
+
 async function ensureFunded(p) {
   const w = walletOf(p);
   const bal = await pub.getBalance({ address: p.address });
-  if (bal < 10n ** 17n) {
-    await pub.request({ method: "anvil_setBalance", params: [p.address, toHex(10n ** 19n)] });
+  if (bal >= GAS_FLOOR) return w;
+  if (TIME_TRAVEL) {
+    await pub.request({ method: "anvil_setBalance", params: [p.address, toHex(GAS_TOPUP)] });
+    return w;
   }
+  // 營運金鑰的 nonce 走它自己那一份（opWallet），不要和人物帳戶搶。
+  if (opWallet.nonce < 0) opWallet.nonce = await pub.getTransactionCount({ address: operator.address });
+  const hash = await opClient.sendTransaction({ to: p.address, value: GAS_TOPUP, nonce: opWallet.nonce });
+  opWallet.nonce += 1;
+  await pub.waitForTransactionReceipt({ hash });
   return w;
 }
 
@@ -785,8 +834,10 @@ async function actImportForeign(now, rng) {
 /// 那頁面看起來就是「說了做不到」。報告的託管餘額直接取鏈上即時流通量：
 /// demo 環境的登錄簿餘額本來就是由鏈上推導的，所以一定對得起來；
 /// 正式環境是人工填報後由查核機構簽署，兩邊對不上才是要查的事。
-async function actPublishReserve(now) {
-  const period = Number(`${new Date(now * 1000).getUTCFullYear()}${String(new Date(now * 1000).getUTCMonth() + 1).padStart(2, "0")}`);
+async function actPublishReserve(now, simNow = now) {
+  // 期別是劇本的月份（縮時模式下一年會發十二期）；asOf 是鏈上真的時間。
+  const d = new Date(simNow * 1000);
+  const period = Number(`${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}`);
   if (publishedPeriods.has(period)) return false;
   publishedPeriods.add(period);
 
@@ -857,8 +908,15 @@ async function actPlatformSupply(rng) {
 // ───────────────────────── 一輪 ─────────────────────────
 
 let tickNo = 0;
-async function runTick(now, rng, progress) {
-  const date = new Date(now * 1000);
+/// `now` 是**鏈上真的會看到的時間**（attestation 的效期、deadline 都以它為準）。
+/// `simNow` 是**劇本的時間**（申報季、每月對帳、人物何時加入）。
+///
+/// 在 anvil 上兩者相同——我們把鏈的時間調到劇本的時間。公開鏈上不行：
+/// 鏈的時間就是現在，而劇本要走完一整年。所以兩個時鐘分開，
+/// 凡是合約會檢查的值一律用 `now`，凡是「劇情演到哪裡」一律用 `simNow`。
+/// 混用的後果很具體：拿一年前的 simNow 去算 deadline，attestation 一送上去就過期。
+async function runTick(now, rng, progress, simNow = now) {
+  const date = new Date(simNow * 1000);
   const stats = { join: 0, issue: 0, import: 0, list: 0, bid: 0, buy: 0, fill: 0, retire: 0, cancel: 0, report: 0 };
 
   // 掛單簿的深度決定供給端要多積極。薄了就補貨，厚了就收手——
@@ -867,7 +925,7 @@ async function runTick(now, rng, progress) {
   const thin = depthTonnes < 4000;
 
   // 每月 5 日的託管對帳報告。跨過那一天就發，不管當輪落在幾點。
-  if (date.getUTCDate() >= 5 && await attempt("託管對帳報告", () => actPublishReserve(now))) stats.report += 1;
+  if (date.getUTCDate() >= 5 && await attempt("託管對帳報告", () => actPublishReserve(now, simNow))) stats.report += 1;
 
   // 平台進貨：託管帳戶收到新的國外額度（約每十天一批）
   if (rng() < TICK / (10 * 86400)) { if (await attempt("平台進貨", () => actImportForeign(now, rng))) stats.import += 1; }
@@ -984,7 +1042,7 @@ if (FROM) {
   const fromTs = Math.floor(new Date(FROM.length <= 10 ? `${FROM}T00:00:00Z` : FROM).getTime() / 1000);
   if (!Number.isFinite(fromTs)) { console.error(`看不懂的起點時間：${FROM}`); process.exit(1); }
   const head = await chainNow();
-  if (fromTs < head) {
+  if (TIME_TRAVEL && fromTs < head) {
     const wantDays = Math.ceil((Date.now() / 1000 - fromTs) / 86400);
     console.error(
       `起點 ${FROM} 比鏈上現在的時間還早（鏈上是 ${new Date(head * 1000).toISOString().slice(0, 16)}）。\n` +
@@ -996,13 +1054,33 @@ if (FROM) {
   }
   const target = Math.floor(Date.now() / 1000);
   const ticks = Math.max(1, Math.ceil((target - fromTs) / TICK));
-  console.log(`回填 ${new Date(fromTs * 1000).toISOString().slice(0, 10)} → 現在，共 ${ticks} 輪（每輪 ${TICK / 3600} 小時）\n`);
 
   const t0 = Date.now();
-  for (let i = 0; i < ticks; i++) {
-    const now = Math.min(target, fromTs + i * TICK);
-    await setChainTime(now);
-    await runTick(now, rng, i / ticks);
+  if (TIME_TRAVEL) {
+    console.log(`回填 ${new Date(fromTs * 1000).toISOString().slice(0, 10)} → 現在，共 ${ticks} 輪（每輪 ${TICK / 3600} 小時）\n`);
+    for (let i = 0; i < ticks; i++) {
+      const now = Math.min(target, fromTs + i * TICK);
+      await setChainTime(now);
+      await runTick(now, rng, i / ticks);
+    }
+  } else {
+    // ── 縮時模式（公開鏈）──
+    //
+    // 鏈的時間調不動，所以改成：劇本照樣走一年，但交易全部發生在**現在**。
+    // 換來的是一份「行為上是一整年、時間戳上是這幾天」的市場——
+    // 首頁的量能、各國佔比、掛單結構都對，K 線的橫軸則是真實日期。
+    // 想要橫軸也拉長，就把 --pace 調大並讓它跑好幾天（見 README）。
+    console.log(
+      `縮時模式：這條鏈（chainId ${chainId}）不能調整區塊時間，所以劇本的一年會壓縮成現在這一段時間。\n` +
+      `  劇本 ${new Date(fromTs * 1000).toISOString().slice(0, 10)} → ${new Date(target * 1000).toISOString().slice(0, 10)}，共 ${ticks} 輪\n` +
+      `  每輪之間實際等待 ${PACE} 秒${PACE ? `（整趟約 ${((ticks * PACE) / 3600).toFixed(1)} 小時）` : "（不等待）"}\n` +
+      `  gas 撥款：每個帳戶 ${Number(GAS_TOPUP) / 1e18} ETH，最多 ${personas.length} 個\n`,
+    );
+    for (let i = 0; i < ticks; i++) {
+      const simNow = Math.min(target, fromTs + i * TICK);
+      await runTick(await chainNow(), rng, i / ticks, simNow);
+      if (PACE && i < ticks - 1) await new Promise((r) => setTimeout(r, PACE * 1000));
+    }
   }
   const mins = ((Date.now() - t0) / 60000).toFixed(1);
   console.log(`\n回填完成：${sent} 筆交易、${failed} 次略過，耗時 ${mins} 分鐘。`);

@@ -3,6 +3,8 @@ import { keccak256, toBytes, toHex, type Address, type Hex } from "viem";
 import { kycRegistryAbi } from "@/lib/abis";
 import { deployment, identityVerifier, publicClient, relayerClient } from "./chain";
 import { TIER } from "@/lib/deployment";
+import { submit } from "./tx";
+import { ApiError } from "./api";
 
 export type KycRequest = {
   id: string; createdAt: string; updatedAt: string;
@@ -39,8 +41,14 @@ export async function attestAndRegister(account: Address, tier: number, idn: str
       { name: "jurisdiction", type: "bytes2" }, { name: "identityHash", type: "bytes32" }, { name: "nonce", type: "uint256" }, { name: "deadline", type: "uint256" } ] },
     primaryType: "IdentityAttestation", message: attestation,
   });
-  const hash = await relayerClient.writeContract({ address: d.kycRegistry, abi: kycRegistryAbi, functionName: "register", args: [attestation, signature] });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  if (receipt.status !== "success") throw new Error("register reverted");
+  // 先模擬再送。公開鏈上一筆注定失敗的交易照樣要付 gas，而且 estimateGas 的
+  // revert 常常不帶資料——「attestation 過期」會變成「合約拒絕了，沒說原因」。
+  // 模擬拿得到真正的 error，錢也省下來。
+  const { request } = await publicClient.simulateContract({
+    address: d.kycRegistry, abi: kycRegistryAbi, functionName: "register", args: [attestation, signature],
+    account: relayerClient.account,
+  });
+  const { hash, receipt } = await submit(request);
+  if (receipt.status !== "success") throw new ApiError("CONTRACT_REVERTED", "身分註冊交易被鏈上拒絕");
   return { txHash: hash, identityHash };
 }

@@ -37,6 +37,9 @@ contract PasskeyAccountTest is Fixture {
     address internal relayer = makeAddr("relayer");
     address internal recoveryAgent = makeAddr("recoveryAgent"); // 治理 Safe
     bytes32 internal constant ACCOUNT_REF = keccak256("google:luphia@example.com");
+    /// 等待期現在是部署參數（見 PasskeyAccountFactory）。測試用正式環境的值，
+    /// 因為這些測試驗的是「等待期真的擋得住」，不是某條鏈上剛好設了多久。
+    uint256 internal constant RECOVERY_DELAY = 72 hours;
 
     uint256 internal batch;
 
@@ -46,7 +49,7 @@ contract PasskeyAccountTest is Fixture {
         phoneKeyId = keccak256(abi.encode(qx, qy));
 
         // recoveryAgent = 治理 Safe；operator = 平台 relayer（只能凍結）
-        factory = new PasskeyAccountFactory(recoveryAgent, operator);
+        factory = new PasskeyAccountFactory(recoveryAgent, operator, RECOVERY_DELAY);
 
         // 地址在部署之前就算得出來，而且只由登入帳號決定——不需要知道任何金鑰
         address predicted = factory.getAddress(ACCOUNT_REF);
@@ -302,6 +305,38 @@ contract PasskeyAccountTest is Fixture {
         vm.expectRevert(PasskeyAccount.NoPendingRecovery.selector);
         account.finaliseRecovery();
         assertEq(account.activeKeys(), 1);
+    }
+
+    /// 等待期是部署參數，不是常數——公開測試鏈上要能在一次示範裡跑完復原流程，
+    /// 而本機測試不能靠 anvil 的 evm_increaseTime 跳過去（公開鏈沒有那條路）。
+    /// 這一條守的是：值可以在部署時選，但選完之後**帳戶自己改不了**。
+    function test_recoveryDelay_isADeploymentParameter() public {
+        PasskeyAccountFactory quick = new PasskeyAccountFactory(recoveryAgent, operator, 10 minutes);
+        PasskeyAccount a = quick.createAccount(keccak256("google:quick@example.com"), qx, qy, "phone");
+        assertEq(a.RECOVERY_DELAY(), 10 minutes);
+        assertEq(account.RECOVERY_DELAY(), 72 hours, unicode"原本那一組不受影響");
+
+        // 等待期是 creationCode 的一部分，所以它也決定地址：換了等待期就是換了一份合約，
+        // 不該和舊的共用同一個地址。
+        assertTrue(
+            quick.getAddress(ACCOUNT_REF) != factory.getAddress(ACCOUNT_REF),
+            unicode"等待期不同，同一個 accountRef 也算出不同地址"
+        );
+
+        // 提案之後真的只要等 10 分鐘
+        vm.prank(recoveryAgent);
+        (bytes32 nqx, bytes32 nqy) = _pub(0xB0B);
+        a.proposeRecovery(nqx, nqy, unicode"新手機");
+        vm.warp(block.timestamp + 10 minutes + 1);
+        a.finaliseRecovery();
+        assertEq(a.activeKeys(), 2);
+    }
+
+    /// 等待期 0 等於治理方可以單方面拿走帳戶——那不會是有人真的想要的設定，
+    /// 只會是環境變數寫錯。在建構子就擋下來，別讓它變成一條部署出去的鏈。
+    function test_recoveryDelay_zeroRejected() public {
+        vm.expectRevert("recoveryDelay = 0");
+        new PasskeyAccountFactory(recoveryAgent, operator, 0);
     }
 
     /// 只有治理方能提案。平台 relayer 不行，登入權更不行——

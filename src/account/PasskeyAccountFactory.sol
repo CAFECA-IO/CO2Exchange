@@ -21,11 +21,23 @@ contract PasskeyAccountFactory {
     address public immutable recoveryAgent;
     address public immutable operator;
 
+    /// 復原提案的等待期，原封不動傳給每一個帳戶。正式環境 72 小時；
+    /// 公開測試鏈上的展示會設短一點，否則沒有人看得到復原流程怎麼跑完。
+    ///
+    /// 它也是**地址的一部分**：accountRef 相同但等待期不同的兩次部署，
+    /// 算出來的地址不一樣（creationCode 帶建構參數）。這是對的——
+    /// 等待期換了就是換了一份合約，不該和舊的共用同一個地址。
+    uint256 public immutable recoveryDelay;
+
     event AccountCreated(address indexed account, bytes32 indexed accountRef, bytes32 qx, bytes32 qy);
 
-    constructor(address recoveryAgent_, address operator_) {
+    /// @param recoveryDelay_ 秒。0 等於沒有等待期，那會讓治理方可以單方面拿走帳戶，
+    ///        所以直接擋下來——這種值只會是設定寫錯，不會是有人真的想要。
+    constructor(address recoveryAgent_, address operator_, uint256 recoveryDelay_) {
+        require(recoveryDelay_ > 0, "recoveryDelay = 0");
         recoveryAgent = recoveryAgent_;
         operator = operator_;
+        recoveryDelay = recoveryDelay_;
     }
 
     /// @notice 建立（或取回）這個登入帳號的錢包，並把第一把 passkey 設為初始金鑰。
@@ -37,7 +49,7 @@ contract PasskeyAccountFactory {
     {
         address predicted = getAddress(accountRef);
         if (predicted.code.length > 0) return PasskeyAccount(payable(predicted));
-        account = new PasskeyAccount{salt: accountRef}(accountRef, recoveryAgent, operator);
+        account = new PasskeyAccount{salt: accountRef}(accountRef, recoveryAgent, operator, recoveryDelay);
         account.initialise(qx, qy, label);
         emit AccountCreated(address(account), accountRef, qx, qy);
     }
@@ -48,7 +60,9 @@ contract PasskeyAccountFactory {
         return Create2.computeAddress(
             accountRef,
             keccak256(
-                abi.encodePacked(type(PasskeyAccount).creationCode, abi.encode(accountRef, recoveryAgent, operator))
+                abi.encodePacked(
+                    type(PasskeyAccount).creationCode, abi.encode(accountRef, recoveryAgent, operator, recoveryDelay)
+                )
             )
         );
     }

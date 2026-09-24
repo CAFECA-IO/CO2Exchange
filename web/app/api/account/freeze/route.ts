@@ -3,6 +3,7 @@ import { publicClient, relayerClient } from "@/lib/server/chain";
 import { requireRole } from "@/lib/server/roles";
 import { ApiError, handleError, ok } from "@/lib/server/api";
 import { walletOf } from "@/lib/server/wallet";
+import { submit } from "@/lib/server/tx";
 
 /// 掛失。只要**登得進來**就按得下去。
 ///
@@ -25,8 +26,7 @@ export async function POST() {
     const { request } = await publicClient.simulateContract({
       address: w.address, abi: passkeyAccountAbi, functionName: "freeze", account: relayerClient.account,
     });
-    const txHash = await relayerClient.writeContract(request);
-    await publicClient.waitForTransactionReceipt({ hash: txHash });
+    const { hash: txHash } = await submit(request);
     return ok({ ...(await walletOf(m.email, m.id)), txHash });
   } catch (e) { return handleError(e); }
 }

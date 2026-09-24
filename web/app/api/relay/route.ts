@@ -2,6 +2,7 @@ import { isHex, type Hex } from "viem";
 import { passkeyAccountAbi } from "@/lib/abis";
 import { isAddress, publicClient, relayerClient } from "@/lib/server/chain";
 import { fail, handleError, ok } from "@/lib/server/api";
+import { submit } from "@/lib/server/tx";
 
 /// revert 的拆解在 lib/server/revert.ts，和讀取那一側共用——
 /// 「合約拒絕了」不該因為它發生在寫入還是讀取而得到不同的說法。
@@ -39,8 +40,7 @@ export async function POST(req: Request) {
     const { request } = await publicClient.simulateContract({
       address: account, abi: passkeyAccountAbi, functionName: fn, args: [typed, keyId, signature], account: relayerClient.account,
     });
-    const hash = await relayerClient.writeContract(request);
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    const { hash, receipt } = await submit(request);
     return ok({ txHash: hash, status: receipt.status, gasUsed: receipt.gasUsed });
   } catch (e) {
     // 合約 revert、節點連不上、部署檔對不上、未知例外——全部交給 handleError 分類。

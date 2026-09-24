@@ -5,6 +5,7 @@ import { keyByCredential, putKey } from "@/lib/server/accounts";
 import { requireRole } from "@/lib/server/roles";
 import { ApiError, fail, handleError, ok } from "@/lib/server/api";
 import { keyIdOf, splitPublicKey, walletOf } from "@/lib/server/wallet";
+import { submit } from "@/lib/server/tx";
 
 /// 這個登入帳號的錢包。**一個登入帳號一個錢包**，所以這裡不再回「帳戶清單」。
 ///
@@ -59,11 +60,11 @@ export async function POST(req: Request) {
     const d = deployment();
 
     if (!before.exists) {
-      const txHash = await relayerClient.writeContract({
+      const { request } = await publicClient.simulateContract({
         address: d.accountFactory, abi: accountFactoryAbi, functionName: "createAccount",
-        args: [before.accountRef, qx, qy, name],
+        args: [before.accountRef, qx, qy, name], account: relayerClient.account,
       });
-      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      const { hash: txHash } = await submit(request);
       putKey({
         credentialId, publicKey: publicKey as Hex, keyId, accountRef: before.accountRef,
         address: before.address, label: name, userId: m.id, email: m.email,

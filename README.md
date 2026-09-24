@@ -451,6 +451,122 @@ cd web && npm run data:reset   # 搬到 data.bak-<時間戳>，不是刪除
 
 備份裡有上傳的身分文件，確認不需要再自行刪除。想把兩個部署的資料分開留著，設 `DATA_DIR` 指到不同資料夾即可。
 
+## 部署到公開測試鏈（Base Sepolia）
+
+Phase 0 的展示從本機 Anvil 換到公開測試鏈：**Base Sepolia（chainId 84532）**。
+Cancun 齊備（v4 要的 EIP-1153 有）、兩秒出塊、gas 幾乎免費，而且有區塊瀏覽器——
+國家單位可以自己去 basescan 對照鏈上的治理狀態，不必相信我們的截圖。
+
+換鏈不是只改一個 RPC 位址。下面這幾件事在 Anvil 上是免費的，在公開鏈上不是。
+
+### 一、金鑰：預設值在公開鏈上會被拒絕
+
+`.env.example` 裡那些 `0xac09…` 是 **Anvil 的公開金鑰**，印在 anvil 的啟動畫面上。
+它在本系統裡同時能凍結任何人的錢包、替任何人簽發身分、核發碳權額度。
+
+所以兩道閘門都會擋：部署腳本（`Deploy.s.sol` 的 `_requireNoWellKnownKeys`）在部署前
+revert，前端（`lib/server/chain.ts` 的 `requireOwnKey`）在啟動時丟例外。
+判斷用白名單——只有 chainId 31337 / 1337 算本機鏈，其餘一律當公開鏈。
+
+```bash
+cast wallet new        # 每個角色各產一把
+```
+
+| 變數 | 用途 | 要有餘額嗎 |
+|---|---|---|
+| `DEPLOYER_PK` | 部署整套合約 | 要（一次性，數千萬 gas） |
+| `RELAYER_PK` | 代送所有使用者的交易 | **要，而且要持續補** |
+| `IDENTITY_VERIFIER_PK` | 簽 KYC attestation | 不用（只簽章） |
+| `CARBON_VERIFIER_PK` | 簽核發 attestation | 不用（只簽章） |
+| `DOCUMENT_SIGNER_PK` | 回寫憑證 hash、設定費率 | 要（少量） |
+| `NATIONAL_OWNERS` / `OPERATOR_OWNERS` | 治理多簽的持有人 | 不用 |
+| `IDENTITY_SALT` | 身分雜湊的鹽 | — |
+
+`IDENTITY_SALT` **一定要換掉**：鏈上存的是 `keccak(身分證號 + salt)`，
+鹽如果是範例裡那個字串，任何人都能把號碼逐一試出來（號碼空間只有幾億）。
+
+relayer 沒錢時每一筆交易都會失敗，錯誤碼是 `RELAYER_UNFUNDED`，訊息會直接說
+是哪個地址。定期看一眼餘額，別等使用者來問。
+
+### 二、時間：沒有時間旅行
+
+Anvil 上我們用 `anvil_setTime` 把鏈的時間往前推，所以首頁那一整年的行情是
+「回填一年、每 8 小時一輪、五千筆交易」堆出來的。公開鏈上做不到，**而且沒有替代
+方案**——區塊時間由出塊的人決定，我們只是一個送交易的客戶端。
+
+兩個地方因此改了：
+
+- **模擬器**（`npm run simulate`）會自己偵測，切到**縮時模式**：劇本照樣走一年
+  （申報季、每月對帳、人物陸續加入），但交易全部發生在現在。量能分布、各國佔比、
+  掛單結構都對；K 線的橫軸則是真實日期。要讓橫軸拉長，就把 `--pace` 調大讓它跑好幾天。
+
+  ```bash
+  cd web && npm run simulate -- --from 2025-09-25 --tick 8h --pace 60
+  ```
+
+- **復原等待期**從常數變成**部署參數**（`PasskeyAccountFactory` 的建構子）。
+  正式環境 72 小時；公開測試鏈上要能在一次示範裡跑完，就部署成十分鐘：
+
+  ```bash
+  export RECOVERY_DELAY=600
+  ```
+
+  合約端仍然改不了——等待期的全部意義就是治理方不能縮短它。
+
+### 三、交易：會撞車、會塞車、會沒錢
+
+所有伺服器端送出的交易都走 `lib/server/tx.ts` 的 `submit()`，它做三件本機用不到的事：
+
+1. **同一把金鑰的交易排隊送、序號自己記。** 平台代付 gas 的代價是所有人共用一個
+   nonce 序列；兩個使用者同時按按鈕，在公開鏈上就是其中一筆 `nonce too low`。
+2. **等待有盡頭**（`TX_TIMEOUT_MS`，公開鏈預設 120 秒），逾時回 `TX_TIMEOUT`
+   並附上交易雜湊，而不是把 API 掛在那裡。
+3. **`insufficient funds` 轉成 `RELAYER_UNFUNDED`**，訊息說得出是哪個地址。
+
+另外所有寫入都先 `simulateContract` 再送：公開鏈上一筆注定失敗的交易照樣要付 gas，
+而且 `estimateGas` 的 revert 常常不帶資料，模擬才拿得到真正的原因。
+
+### 四、步驟
+
+```bash
+# 0. 領測試幣到 DEPLOYER 與 RELAYER 兩個地址（Base Sepolia faucet）
+
+# 1. 部署前檢查：會驗 Cancun、EIP-1559、餘額，以及有沒有人還用著公開金鑰
+./script/preflight.sh https://sepolia.base.org
+
+# 2. 部署（含合約原始碼驗證，需要 BASESCAN_API_KEY）
+export DEPLOYER_PK=0x…  NATIONAL_OWNERS=0x…,0x…,0x…  OPERATOR_OWNERS=0x…,0x…
+export RECOVERY_DELAY=600
+forge script script/DeployV4.s.sol --rpc-url base_sepolia --broadcast --verify
+
+# 3. 前端指向這條鏈
+cd web && cp .env.example .env.local   # 依上面那張表把每一把金鑰換掉
+#   RPC_URL=https://sepolia.base.org
+#   CHAIN_ID=84532
+
+# 4. 展示資料
+npm run simulate -- --from 2025-09-25 --tick 8h --pace 60
+```
+
+部署檔會寫到 `deployments/84532.json`——按 chainId 分檔，所以本機那份
+`31337.json` 不受影響，兩邊可以並存。
+
+### 五、還在 Anvil 上的東西
+
+`npm run e2e` 預設仍然跑本機鏈，理由很實際：一整套跑下來幾百筆交易，
+在公開鏈上是幾十分鐘與一把測試幣。要對公開鏈跑就設 `RPC_URL` / `CHAIN_ID`，
+並補上這條鏈的治理金鑰——復原那一支現在走**真的多簽**
+（`script/govern.sh safe national exec`），不再靠 anvil 的 impersonate：
+
+```bash
+RPC_URL=https://sepolia.base.org CHAIN_ID=84532 \
+NATIONAL_OWNER_PKS=0x…,0x… SENDER_PK=0x… \
+  node e2e/recovery.mjs
+```
+
+改成真多簽不只是為了換鏈：以前測的是「如果 Safe 說要，帳戶會照做」，
+現在測的是「要讓 Safe 說要，得幾個人簽字」——後者才是治理。
+
 ## 部署到既有的私有鏈
 
 不是 Anvil、而是已經在跑的鏈（自建 Besu / geth 系私有鏈等），先跑部署前檢查：

@@ -1,10 +1,10 @@
 import { createWalletClient, http, type Hex } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
 import { feeScheduleAbi, registryAbi } from "@/lib/abis";
 import { countryCode, countryToBytes2 } from "@/lib/deployment";
-import { chain, deployment, publicClient, RPC_URL, relayer } from "@/lib/server/chain";
+import { chain, deployment, documentSigner, publicClient, RPC_URL } from "@/lib/server/chain";
 import { requireRole } from "@/lib/server/roles";
 import { ApiError, handleError, ok } from "@/lib/server/api";
+import { submit } from "@/lib/server/tx";
 
 /// 各國費率表。
 ///
@@ -49,7 +49,7 @@ export async function POST(req: Request) {
     const body = await req.json();
     const d = deployment();
     if (!d.feeSchedule) throw new ApiError("DEPLOYMENT_MISMATCH", "這個部署沒有費率表合約");
-    const signer = process.env.DOCUMENT_SIGNER_PK ? privateKeyToAccount(process.env.DOCUMENT_SIGNER_PK as Hex) : relayer;
+    const signer = documentSigner;
     const wallet = createWalletClient({ chain, account: signer, transport: http(RPC_URL) });
 
     const tradeBps = Number(body.tradeBps ?? 0);
@@ -65,15 +65,14 @@ export async function POST(req: Request) {
         address: d.feeSchedule, abi: feeScheduleAbi, functionName: "setDefaults",
         args: [tradeBps, retire], account: signer,
       });
-      hash = await wallet.writeContract(request);
+      hash = (await submit(request, wallet)).hash;
     } else {
       const { request } = await publicClient.simulateContract({
         address: d.feeSchedule, abi: feeScheduleAbi, functionName: "setCountryFee",
         args: [countryToBytes2(String(body.country)), !!body.custom, tradeBps, retire], account: signer,
       });
-      hash = await wallet.writeContract(request);
+      hash = (await submit(request, wallet)).hash;
     }
-    await publicClient.waitForTransactionReceipt({ hash });
     return ok({ txHash: hash });
   } catch (e) { return handleError(e); }
 }

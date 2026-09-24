@@ -61,6 +61,12 @@ export const ERRORS = {
   ALREADY_EXISTS: { status: 409, message: "已經存在，不需要再建立一次" },
 
   // ── 鏈與環境 ─────────────────────────────────────────────────
+  /// 平台代付 gas 的帳戶沒錢了。使用者做什麼都沒用，這是維運要處理的事——
+  /// 所以訊息要說得出「哪個地址、去哪裡補」，而不是 "insufficient funds"。
+  RELAYER_UNFUNDED: { status: 503, message: "平台代付 gas 的帳戶餘額不足，請聯絡維運" },
+  /// 交易送出去了但沒在時限內進塊。**可重試，但不保證安全**——它可能稍後才成功，
+  /// 所以前端不自動重送（寫入預設不重試），由人看過交易再決定。
+  TX_TIMEOUT: { status: 504, message: "交易已送出，但還沒進塊" },
   CHAIN_UNREACHABLE: { status: 503, message: "無法連線到區塊鏈節點", retriable: true },
   DEPLOYMENT_MISMATCH: { status: 503, message: "部署檔與鏈對不上" },
   DATA_STALE: { status: 503, message: "本機資料屬於另一次部署" },

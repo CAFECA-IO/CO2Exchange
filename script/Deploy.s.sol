@@ -40,6 +40,7 @@ contract Deploy is Script {
     uint256 internal constant ANVIL_PK0 = 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
 
     error DeployerHasNoFunds(address deployer, uint256 chainId);
+    error PublicKeyOnPublicChain(string role, address who, uint256 chainId);
 
     struct Config {
         uint256 pk;
@@ -59,6 +60,7 @@ contract Deploy is Script {
         address[] operatorOwners;
         uint256 operatorThreshold;
         uint256 timelockDelay;
+        uint256 recoveryDelay;
     }
 
     Config internal cfg;
@@ -130,8 +132,63 @@ contract Deploy is Script {
         cfg.operatorOwners = vm.envOr("OPERATOR_OWNERS", ",", op);
         cfg.operatorThreshold = vm.envOr("OPERATOR_THRESHOLD", uint256(1));
         cfg.timelockDelay = vm.envOr("TIMELOCK_DELAY", uint256(48 hours));
+        // 復原等待期。正式環境 72 小時，寫在約定書裡；公開測試鏈上的展示要能在一次
+        // 示範裡跑完，所以可以調短。調短是**部署決定**，不是合約後門——合約端不可改。
+        cfg.recoveryDelay = vm.envOr("RECOVERY_DELAY", uint256(72 hours));
 
+        _requireNoWellKnownKeys();
         _requireFundedDeployer();
+    }
+
+    /// @dev Anvil 的那十把金鑰**印在 anvil 的啟動畫面上**，全世界都有。
+    ///      在本機那是便利，在任何一條別人也連得到的鏈上那是把鑰匙插在門上：
+    ///      拿 operator 那把可以凍結所有人的錢包，拿 identityVerifier 那把可以
+    ///      替自己簽發身分，拿國家 Safe 的持有人金鑰可以升級合約、撤換營運方。
+    ///
+    ///      所以換到公開鏈的第一道閘門在這裡，而且是**部署時**擋，不是上線後才發現：
+    ///      一條用預設金鑰部署出去的鏈，補救方式只有整條重來。
+    function _requireNoWellKnownKeys() internal view {
+        if (_isLocalDevChain()) return;
+
+        _rejectWellKnown("DEPLOYER_PK", cfg.deployer);
+        _rejectWellKnown("SOVEREIGN", cfg.sovereign);
+        _rejectWellKnown("OPERATOR", cfg.operator);
+        _rejectWellKnown("TREASURY", cfg.treasury);
+        _rejectWellKnown("IDENTITY_VERIFIER", cfg.identityVerifier);
+        _rejectWellKnown("CARBON_VERIFIER", cfg.carbonVerifier);
+        _rejectWellKnown("DOCUMENT_SIGNER", cfg.documentSigner);
+        for (uint256 i = 0; i < cfg.nationalOwners.length; i++) _rejectWellKnown("NATIONAL_OWNERS", cfg.nationalOwners[i]);
+        for (uint256 i = 0; i < cfg.operatorOwners.length; i++) _rejectWellKnown("OPERATOR_OWNERS", cfg.operatorOwners[i]);
+    }
+
+    function _rejectWellKnown(string memory role, address who) internal view {
+        if (!_isAnvilAccount(who)) return;
+        console2.log("");
+        console2.log(unicode"這條鏈不是本機測試鏈，但有一個角色還用著 Anvil 的預設帳戶。");
+        console2.log(unicode"  角色    ", role);
+        console2.log(unicode"  地址    ", who);
+        console2.log(unicode"  chainId ", block.chainid);
+        console2.log("");
+        console2.log(unicode"那些金鑰印在 anvil 的啟動畫面上，任何人都有。用它部署等於把治理權公開送出去。");
+        console2.log(unicode"請在 .env 設一組這條鏈專用的金鑰與地址，見 README「部署到公開測試鏈」。");
+        console2.log("");
+        revert PublicKeyOnPublicChain(role, who, block.chainid);
+    }
+
+    /// @dev Anvil 預設助記詞（test test … junk）的前十個帳戶。
+    function _isAnvilAccount(address a) internal pure returns (bool) {
+        return a == 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 || a == 0x70997970C51812dc3A010C7d01b50e0d17dc79C8
+            || a == 0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC || a == 0x90F79bf6EB2c4f870365E785982E1f101E93b906
+            || a == 0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65 || a == 0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc
+            || a == 0x976EA74026E726554dB657fA54763abd0C3a0aa9 || a == 0x14dC79964da2C08b23698B3D3cc7Ca32193d9955
+            || a == 0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f || a == 0xa0Ee7A142d267C1f36714E4a8F75612F20a79720;
+    }
+
+    /// @dev 只有這兩個 chainId 算「這台機器自己的鏈」。其餘一律當公開鏈處理——
+    ///      判斷寫成白名單而不是黑名單：漏掉一條公開鏈的代價是金鑰外洩，
+    ///      漏掉一條本機鏈的代價只是要多設一個環境變數。
+    function _isLocalDevChain() internal view returns (bool) {
+        return block.chainid == 31337 || block.chainid == 1337;
     }
 
     /// @dev 部署者沒錢時立刻擋下來，而不是讓 forge 先跑完整個模擬、印完所有地址，
@@ -250,7 +307,7 @@ contract Deploy is Script {
     ///      這個不對稱是刻意的：往安全的方向動門檻低，往開鎖的方向動門檻高。
     function _deployAccountFactory() internal {
         vm.startBroadcast(cfg.pk);
-        accountFactory = new PasskeyAccountFactory(address(nationalSafe), cfg.operator);
+        accountFactory = new PasskeyAccountFactory(address(nationalSafe), cfg.operator, cfg.recoveryDelay);
         vm.stopBroadcast();
     }
 

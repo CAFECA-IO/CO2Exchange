@@ -131,7 +131,8 @@ function classify(e: unknown): { code: ErrorCode; message?: string; details?: un
     // 為什麼會發生：Anvil 重開後重新部署會沿用同一組地址（同部署者、同 nonce 順序），
     // 但換一支部署腳本（Deploy ↔ DeployV4）順序就變了，於是同一個地址上換成了
     // 另一個合約。地址「看起來對」，呼叫卻 revert，訊息裡完全看不出原因。
-    const which = rv.empty ? deployedAs(rv.contractAddress) : undefined;
+    // 只有**唯讀**呼叫空手 revert 才敢斷言部署檔對不上——理由見 revert.ts 的 isRead。
+    const which = rv.empty && rv.isRead ? deployedAs(rv.contractAddress) : undefined;
     if (which) {
       return {
         code: "DEPLOYMENT_MISMATCH",
