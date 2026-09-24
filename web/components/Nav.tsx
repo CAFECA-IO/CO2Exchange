@@ -1,5 +1,5 @@
 "use client";
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { useAccount } from "./AccountProvider";
@@ -19,6 +19,30 @@ const base = [
   ["/agreements", "契約"],
   ["/account", "裝置與安全"],
 ] as const;
+
+/// 點下去到新頁畫出來之間，導覽列上那個連結旁邊亮一個點。
+///
+/// 為什麼需要：App Router 在載入下一頁時舊畫面會留在原地，於是「按了沒反應」與
+/// 「正在載入」長得一模一樣，而使用者只會再按一次。
+///
+/// 為什麼不是用 app/loading.tsx 的骨架：**那會把伺服器端的轉址變成串流的 200**。
+/// /agreements?id=… 用 `permanentRedirect` 發 308，就是為了讓搜尋引擎與書籤換到新網址；
+/// 一旦路由上有 loading 邊界，Next 會先把骨架串出去（200），轉址退化成前端跳轉，
+/// 那個 308 就沒了。實測驗證過。而且這幾頁的等待其實發生在**掛載之後**的
+/// 資料請求，loading 邊界本來也蓋不到——代價真實，好處幾乎沒有。
+///
+/// `useLinkStatus` 只能在 <Link> 的子樹裡用，所以拆成一個小元件。
+function Pending() {
+  const { pending } = useLinkStatus();
+  if (!pending) return null;
+  return (
+    <span
+      className="ml-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-tide motion-safe:animate-pulse"
+      role="status"
+      aria-label="載入中"
+    />
+  );
+}
 
 export function Nav() {
   const path = usePathname();
@@ -53,11 +77,12 @@ export function Nav() {
               href={href}
               className={
                 path === href
-                  ? "border-b-2 border-tide pb-0.5 font-medium text-tide"
-                  : "pb-0.5 text-ink-300 transition hover:text-ink-50"
+                  ? "flex items-center border-b-2 border-tide pb-0.5 font-medium text-tide"
+                  : "flex items-center pb-0.5 text-ink-300 transition hover:text-ink-50"
               }
             >
               {label}
+              <Pending />
             </Link>
           ))}
         </nav>

@@ -107,7 +107,10 @@ const browser = await launch();
   ok(await loginLink.count() === 1, "手機版導覽列有「登入」");
   await loginLink.click();
   await page.waitForURL("**/#login");
-  ok(await page.locator("#login").isVisible(), "按下去會落在首頁的登入區");
+  // 等它出現，不要在導覽的那一瞬間就斷言。頁面切換時會先畫 app/loading.tsx 的骨架，
+  // 這時候目標元素還沒掛上——`isVisible()` 不會等，於是測到的是骨架那一幀。
+  await page.locator("#login").waitFor({ state: "visible", timeout: 20_000 });
+  ok(true, "按下去會落在首頁的登入區");
   await ctx.close();
 }
 

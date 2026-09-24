@@ -17,8 +17,8 @@ import { NO_LOGIN_BODY, NO_LOGIN_TITLE, hasLogin } from "@/lib/login";
 ///   · 這台裝置  → 有沒有一把在錢包裡的 passkey。沒有就只能看，不能動。
 export function AccountGate() {
   const {
-    userId, deviceCredential, config, busy, unbound, wallet, thisDeviceActive,
-    createAccount, useExistingPasskey, requestThisDevice,
+    userId, deviceCredential, config, busy, unbound, wallet, walletError, thisDeviceActive,
+    createAccount, useExistingPasskey, requestThisDevice, refreshWallet, refreshConfig,
   } = useAccount();
   const [err, setErr] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
@@ -51,6 +51,32 @@ export function AccountGate() {
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
           <Link href="/"><Button>回首頁登入</Button></Link>
+        </div>
+      </Card>
+    );
+  }
+
+  // 問不到錢包狀態。**這個分支以前不存在**，於是任何一次失敗都變成一個永遠轉不完的
+  // 「讀取錢包狀態中…」——沒有原因、沒有重試、沒有出口，只能重新整理（如果使用者猜得到）。
+  // 伺服器其實早就把人話訊息寫好了（節點連不上、部署檔對不上、資料過期），只是被吞掉。
+  if (walletError) {
+    return (
+      <Card title="讀不到你的錢包狀態">
+        <div className="space-y-3 text-sm leading-7 text-ink-200">
+          <p>
+            這不代表你的錢包出事了——它在鏈上，資產也在。是<b>這次查詢</b>沒有成功。
+          </p>
+          <Notice kind="error">{walletError.message}</Notice>
+          <p className="text-ink-300">
+            已經自動重試過兩次。按下面重試，或稍後再回來；如果一直這樣，多半是節點或部署設定的問題，
+            上面那句話會指出是哪一種。
+          </p>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button data-testid="wallet-retry" onClick={() => { setErr(null); refreshWallet(); refreshConfig(); }}>
+            重試
+          </Button>
+          <Link href="/about"><Button variant="secondary">先看看碳權是什麼</Button></Link>
         </div>
       </Card>
     );

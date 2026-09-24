@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, u
 import { SessionProvider, useSession } from "next-auth/react";
 import type { Deployment } from "@/lib/deployment";
 import { useReload } from "@/lib/client/useReload";
+import { fetchJson, type FetchError } from "@/lib/client/fetchJson";
 import {
   clearCredential, credentialServerSnapshot, credentialSnapshot, discoverPasskey, hasCode,
   registerPasskey, saveCredential, signAndRelay, signSelfIntent, subscribeCredential,
@@ -52,7 +53,13 @@ type Ctx = {
   me: Me;
   /// 這個登入帳號的錢包。null ＝ 還沒問到（不要在這時候斷言任何一邊）。
   wallet: Wallet | null;
+  /// 問不到錢包狀態的原因。**這個欄位存在的理由**：以前失敗與「還在問」都是 null，
+  /// 畫面只能一直顯示「讀取中」，於是一次暫時性的失敗＝永久卡住。
+  /// 有了它，畫面能說出發生什麼事，使用者也才有東西可以按。
+  walletError: FetchError | null;
   refreshWallet: () => void;
+  /// 設定讀不到時也要能重試（同一個 bug 的另一半）。
+  refreshConfig: () => void;
   /// 這台裝置的 passkey 還在錢包的有效金鑰裡嗎。被別台撤掉、或被復原流程換掉時會是 false。
   thisDeviceActive: boolean;
   /// 身分只有這一份。**任何頁面都不要自己再 fetch 一次 `/api/kyc`**——
@@ -106,29 +113,59 @@ function Inner({ children }: { children: React.ReactNode }) {
   // 錢包也連同「這是誰的」一起存，同一個做法：換帳號時不必在 effect 裡先同步清空
   //（那正是 set-state-in-effect 規則要擋的東西），對不上就當作還沒問到。
   const [walletFor, setWalletFor] = useState<{ userId: string; wallet: Wallet } | null>(null);
+  // 失敗也要連同「這是誰的、第幾次嘗試」一起記，理由跟 walletFor 一樣：
+  // 換帳號或重試時不必在 effect 裡先同步清空。
+  const [walletFail, setWalletFail] = useState<{ userId: string; key: number; error: FetchError } | null>(null);
 
   // 憑證的真實來源是 localStorage，不是 React state：訂閱它，不要複製一份再想辦法同步。
   const stored = useSyncExternalStore(subscribeCredential, credentialSnapshot, credentialServerSnapshot);
   // 憑證綁在登入帳號上。換了帳號，這台裝置上別人的憑證不算數。
   const deviceCredential = stored && stored.userId === userId ? stored : null;
 
-  useEffect(() => { fetch("/api/config").then((r) => r.json()).then(setConfig).catch(() => setConfig(null)); }, []);
-  useEffect(() => { fetch("/api/me").then((r) => r.json()).then(setMe).catch(() => {}); }, [userId]);
+  // config 也會遇到同一件事：它一直是 null 的話，內頁的最後一道判斷
+  //（`!config` → 顯示門檻畫面）永遠成立，畫面卡在「讀取鏈上設定中…」。
+  // 所以一樣要重試。設定檔很小又不碰鏈，多試兩次幾乎一定會成功。
+  const [configKey, refreshConfig] = useReload();
+  useEffect(() => {
+    const ctl = new AbortController();
+    fetchJson<Config>("/api/config", { signal: ctl.signal })
+      .then((c) => { if (c) setConfig(c); })
+      .catch((e) => { if (e?.name !== "AbortError") console.warn("[config]", e); });
+    return () => ctl.abort();
+  }, [configKey]);
+  useEffect(() => {
+    const ctl = new AbortController();
+    fetchJson<Me>("/api/me", { signal: ctl.signal })
+      // `me` 的型別是非 null，各頁直接讀 `me.isVerifier`。多這一層是因為
+      // 一個不該進來的 null 會讓整頁白掉，而白掉比看到舊值難查得多。
+      .then((m) => { if (m) setMe(m); })
+      .catch((e) => { if (e?.name !== "AbortError") console.warn("[me]", e); });
+    return () => ctl.abort();
+  }, [userId]);
 
   const [walletKey, refreshWallet] = useReload();
   useEffect(() => {
     // 沒登入就什麼都不抓。也不需要清空既有狀態：walletFor 連同「這是誰的」一起存，
     // 對不上就當作還沒問到——在 effect 裡同步 setState 正是 React 要擋的東西。
     if (!userId) return;
-    let ignore = false;
-    fetch("/api/account")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((w: Wallet | null) => { if (!ignore && w) setWalletFor({ userId, wallet: w }); })
-      .catch(() => {});
-    return () => { ignore = true; };
+    const ctl = new AbortController();
+    fetchJson<Wallet>("/api/account", { signal: ctl.signal })
+      .then((w) => setWalletFor({ userId, wallet: w }))
+      .catch((e: FetchError) => {
+        if (e?.name === "AbortError") return;
+        // **重試都用完了才會走到這裡。** 記下來讓畫面說得出話——
+        // 這一行就是「卡住非常久」與「告訴你發生什麼事」的差別。
+        console.warn("[wallet]", e);
+        setWalletFail({ userId, key: walletKey, error: e });
+      });
+    return () => ctl.abort();
   }, [userId, walletKey]);
 
   const wallet = walletFor?.userId === userId ? walletFor.wallet : null;
+  // 失敗只在「還沒拿到成功結果，而且這一輪就是失敗的那一輪」時才算數：
+  // 重試成功之後舊的失敗不該繼續顯示，按下重試之後也該立刻回到載入中。
+  const walletError =
+    !wallet && walletFail?.userId === userId && walletFail.key === walletKey ? walletFail.error : null;
 
   const thisDeviceActive = !!(
     deviceCredential?.keyId &&
@@ -313,13 +350,13 @@ function Inner({ children }: { children: React.ReactNode }) {
 
   const value = useMemo(
     () => ({
-      config, credential, deviceCredential, userId, me, wallet, refreshWallet, thisDeviceActive,
+      config, credential, deviceCredential, userId, me, wallet, walletError, refreshWallet, refreshConfig, thisDeviceActive,
       identity, identityAt, tier, refreshTier, busy, unbound,
       createAccount, useExistingPasskey, requestThisDevice, approveDevice, rejectDevice,
       removeDevice, freeze, unfreeze, cancelRecovery, relay, forget,
     }),
     [
-      config, credential, deviceCredential, userId, me, wallet, refreshWallet, thisDeviceActive,
+      config, credential, deviceCredential, userId, me, wallet, walletError, refreshWallet, refreshConfig, thisDeviceActive,
       identity, identityAt, tier, refreshTier, busy, unbound,
       createAccount, useExistingPasskey, requestThisDevice, approveDevice, rejectDevice,
       removeDevice, freeze, unfreeze, cancelRecovery, relay, forget,
