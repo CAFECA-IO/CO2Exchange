@@ -105,8 +105,9 @@ else
   ok "餘額 ${BAL_ETH}（整套部署約需數千萬 gas，含 Safe 基礎設施）"
 fi
 echo
-echo "  注意：前端的 RELAYER_PK / CARBON_VERIFIER_PK / DOCUMENT_SIGNER_PK 也要在這條鏈上有餘額，"
-echo "  它們要替使用者代送交易（Phase 0 的 gas 由平台付）。"
+echo "  注意：RELAYER_PK 與 DOCUMENT_SIGNER_PK 也要在這條鏈上有餘額——它們會送交易。"
+echo "  IDENTITY_VERIFIER_PK 與 CARBON_VERIFIER_PK 只簽 attestation、由 relayer 送出，不需要餘額。"
+echo "  這幾把金鑰與撥款額，bootstrap.sh 會一次處理：bash script/bootstrap.sh"
 echo
 
 # --- 6. 公開鏈上不准用公開金鑰 -------------------------------------------

@@ -203,17 +203,56 @@ forge test
 ```bash
 bash setup.sh                                          # 只有第一次
 export RPC_URL=http://211.22.118.149:8545
-./script/preflight.sh "$RPC_URL"                       # 這條鏈跑不跑得動這套合約
-export DEPLOYER_PK=0x…                                 # 一把在這條鏈上有 BOLT 的私鑰
 export SETTLEMENT_TOKEN=0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3   # CAFECA 的 TWDC
-bash script/demo-box.sh deploy                         # 部署（一次就好）
-cd web && cp .env.example .env.local                   # 照下面那節填 RPC_URL / SITE_ORIGIN / 服務金鑰
-npm install && npm run build && npm start
+
+./script/preflight.sh "$RPC_URL"                       # 這條鏈跑不跑得動這套合約
+bash script/bootstrap.sh                               # 建金鑰 → 等撥款 → 驗餘額 → 部署 → 寫設定
+
+cd web && npm install && npm run build && npm start
 ```
+
+`bootstrap.sh` 是這條路的主線，它把四件本來要自己記得的事串起來——見下一節。
 
 完整步驟、每一個環境變數為什麼要設、以及上去之後會撞到的幾件事，
 見 [六 › 部署到 Boltchain](#部署到-boltchainchainid-8018)。那一節才是這條路的正本，
 這裡只是最短路徑。
+
+#### `bootstrap.sh`：金鑰、撥款、部署、設定檔
+
+分開跑也可以：`keys` / `fund` / `deploy` / `status`。
+
+**一、建金鑰。** 五把金鑰用 `cast wallet new` **在你的機器上**產生，直接寫進
+`web/.env.local`（權限 600，已在 `.gitignore`），順便產生 `AUTH_SECRET`。
+腳本**只印地址，不印私鑰**——私鑰印到終端機就進了 scrollback，進排程就進了 log。
+已經有值的金鑰一律保留不覆寫：覆寫一把還在用的 relayer 金鑰，等於把鏈上那些角色綁定全部丟掉。
+
+**二、要多少。** 不是猜的，是 `gas 預算 × 這條鏈現在的 gasPrice × 安全倍數`，
+三個輸入都印出來（`DEPLOY_GAS` / `SERVICE_GAS` / `SAFETY` 可調）。
+
+| 金鑰 | 做什麼 | 要餘額嗎 |
+|---|---|---|
+| `DEPLOYER_PK` | 部署整套合約（含 Safe 基礎設施） | 要，最多 |
+| `RELAYER_PK` | 代送交易：KYC 註冊、核發、`retireFor`、承諾上鏈 | 要 |
+| `DOCUMENT_SIGNER_PK` | 憑證雜湊回寫、費率設定 | 要 |
+| `IDENTITY_VERIFIER_PK` | **只簽** EIP-712 身分 attestation，由 relayer 送出 | **不要** |
+| `CARBON_VERIFIER_PK` | **只簽**核發 attestation，由 relayer 送出 | **不要** |
+
+> 後兩把不需要餘額——這一點 README 與 `preflight.sh` 以前都寫錯了（說四把都要）。
+> 撥款給它們不會壞掉，但那是白放的錢，而且會讓人以為它們會動鏈。
+
+**三、驗了才部署。** 餘額不夠就停在這裡並印出差多少，不會部署到一半沒錢。
+夠了才跑 `forge script`；沒有 EIP-1153 的鏈自動改用不含 v4 的 `Deploy.s.sol`。
+
+**四、寫回設定檔並印出地址。** `RPC_URL` / `CHAIN_ID` / `SETTLEMENT_TOKEN` 寫進
+`web/.env.local`，合約地址從 `deployments/<chainId>.json` 列出來。
+
+它還順手修掉一個一定會踩的坑：`COMMITTER` 預設等於 `OPERATOR`（也就是 deployer），
+但送出承諾的腳本用的是 `COMMITTER_PK ?? RELAYER_PK`。兩邊對不上，第一次
+`npm run bank:commit` 必定 AccessControl revert，而那個錯誤看不出是這裡設錯。
+`bootstrap.sh` 預設把 `COMMITTER` 指到 relayer 的地址。
+
+部署完還有兩件事要自己做，腳本會提醒：`SITE_ORIGIN` 要與瀏覽器網址列逐字相同；
+登入一次後把 `/account` 上的地址填進 `ADMIN_ADDRESSES` 再重啟。
 
 ### B. 本機開發鏈（anvil）：一台全新的機器
 
