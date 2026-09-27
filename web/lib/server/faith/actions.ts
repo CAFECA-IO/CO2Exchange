@@ -34,11 +34,11 @@ export type ActionKind =
   | "cancel_bid"
   | "sell_batch"
   | "retire"
-  | "freeze_wallet";
+  | "manage_identity";
 
 /// 白名單本身。**清單以外的名字一律不重試**——見 /api/faith 的說明。
 export const ACTION_KINDS = [
-  "navigate", "claim_faucet", "buy_listing", "place_bid", "cancel_bid", "sell_batch", "retire", "freeze_wallet",
+  "navigate", "claim_faucet", "buy_listing", "place_bid", "cancel_bid", "sell_batch", "retire", "manage_identity",
 ] as const satisfies readonly ActionKind[];
 
 export const isActionKind = (k: string): k is ActionKind =>
@@ -253,17 +253,20 @@ export async function buildAction(kind: ActionKind, p: Record<string, unknown>, 
       };
     }
 
-    case "freeze_wallet": {
+    case "manage_identity": {
       if (!me) throw new ApiError("UNAUTHENTICATED", "要先登入");
+      // 掛失、加／撤裝置、恢復——全部在 CAFECA 錢包裡做，本站只能把人帶過去。
+      //
+      // 這不是功能缺漏，是刻意的邊界：本站是一個交易所。一個能凍結任何人身分的
+      // 交易所，就是一個能凍結任何人身分的交易所，不管它承諾不會這麼做。
       return {
-        kind, title: "凍結我的錢包",
-        rows: [{ label: "錢包", value: me }, { label: "效果", value: "所有交易與註銷立刻被擋下" }],
-        warnings: [
-          "凍結期間你仍然可以管理 passkey 裝置，並用現存的 passkey 解凍。",
-          "解凍要一把還在錢包裡的 passkey——一把都不剩的話得走復原程序（72 小時）。",
+        kind, title: "到 CAFECA 管理我的身分",
+        rows: [
+          { label: "帳戶", value: me },
+          { label: "可以做的", value: "掛失、加入或撤銷裝置、發動或否決恢復" },
         ],
-        // 凍結由平台 relayer 代送，不需要使用者簽章，所以沒有 calls。
-        // 前端看到 kind=freeze_wallet 就打 /api/account/freeze。
+        warnings: ["這些都在 CAFECA 錢包裡操作。本站沒有能力替你執行，也不該有。"],
+        href: "/account",
       };
     }
   }
@@ -280,9 +283,9 @@ export const ACTION_CATALOG = `
 - cancel_bid {bidId}                  取消自己的買單，退回鎖住的錢。
 - sell_batch {batchId, tonnes, pricePerTonne}  上架自己持有的批次。
 - retire {batchId, tonnes, purpose, beneficiary, memo?}  註銷。purpose 是 0–3 的整數。**不可逆**。
-- freeze_wallet {}                    掛失：凍結自己的錢包。
+- manage_identity {}                  帶使用者去管理自己的 CAFECA 身分（掛失、裝置、恢復）。
 
 pricePerTonne 的單位是 mTWD／公噸（給數字即可，例如 850）。tonnes 是公噸，可以有小數。
-沒有「轉帳給某個地址」這種動作，也沒有金鑰管理（加／刪 passkey、解凍、復原）——
-那些一律請使用者自己到「裝置與安全」操作。
+沒有「轉帳給某個地址」這種動作。金鑰管理（加／刪裝置、掛失、恢復）也不在這裡——
+那些屬於使用者的 CAFECA 身分，本站碰不到，只能用 manage_identity 把人帶過去。
 `.trim();

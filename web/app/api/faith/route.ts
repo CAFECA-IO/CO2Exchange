@@ -38,7 +38,7 @@ const PROPOSE: FaithTool = {
   name: "propose_action",
   description:
     "提出一個要使用者確認的動作。你提出之後不會立刻執行——系統會重新計算金額與對手，" +
-    "畫成確認卡，使用者按下確認並通過 passkey 才會送出。參數不齊就先問，不要猜。",
+    "畫成確認卡，使用者按下確認、再在 CAFECA 錢包核對簽字才會送出。參數不齊就先問，不要猜。",
   parameters: {
     type: "object",
     properties: {

@@ -54,7 +54,6 @@ export const ERRORS = {
   // ── 找不到 ───────────────────────────────────────────────────
   NOT_FOUND: { status: 404, message: "找不到這個資源" },
   AGREEMENT_NOT_FOUND: { status: 404, message: "找不到這份契約" },
-  CREDENTIAL_NOT_FOUND: { status: 404, message: "這把 passkey 沒有對應的錢包紀錄" },
   CERTIFICATE_NOT_FOUND: { status: 404, message: "找不到這張憑證" },
   DOCUMENT_NOT_READY: { status: 404, message: "文件尚未產生" },
   PROJECT_NOT_FOUND: { status: 404, message: "找不到這個專案" },

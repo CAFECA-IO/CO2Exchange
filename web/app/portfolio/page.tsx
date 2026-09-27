@@ -34,32 +34,32 @@ type Cert = {
 };
 
 export default function PortfolioPage() {
-  const { credential, userId } = useAccount();
+  const { wallet, userId } = useAccount();
   const [p, setP] = useState<Portfolio | null>(null);
   const [certs, setCerts] = useState<Cert[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [reloadKey] = useReload();
 
   useEffect(() => {
-    if (!credential) return;
+    if (!wallet) return;
     let ignore = false;
     (async () => {
       // 持倉是主角，讀不到要說；憑證是附帶資訊，讀不到就不顯示，不要因此讓整頁變成錯誤。
       const [p, c] = await Promise.all([
-        fetchJson<Portfolio>(`/api/portfolio?account=${credential.address}`).then(
+        fetchJson<Portfolio>(`/api/portfolio?account=${wallet.address}`).then(
           (v) => ({ v, e: null as string | null }),
           (e: Error) => ({ v: null, e: e.message }),
         ),
-        fetchJson<{ certificates: Cert[] }>(`/api/certificates?account=${credential.address}`).catch(() => null),
+        fetchJson<{ certificates: Cert[] }>(`/api/certificates?account=${wallet.address}`).catch(() => null),
       ]);
       if (ignore) return;
       if (p.v) { setP(p.v); setErr(null); } else setErr(p.e ?? "讀取失敗");
       if (c) setCerts(c.certificates ?? []);
     })();
     return () => { ignore = true; };
-  }, [credential, reloadKey]);
+  }, [wallet, reloadKey]);
 
-  if (!userId || !credential) return <AccountGate />;
+  if (!userId || !wallet) return <AccountGate />;
 
   const totalPnl = p ? p.realisedPnl + (p.unrealisedPnl ?? 0) : 0;
   const pnlPct = p && p.costOfHolding > 0 && p.unrealisedPnl != null ? (p.unrealisedPnl / p.costOfHolding) * 100 : null;

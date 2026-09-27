@@ -9,7 +9,7 @@ import { AgreementCheck, useAgreementGate } from "@/components/AgreementGate";
 import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/components/ui";
 import { bidWriteAbi, erc1155ApprovalAbi, erc20Abi, listingAbi, listingWriteAbi, poolAbi, routerAbi } from "@/lib/abis";
 import { flagOf } from "@/lib/deployment";
-import { type Call } from "@/lib/client/passkey";
+import { type Call } from "@/lib/client/cafeca";
 import { fetchJson, postJson } from "@/lib/client/fetchJson";
 
 /// 交易頁：買進與賣出同一頁，各自再分限價與市價。
@@ -64,7 +64,7 @@ function CountryTag({ code, scheme, className = "" }: { code: string; scheme?: s
 }
 
 export default function TradePage() {
-  const { credential, config, userId, tier, relay: send } = useAccount();
+  const { wallet, channelOpen, config, userId, tier, relay: send } = useAccount();
   const [m, setM] = useState<Market | null>(null);
   // 訊息連同「它講的是哪一個地址」一起存。
   //
@@ -72,7 +72,7 @@ export default function TradePage() {
   // 不綁在一起的話，重綁完成、其他東西都好了，使用者還盯著一個已經不成立的紅色錯誤。
   // 用 effect 去清會變成「在 effect 裡同步 setState」，這裡直接讓它對不上就不顯示。
   const [rawMsg, setRawMsg] = useState<{ kind: "ok" | "error"; text: string; addr?: string } | null>(null);
-  const addr = credential?.address;
+  const addr = wallet?.address;
   const setMsg = (m: { kind: "ok" | "error"; text: string } | null) => setRawMsg(m && { ...m, addr });
   const msg = rawMsg && rawMsg.addr === addr ? rawMsg : null;
   const [busy, setBusy] = useState<string | null>(null);
@@ -106,22 +106,22 @@ export default function TradePage() {
   const [confirm, setConfirm] = useState<null | "buy" | "sell" | "mbuy" | "msell">(null);
 
   const [reloadKey, reload] = useReload();
-  const buyGate = useAgreementGate(credential?.address, ["platform-terms", "trade-agreement"]);
-  const sellGate = useAgreementGate(credential?.address, ["platform-terms", "service-fee", "trade-agreement"]);
+  const buyGate = useAgreementGate(wallet?.address, ["platform-terms", "trade-agreement"]);
+  const sellGate = useAgreementGate(wallet?.address, ["platform-terms", "service-fee", "trade-agreement"]);
 
   useEffect(() => {
     let ignore = false;
     (async () => {
-      const j = await fetchJson<Market>(`/api/market${credential ? `?account=${credential.address}` : ""}`)
+      const j = await fetchJson<Market>(`/api/market${wallet ? `?account=${wallet.address}` : ""}`)
         .catch(() => null);
       if (!ignore && j) setM(j);
     })();
     return () => { ignore = true; };
-  }, [credential, reloadKey]);
+  }, [wallet, reloadKey]);
 
   // 市價報價：使用者打字時延遲一下再問，不要每按一鍵就打一次鏈。
-  const quoteKey = side === "buy" && mode === "market" && credential && Number(marketTonnes) > 0
-    ? `${credential.address}:${Math.round(Number(marketTonnes) * 1000)}` : "";
+  const quoteKey = side === "buy" && mode === "market" && wallet && Number(marketTonnes) > 0
+    ? `${wallet.address}:${Math.round(Number(marketTonnes) * 1000)}` : "";
   useEffect(() => {
     if (!quoteKey) return;
     const [address, kg] = quoteKey.split(":");
@@ -136,15 +136,19 @@ export default function TradePage() {
   }, [quoteKey]);
   const quote: Quote | null = quoted && quoted.key === quoteKey ? quoted.value : null;
 
-  if (!userId || !credential || !config) return <AccountGate />;
+  if (!userId || !wallet || !channelOpen || !config) return <AccountGate />;
   const d = config.deployment;
 
   async function relay(label: string, calls: Call[], after?: () => Promise<unknown>) {
     setBusy(label); setMsg(null); setConfirm(null);
     try {
-      const r = await send(calls);
+      // label 同時是給 CAFECA 錢包顯示的「網站說明」。錢包會在它下面列出自己
+      // 解析出來的實際操作供使用者核對，所以說明必須和實際內容一致——
+      // 寫「購買 1,000 kg」而實際是 approve 無限額度，使用者看到的就是一個在騙他的網站。
+      const r = await send(calls, { title: label, detail: "gas 由平台贊助" });
+      if (!r.success) throw new Error("交易送出了但執行失敗，請稍後查看鏈上結果");
       if (after) await after();
-      setMsg({ kind: "ok", text: `${label}完成 · tx ${r.txHash.slice(0, 10)}… · gas ${Number(r.gasUsed).toLocaleString()}（平台代付）` });
+      setMsg({ kind: "ok", text: `${label}完成 · tx ${r.txHash.slice(0, 10)}…（gas 由平台贊助）` });
       reload();
     } catch (e) {
       console.error("relay failed", e);
@@ -156,7 +160,7 @@ export default function TradePage() {
 
   async function faucet() {
     setBusy("領取"); setMsg(null);
-    try { await postJson("/api/faucet", { account: credential!.address }); reload(); }
+    try { await postJson("/api/faucet", { account: wallet!.address }); reload(); }
     finally { setBusy(null); }
   }
 
@@ -216,7 +220,7 @@ export default function TradePage() {
         BigInt(b.batchId), kg, BigInt(Math.round(Number(f.price) * 1e6)), BigInt(Math.max(0, Math.round(Number(f.minFill) * 1000))),
       ] }) },
     ], () => postJson("/api/listing-meta", {
-      batchId: b.batchId, seller: credential!.address, usageDeadline: f.usageDeadline, amountKg: Number(kg),
+      batchId: b.batchId, seller: wallet!.address, usageDeadline: f.usageDeadline, amountKg: Number(kg),
     }));
   }
 
@@ -279,11 +283,11 @@ export default function TradePage() {
   const allBids = m?.bids ?? [];
   // 「不限核發國」的買單在任何篩選底下都該出現——它確實吃得下這一國的額度。
   const bids = filter === "ALL" ? allBids : allBids.filter((b) => b.country === filter || b.country === "");
-  const myBids = allBids.filter((b) => b.buyer?.toLowerCase() === credential.address.toLowerCase());
+  const myBids = allBids.filter((b) => b.buyer?.toLowerCase() === wallet.address.toLowerCase());
   const maxBidKg = Math.max(1, ...bids.map((b) => b.remainingKg));
   const bestAsk = orders.length ? Number(BigInt(orders[0].pricePerTonne)) / 1e6 : null;
   const bestBid = bids.length ? Number(BigInt(bids[0].pricePerTonne)) / 1e6 : null;
-  const myOrders = allOrders.filter((o) => o.seller?.toLowerCase() === credential.address.toLowerCase());
+  const myOrders = allOrders.filter((o) => o.seller?.toLowerCase() === wallet.address.toLowerCase());
   const maxDepthKg = Math.max(1, ...orders.map((o) => o.remainingKg));
   const buyCost = selected ? (Number(qtyKg || 0) * Number(selected.pricePerTonne)) / 1000 / 1e6 : 0;
   const balance = h ? Number(h.twd) / 1e6 : 0;
@@ -368,7 +372,7 @@ export default function TradePage() {
                 {orders.map((o) => {
                   const depth = Math.min(100, (o.remainingKg / maxDepthKg) * 100);
                   const sel = selected?.orderId === o.orderId;
-                  const mine = o.seller?.toLowerCase() === credential.address.toLowerCase();
+                  const mine = o.seller?.toLowerCase() === wallet.address.toLowerCase();
                   return (
                     <li key={o.orderId}>
                       <button
@@ -410,7 +414,7 @@ export default function TradePage() {
                     <ul className="max-h-[260px] divide-y divide-ink-500 overflow-auto" data-testid="bid-book">
                       {bids.map((b) => {
                         const depth = Math.min(100, (b.remainingKg / maxBidKg) * 100);
-                        const mine = b.buyer?.toLowerCase() === credential.address.toLowerCase();
+                        const mine = b.buyer?.toLowerCase() === wallet.address.toLowerCase();
                         const sel = selectedBid?.bidId === b.bidId;
                         return (
                           <li key={b.bidId}>

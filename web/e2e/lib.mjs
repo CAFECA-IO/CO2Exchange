@@ -77,26 +77,23 @@ export async function login(page, email) {
   throw new Error(`登入失敗（兩次都沒出現「登出」）：${email}`);
 }
 
-export async function createPasskeyAccount(page) {
-  const ready = page.locator('[data-testid="account-ready"]');
-  // 這個 email 的錢包已經存在、而且這個瀏覽器 context 還留著那把 passkey 的話，
-  // 畫面直接就是「帳戶已就緒」，根本沒有「建立」那顆按鈕可以按。
-  // 兩種狀態都要能往下走，否則測到的只是第一次的路徑。
-  const create = page.getByRole("button", { name: /建立鏈上錢包|建立(新|鏈上|另一個)帳戶/ });
-  await Promise.race([
-    ready.waitFor({ timeout: 30_000 }),
-    create.waitFor({ timeout: 30_000 }),
-  ]);
-  if (!(await ready.isVisible().catch(() => false))) await create.click();
-  await ready.waitFor({ timeout: 60_000 });
-  // 從「帳戶已就緒 · 0x…」裡取地址。原本抓的是 `dd.font-mono`，那是旁邊統計面板的
-  // 第一個等寬數字——所以這個函式一直回傳「239,293噸」之類的東西，
-  // 而 flow.mjs 第一行就把它印成「✔ 登入 + 帳戶 239,293噸」。沒人看出來，
-  // 是因為沒有任何一個檢查真的拿它跟地址比對過。
-  return /0x[0-9a-fA-F]{40}/.exec(await ready.innerText())?.[0] ?? "";
+/// ⚠️ **這支已經不成立，會直接丟例外。**
+///
+/// 帳戶不再是本站部署的 `PasskeyAccount`，而是使用者的 CAFECA 身分合約；
+/// 交易也不再由本站的 passkey 簽字，而是透過 CAFECA 的簽章通道。
+/// 一個 Chrome 虛擬 authenticator 模擬得出 WebAuthn，模擬不出那個錢包。
+///
+/// 所以會動用到交易的那幾支 e2e（flow / bids / enterprise / recovery / faith / shots）
+/// 需要一個 CAFECA 錢包的測試替身才能重寫。**在那之前它們不會通過**，
+/// 而這裡選擇明確地失敗並說出原因，而不是讓它們在某個 selector 上逾時——
+/// 一個說不出原因的紅燈，跟沒有測試差不多。
+export async function createPasskeyAccount() {
+  throw new Error(
+    "createPasskeyAccount 已不適用：帳戶改為 CAFECA 身分合約，交易改走簽章通道。" +
+    "這些 e2e 需要 CAFECA 錢包的測試替身才能重寫（見 README「身分：以 CAFECA 登入」）。",
+  );
 }
 
-/// 送出 KYC 申請；tier: "individual" | "corporate"
 export async function applyKyc(page, tier, idNumber, name) {
   await page.goto(`${BASE}/kyc`);
   await page.locator("select").first().selectOption(tier === "corporate" ? "2" : "1");

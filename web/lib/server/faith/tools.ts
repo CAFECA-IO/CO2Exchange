@@ -56,7 +56,7 @@ const PAGES: Record<string, string> = {
   "/registry": "公告欄：所有核發、上架、移轉、註銷的即時紀錄，任何人都看得到。",
   "/custody": "託管揭露：每月 5 日的託管與準備金對帳報告，由查核機構簽署。",
   "/agreements": "契約：平台使用約定書、買賣契約、註銷委任書、代辦費用約定、服務流程說明書、隱私權政策、服務條款。每一份都有獨立網址與內容雜湊。",
-  "/account": "裝置與安全：錢包的 passkey 清單、待核准的新裝置、掛失（凍結／解凍），以及全部裝置遺失時的復原程序說明。",
+  "/account": "帳戶與安全：CAFECA 身分合約地址、實名等級、簽章通道狀態，以及金鑰／裝置／掛失要去 CAFECA 錢包做的說明。",
 };
 
 export const TOOLS: { spec: FaithTool; run: Impl; needsLogin?: boolean }[] = [
@@ -151,19 +151,17 @@ export const TOOLS: { spec: FaithTool; run: Impl; needsLogin?: boolean }[] = [
   {
     spec: {
       name: "my_wallet",
-      description: "目前登入者的鏈上錢包：地址、有哪些 passkey 裝置、是否凍結、有沒有待核准的新裝置或進行中的復原提案。",
+      description: "目前登入者的帳戶：CAFECA 身分合約地址、實名等級、是否正在恢復中。金鑰與裝置屬於 CAFECA 錢包，本站看不到。",
       parameters: { type: "object", properties: {} },
     },
     needsLogin: true,
     run: async (_a, ctx) => {
       const w = await walletOf(ctx.address!);
-      // credentialId 與公鑰不必進模型的上下文：它們對回答問題沒有幫助，
+      // 只給模型回答得上問題的那幾樣。裝置清單本來就拿不到了（在 CAFECA 那邊），
       // 而少送一點使用者的識別資料就是少一點。
       return {
-        address: w.address, frozen: w.frozen, recoveryDelayHours: Math.round(w.recoveryDelay / 3600),
-        devices: w.keys.map((k) => ({ label: k.label, addedAt: k.addedAt })),
-        pendingDevices: w.pendingDevices.map((p) => ({ label: p.label, requestedAt: p.requestedAt })),
-        recovery: w.recovery ? { label: w.recovery.label, executeAfter: w.recovery.executeAfter } : null,
+        address: w.address, onChain: w.exists, kycLevel: w.kycLevel,
+        recoveryPending: w.recoveryPending, manageUrl: w.manageUrl,
       };
     },
   },

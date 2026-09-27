@@ -8,7 +8,7 @@ import { AccountGate } from "@/components/AccountGate";
 import { AgreementCheck, useAgreementGate } from "@/components/AgreementGate";
 import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/components/ui";
 import { erc1155ApprovalAbi, listingWriteAbi, poolWriteAbi, registryWriteAbi } from "@/lib/abis";
-import { type Call } from "@/lib/client/passkey";
+import { type Call } from "@/lib/client/cafeca";
 import { fetchJson, postJson } from "@/lib/client/fetchJson";
 
 type Project = { projectId: number; name: string; methodology: string; location: string; active: boolean };
@@ -17,7 +17,7 @@ type Holding = { batchId: number; kg: number; vintageYear: number; project: stri
 type Order = { orderId: number; seller: string; batchId: number; remainingKg: number; pricePerTonne: string; project: { name: string } };
 
 export default function EnterprisePage() {
-  const { credential, config, userId, tier, relay: send } = useAccount();
+  const { wallet, channelOpen, config, userId, tier, relay: send } = useAccount();
   const [projects, setProjects] = useState<Project[]>([]);
   const [issuances, setIssuances] = useState<Issuance[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
@@ -28,7 +28,7 @@ export default function EnterprisePage() {
   // 不綁在一起的話，重綁完成、其他東西都好了，使用者還盯著一個已經不成立的紅色錯誤。
   // 用 effect 去清會變成「在 effect 裡同步 setState」，這裡直接讓它對不上就不顯示。
   const [rawMsg, setRawMsg] = useState<{ kind: "ok" | "error"; text: string; addr?: string } | null>(null);
-  const addr = credential?.address;
+  const addr = wallet?.address;
   const setMsg = (m: { kind: "ok" | "error"; text: string } | null) => setRawMsg(m && { ...m, addr });
   const msg = rawMsg && rawMsg.addr === addr ? rawMsg : null;
   const [busy, setBusy] = useState<string | null>(null);
@@ -42,10 +42,10 @@ export default function EnterprisePage() {
 
   const [reloadKey, reload] = useReload();
   // 上架前必須簽代辦費用約定書（每噸減免與追繳）與買賣契約。
-  const listGate = useAgreementGate(credential?.address, ["platform-terms", "service-fee", "trade-agreement"]);
+  const listGate = useAgreementGate(wallet?.address, ["platform-terms", "service-fee", "trade-agreement"]);
   useEffect(() => {
-    if (!credential) return;
-    const a = credential.address;
+    if (!wallet) return;
+    const a = wallet.address;
     let ignore = false;
     (async () => {
       const [p, i, m] = await Promise.all([
@@ -62,9 +62,9 @@ export default function EnterprisePage() {
       }
     })();
     return () => { ignore = true; };
-  }, [credential, reloadKey]);
+  }, [wallet, reloadKey]);
 
-  if (!userId || !credential || !config) return <AccountGate />;
+  if (!userId || !wallet || !channelOpen || !config) return <AccountGate />;
   if (tier !== 2) return <Notice>企業功能需要法人身分。請到<Link className="underline" href="/kyc">身分驗證</Link>以工商憑證驗證。</Notice>;
   const d = config.deployment;
 
@@ -72,7 +72,8 @@ export default function EnterprisePage() {
   async function relay(label: string, calls: Call[], after?: () => Promise<unknown>) {
     setBusy(label); setMsg(null);
     try {
-      const r = await send(calls);
+      const r = await send(calls, { title: label, detail: "gas 由平台贊助" });
+      if (!r.success) throw new Error("交易送出了但執行失敗，請稍後查看鏈上結果");
       if (after) await after();
       setMsg({ kind: "ok", text: `${label}完成 · tx ${r.txHash.slice(0, 10)}…` });
       reload();
@@ -91,7 +92,7 @@ export default function EnterprisePage() {
     setBusy("送出核發申請"); setMsg(null);
     try {
       const fd = new FormData();
-      fd.set("projectId", rf.projectId); fd.set("owner", credential!.address);
+      fd.set("projectId", rf.projectId); fd.set("owner", wallet!.address);
       fd.set("monitoringStart", rf.monitoringStart); fd.set("monitoringEnd", rf.monitoringEnd); fd.set("amountTonnes", rf.amountTonnes); fd.set("note", rf.note);
       fd.set("report", report);
       // FormData 不能走 postJson（那會把 content-type 設成 json），但回應一樣是信封。
@@ -109,7 +110,7 @@ export default function EnterprisePage() {
       { target: d.carbonCredit1155, value: 0n, data: encodeFunctionData({ abi: erc1155ApprovalAbi, functionName: "setApprovalForAll", args: [d.listing, true] }) },
       { target: d.listing, value: 0n, data: encodeFunctionData({ abi: listingWriteAbi, functionName: "list", args: [BigInt(h.batchId), kg, BigInt(Math.round(Number(f.price) * 1e6)), BigInt(Math.max(0, Math.round(Number(f.minFill) * 1000)))] }) },
     ], () => postJson("/api/listing-meta", {
-      batchId: h.batchId, seller: credential!.address, usageDeadline: f.usageDeadline, amountKg: Number(kg),
+      batchId: h.batchId, seller: wallet!.address, usageDeadline: f.usageDeadline, amountKg: Number(kg),
     }));
   }
 
@@ -137,7 +138,7 @@ export default function EnterprisePage() {
             <Field label="方法學"><input className={inputCls} value={pf.methodology} onChange={(e) => setPf({ ...pf, methodology: e.target.value })} required /></Field>
             <Field label="地點"><input className={inputCls} value={pf.location} onChange={(e) => setPf({ ...pf, location: e.target.value })} required placeholder="Taoyuan, TW" /></Field>
             <Field label="專案文件 URI（選填）"><input className={inputCls} value={pf.metadataURI} onChange={(e) => setPf({ ...pf, metadataURI: e.target.value })} placeholder="ipfs://… 或 https://…" /></Field>
-            <Button type="submit" disabled={!!busy}>以 passkey 簽章登錄</Button>
+            <Button type="submit" disabled={!!busy}>在 CAFECA 簽章登錄</Button>
           </form>
         </Card>
 

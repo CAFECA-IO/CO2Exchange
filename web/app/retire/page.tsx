@@ -8,7 +8,7 @@ import { AgreementCheck, useAgreementGate } from "@/components/AgreementGate";
 import { Button, Card, Field, Notice, fmtKg, inputCls } from "@/components/ui";
 import { creditAbi, poolAbi } from "@/lib/abis";
 import { PURPOSE_LABEL, flagOf, purposeAllowed } from "@/lib/deployment";
-import { type Call } from "@/lib/client/passkey";
+import { type Call } from "@/lib/client/cafeca";
 import { useReload } from "@/lib/client/useReload";
 import { fetchJson } from "@/lib/client/fetchJson";
 
@@ -43,7 +43,7 @@ function announceableFrom(from = new Date()) {
 }
 
 export default function RetirePage() {
-  const { credential, config, userId, tier, relay: send } = useAccount();
+  const { wallet, channelOpen, config, userId, tier, relay: send } = useAccount();
   const [m, setM] = useState<Market | null>(null);
   // 訊息連同「它講的是哪一個地址」一起存。
   //
@@ -51,7 +51,7 @@ export default function RetirePage() {
   // 不綁在一起的話，重綁完成、其他東西都好了，使用者還盯著一個已經不成立的紅色錯誤。
   // 用 effect 去清會變成「在 effect 裡同步 setState」，這裡直接讓它對不上就不顯示。
   const [rawMsg, setRawMsg] = useState<{ kind: "ok" | "error"; text: string; addr?: string } | null>(null);
-  const addr = credential?.address;
+  const addr = wallet?.address;
   const setMsg = (m: { kind: "ok" | "error"; text: string } | null) => setRawMsg(m && { ...m, addr });
   const msg = rawMsg && rawMsg.addr === addr ? rawMsg : null;
   const [busy, setBusy] = useState<string | null>(null);
@@ -64,26 +64,29 @@ export default function RetirePage() {
   const [confirm, setConfirm] = useState(false);
 
   const [reloadKey, reload] = useReload();
-  const retireGate = useAgreementGate(credential?.address, ["retirement-mandate"]);
+  const retireGate = useAgreementGate(wallet?.address, ["retirement-mandate"]);
 
   useEffect(() => {
     let ignore = false;
     (async () => {
-      const j = await fetchJson<Market>(`/api/market${credential ? `?account=${credential.address}` : ""}`)
+      const j = await fetchJson<Market>(`/api/market${wallet ? `?account=${wallet.address}` : ""}`)
         .catch(() => null);
       if (!ignore && j) setM(j);
     })();
     return () => { ignore = true; };
-  }, [credential, reloadKey]);
+  }, [wallet, reloadKey]);
 
-  if (!userId || !credential || !config) return <AccountGate />;
+  if (!userId || !wallet || !channelOpen || !config) return <AccountGate />;
   const d = config.deployment;
 
   async function relay(label: string, calls: Call[]) {
     setBusy(label); setMsg(null); setConfirm(false);
     try {
-      const r = await send(calls);
-      setMsg({ kind: "ok", text: `${label}完成 · tx ${r.txHash.slice(0, 10)}… · gas ${Number(r.gasUsed).toLocaleString()}（平台代付）` });
+      // 註銷是不可逆的，所以說明要把這件事講出來——錢包那一頁是使用者
+      // 最後一次能反悔的地方。
+      const r = await send(calls, { title: label, detail: "註銷不可逆。gas 由平台贊助。" });
+      if (!r.success) throw new Error("交易送出了但執行失敗，請稍後查看鏈上結果");
+      setMsg({ kind: "ok", text: `${label}完成 · tx ${r.txHash.slice(0, 10)}…（gas 由平台贊助）` });
       reload();
     } catch (e) {
       console.error("relay failed", e);
@@ -91,7 +94,7 @@ export default function RetirePage() {
     } finally { setBusy(null); }
   }
 
-  const beneficiaryHash = (): Hex => keccak256(toBytes(beneficiary || credential!.address));
+  const beneficiaryHash = (): Hex => keccak256(toBytes(beneficiary || wallet!.address));
 
   const h = m?.holdings;
   const batches = h?.batches ?? [];
@@ -132,7 +135,7 @@ export default function RetirePage() {
     relay(`註銷批次 #${batchId} ${fmtKg(kg)}`, [{
       target: d.carbonCredit1155, value: 0n,
       data: encodeFunctionData({ abi: creditAbi, functionName: "retire", args: [{
-        holder: credential!.address, batchId: BigInt(batchId), amountKg: BigInt(kg), certificateTo: credential!.address,
+        holder: wallet!.address, batchId: BigInt(batchId), amountKg: BigInt(kg), certificateTo: wallet!.address,
         beneficiaryHash: beneficiaryHash(), beneficiary, purpose, memo,
       }] }),
     }]);

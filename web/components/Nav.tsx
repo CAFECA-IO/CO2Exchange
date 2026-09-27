@@ -47,7 +47,7 @@ function Pending() {
 export function Nav() {
   const path = usePathname();
   const { data: session } = useSession();
-  const { me, tier, config, wallet, thisDeviceActive } = useAccount();
+  const { me, tier, config, wallet, channelOpen } = useAccount();
   const links: readonly (readonly [string, string])[] = [
     ...base,
     ...(tier === 2 ? [["/enterprise", "企業"] as const] : []),
@@ -93,21 +93,21 @@ export function Nav() {
             使用者進到內頁看到「請先建立鏈上帳戶」就會覺得自相矛盾。
           */}
           {/*
-            地址來自**錢包**而不是這台裝置的 passkey：地址由登入帳號決定，
-            所以就算這台裝置還沒配鑰匙，使用者一樣該看得到自己的地址。
-            凍結中另外標一筆——那是使用者最需要一眼看到的狀態。
+            地址就是身分，所以登入之後一定顯示得出來——不像以前還要先部署一個
+            錢包合約。恢復中與通道關閉另外標：那兩個是「看得到但動不了」的原因，
+            而使用者最需要一眼看到的就是它們。
           */}
-          {wallet?.exists ? (
+          {wallet ? (
             <Link href="/account" className="flex items-center gap-1.5" title={wallet.address}>
-              {wallet.frozen && <span className="rounded-[--radius-ctl] bg-warn/15 px-1.5 py-0.5 text-warn">已凍結</span>}
+              {wallet.recoveryPending && <span className="rounded-[--radius-ctl] bg-warn/15 px-1.5 py-0.5 text-warn">恢復中</span>}
               <span className="tnum font-mono text-ink-200 transition hover:text-ink-50">
                 {wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}
               </span>
-              {!thisDeviceActive && <span className="text-warn">· 這台裝置無法簽署</span>}
+              {channelOpen === false && <span className="text-warn">· 未開啟簽章通道</span>}
             </Link>
-          ) : session?.user && wallet ? (
+          ) : session?.user ? (
             <Link href="/#login" className="rounded-[--radius-ctl] border border-warn/50 px-2 py-1 text-warn transition hover:border-warn">
-              尚未建立鏈上錢包
+              讀取帳戶中
             </Link>
           ) : null}
           {session?.user ? (

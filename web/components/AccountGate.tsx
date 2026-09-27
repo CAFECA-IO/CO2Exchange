@@ -1,37 +1,44 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
+import { signIn } from "next-auth/react";
 import { useAccount } from "./AccountProvider";
 import { Button, Card, Notice } from "./ui";
+import { signInWithCafeca } from "@/lib/client/cafeca";
 import { NO_LOGIN_BODY, NO_LOGIN_TITLE, hasLogin } from "@/lib/login";
 
 /// 進入內頁前的門檻畫面。
 ///
-/// 為什麼需要它：「登入」「錢包」「這台裝置能不能簽字」是**三**件事，而舊版的文案
-/// 把它們講成一件。使用者登入後看到「請先建立鏈上帳戶」，會覺得「叫我登入，
-/// 又說我已登入」；換一台手機時更糟——他明明有錢包，畫面卻要他再建一個。
+/// 為什麼需要它：「登入」與「能不能簽字」是**兩**件事，而把它們講成一件會產生
+/// 那種最讓人火大的畫面——已登入，但每個按鈕按下去都失敗，沒有一句話說得出為什麼。
 ///
-/// 現在三件事分開說：
-///   · 登入      → 你是誰。決定錢包地址（一個登入帳號一個錢包）。
-///   · 錢包      → 鏈上那個地址。換幾台裝置都是同一個。
-///   · 這台裝置  → 有沒有一把在錢包裡的 passkey。沒有就只能看，不能動。
+///   · 登入        → 你是誰。你的 CAFECA 身分合約地址就是你在本站的帳戶。
+///   · 簽章通道    → 能不能請你簽字。使用者可以登入而不開通道，
+///                   那樣他看得到自己的持倉，但下不了單也送不了交易。
+///
+/// 改用 CAFECA 之後少掉的那一件是「這台裝置有沒有 passkey」。以前錢包是本站部署的
+/// `PasskeyAccount`，金鑰綁在裝置上，於是換一台手機就要走一整套「申請加入 → 現有裝置
+/// 核准」的流程。現在金鑰生命週期在 CAFECA 錢包裡，本站看不到也不需要看到。
 export function AccountGate() {
-  const {
-    userId, deviceCredential, config, busy, unbound, wallet, walletError, thisDeviceActive,
-    createAccount, useExistingPasskey, requestThisDevice, refreshWallet, refreshConfig,
-  } = useAccount();
+  const { userId, config, busy, wallet, walletError, channelOpen, recheckChannel, refreshWallet, refreshConfig } =
+    useAccount();
   const [err, setErr] = useState<string | null>(null);
-  const [sent, setSent] = useState(false);
 
   async function run(fn: () => Promise<unknown>) {
     setErr(null);
     try { await fn(); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
   }
 
+  const login = () =>
+    run(async () => {
+      const response = await signInWithCafeca();
+      const r = await signIn("cafeca", { response, redirect: false });
+      if (r?.error) throw new Error("登入驗證沒有通過");
+    });
+
   // ① 沒有 session
   if (!userId) {
     // 站台根本沒開登入的時候，「回首頁登入」是一顆送人去空畫面的按鈕。
-    // 說清楚為什麼進不來，並指向不需要登入也看得到的東西。
     if (config && !hasLogin(config.providers)) {
       return (
         <Card title={NO_LOGIN_TITLE}>
@@ -45,30 +52,35 @@ export function AccountGate() {
     }
     return (
       <Card title="請先登入">
-        <p className="text-sm leading-7 text-ink-200">
-          登入決定你的錢包是哪一個——同一個登入帳號永遠對到同一個鏈上地址。
-          登入之後還要在這台裝置放一把 passkey，才能簽字動用它。
-        </p>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Link href="/"><Button>回首頁登入</Button></Link>
+        <div className="space-y-3 text-sm leading-7 text-ink-200">
+          <p>
+            以 CAFECA 登入。你的身分合約地址就是你在這裡的帳戶——換裝置、換 passkey、
+            以實體卡恢復之後都是同一個，因為那是合約地址，不是金鑰的函數。
+          </p>
+          <p className="text-ink-300">
+            登入時會一併徵詢你是否開啟簽章通道。開了才能下單與送交易，
+            但<b>通道不是授權</b>：每一筆都會在 CAFECA 錢包顯示實際內容，由你確認才簽。
+          </p>
         </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button onClick={login} disabled={!!busy}>{busy ?? "以 CAFECA 登入"}</Button>
+          <Link href="/about"><Button variant="secondary">先看看碳權是什麼</Button></Link>
+        </div>
+        {err && <div className="mt-3"><Notice kind="error">{err}</Notice></div>}
       </Card>
     );
   }
 
   // 問不到錢包狀態。**這個分支以前不存在**，於是任何一次失敗都變成一個永遠轉不完的
-  // 「讀取錢包狀態中…」——沒有原因、沒有重試、沒有出口，只能重新整理（如果使用者猜得到）。
-  // 伺服器其實早就把人話訊息寫好了（節點連不上、部署檔對不上、資料過期），只是被吞掉。
+  // 「讀取錢包狀態中…」——沒有原因、沒有重試、沒有出口。
   if (walletError) {
     return (
-      <Card title="讀不到你的錢包狀態">
+      <Card title="讀不到你的帳戶狀態">
         <div className="space-y-3 text-sm leading-7 text-ink-200">
-          <p>
-            這不代表你的錢包出事了——它在鏈上，資產也在。是<b>這次查詢</b>沒有成功。
-          </p>
+          <p>這不代表你的帳戶出事了——它在鏈上，資產也在。是<b>這次查詢</b>沒有成功。</p>
           <Notice kind="error">{walletError.message}</Notice>
           <p className="text-ink-300">
-            已經自動重試過兩次。按下面重試，或稍後再回來；如果一直這樣，多半是節點或部署設定的問題，
+            已經自動重試過兩次。按下面重試，或稍後再回來；如果一直這樣，多半是節點或設定的問題，
             上面那句話會指出是哪一種。
           </p>
         </div>
@@ -82,74 +94,51 @@ export function AccountGate() {
     );
   }
 
-  // 錢包狀態還沒問到：不要在這時候斷言任何一邊。
-  if (!wallet) return <Notice>{busy ?? "讀取錢包狀態中…"}</Notice>;
+  // 還沒問到：不要在這時候斷言任何一邊。
+  if (!wallet || channelOpen === null) return <Notice>{busy ?? "讀取帳戶狀態中…"}</Notice>;
 
-  // ② 有 session，錢包還不存在 → 第一次建立
-  if (!wallet.exists) {
+  // ② 身分正在恢復中：有人正在主張這個帳戶是他的。此時讓任何一方把資產搬走，
+  //    等於讓爭議的結果由手速決定。讀取不受影響。
+  if (wallet.recoveryPending) {
     return (
-      <Card title="建立你的鏈上錢包">
+      <Card title="這個身分正在恢復中">
         <div className="space-y-3 text-sm leading-7 text-ink-200">
           <p>
-            這個登入帳號的錢包地址已經算得出來了：
-            <span className="ml-1 font-mono text-ink-50">{wallet.address.slice(0, 10)}…{wallet.address.slice(-6)}</span>。
-            它由<b>登入帳號</b>決定，所以之後換幾台裝置都是同一個地址。
+            CAFECA 那邊有一個進行中的恢復提案——也就是有人正在主張這個帳戶是他的。
+            在它結束之前，交易與註銷會暫停。你仍然看得到自己的持倉。
           </p>
-          <p className="text-ink-300">
-            按下去會在這台裝置建立一把 passkey（Face ID / Touch ID / 螢幕鎖），
-            並用它部署錢包。金鑰只留在這台裝置的安全元件裡，平台拿不到，也複製不走。
-          </p>
+          <Notice kind="warn">
+            如果這不是你發起的，請立刻到 CAFECA 錢包否決它。恢復一旦完成，帳戶的控制權就換人了。
+          </Notice>
         </div>
-        <div className="mt-4">
-          <Button onClick={() => run(createAccount)} disabled={!!busy}>{busy ?? "建立錢包（passkey）"}</Button>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <a href={wallet.manageUrl} target="_blank" rel="noreferrer"><Button>到 CAFECA 查看</Button></a>
+          <Button variant="secondary" onClick={refreshWallet}>重新整理狀態</Button>
         </div>
-        {err && <div className="mt-3"><Notice kind="error">{err}</Notice></div>}
       </Card>
     );
   }
 
-  // ③ 錢包在鏈上，但這台裝置簽不了字
-  if (!thisDeviceActive) {
-    const pendingHere = deviceCredential && wallet.pendingDevices.some((d) => d.keyId === deviceCredential.keyId);
+  // ③ 登入了，但沒有簽章通道 → 看得到，動不了
+  if (!channelOpen) {
     return (
-      <Card title="這台裝置還不能簽署交易">
+      <Card title="還不能下單或送出交易">
         <div className="space-y-3 text-sm leading-7 text-ink-200">
           <p>
-            你的錢包好端端在鏈上
+            你已經登入
             <span className="ml-1 font-mono text-ink-50">{wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}</span>
-            ，資產一分沒少。缺的只是<b>這台裝置的鑰匙</b>——passkey 存在裝置的安全元件裡，
-            不會跟著帳號跑。
+            ，持倉與紀錄都看得到。缺的是<b>簽章通道</b>——沒有它，我們沒有辦法請你簽委託單，
+            也沒有辦法請你的帳戶送出交易。
           </p>
-          {unbound && (
-            <Notice kind="warn">
-              這台裝置記著的那把 passkey 已經不在錢包的有效金鑰裡了。
-              可能是你從別台裝置把它撤掉了，也可能是合約重新部署過。
-            </Notice>
-          )}
-          {pendingHere || sent ? (
-            <Notice>
-              已經送出加入申請，等待核准。請拿一台<b>已經在錢包裡</b>的裝置，
-              到「裝置與安全」按核准。<br />
-              一台都不剩的話，這條路走不通——要走復原程序（重新驗證身分，等待
-              {Math.round((wallet.recoveryDelay || 259200) / 3600)} 小時）。請與平台聯絡。
-            </Notice>
-          ) : (
-            <ul className="space-y-1.5 border-l-2 border-ink-500 pl-4 text-ink-300">
-              <li><b>這台裝置以前綁過</b>（清掉瀏覽器資料、換個瀏覽器）→ 選「我已有 passkey」，不需要任何人核准。</li>
-              <li><b>這是一台新裝置</b> → 選「申請加入」，然後用一台現有裝置核准。新裝置不能自己把自己加進來，否則登入被盜就等於錢包被盜。</li>
-            </ul>
-          )}
+          <p className="text-ink-300">
+            重新登入一次就會徵詢你是否開啟。<b>通道不是授權</b>：每一筆請求都會在 CAFECA 錢包
+            顯示我們寫的說明，以及錢包自己解析出來的實際操作，由你確認後才簽。
+            你也可以隨時在 CAFECA 的「安全 → 以 CAFECA 登入的網站」把它關掉。
+          </p>
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button onClick={() => run(useExistingPasskey)} disabled={!!busy}>{busy ?? "我已有 passkey"}</Button>
-          <Button
-            variant="secondary"
-            disabled={!!busy || sent}
-            onClick={() => run(async () => { const r = await requestThisDevice(""); setSent(r.pending); })}
-          >
-            申請加入這台裝置
-          </Button>
-          <Link href="/account"><Button variant="secondary">裝置與安全</Button></Link>
+          <Button onClick={login} disabled={!!busy}>{busy ?? "重新登入並開啟通道"}</Button>
+          <Button variant="secondary" onClick={recheckChannel}>我已經開了，重新檢查</Button>
         </div>
         {err && <div className="mt-3"><Notice kind="error">{err}</Notice></div>}
       </Card>

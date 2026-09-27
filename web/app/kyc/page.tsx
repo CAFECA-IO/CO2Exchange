@@ -14,14 +14,14 @@ export default function KycPage() {
   // 同一時間 /trade 說「尚未完成身分驗證」、/enterprise 說「需要法人身分」。
   // 而那顆能同步兩邊的「重新整理」按鈕只在審核中才出現，核准後就不見了，
   // 使用者除了整頁重新載入之外沒有任何辦法。
-  const { credential, userId, identity, identityAt, refreshTier } = useAccount();
+  const { wallet, userId, identity, identityAt, refreshTier } = useAccount();
   const [tier, setTier] = useState<number>(TIER.Individual);
   const [idNumber, setIdNumber] = useState("");
   const [name, setName] = useState("");
   const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  if (!userId || !credential) return <AccountGate />;
+  if (!userId || !wallet) return <AccountGate />;
 
   // 效期在「拿到資料的當下」判定（identityAt），render 期間不呼叫 Date.now()——
   // 那是不純的讀取，同一份資料在不同 render 會得到不同結果。
@@ -31,7 +31,7 @@ export default function KycPage() {
     e.preventDefault();
     setBusy(true); setMsg(null);
     try {
-      const j = await postJson<{ status: string; txHash: string }>("/api/kyc", { account: credential!.address, tier, idNumber, name });
+      const j = await postJson<{ status: string; txHash: string }>("/api/kyc", { account: wallet!.address, tier, idNumber, name });
       setMsg(j.status === "approved"
         ? { kind: "ok", text: `身分已綁定帳戶。交易 ${j.txHash.slice(0, 10)}…` }
         : { kind: "ok", text: "申請已送出，待身分驗證服務審核。" });

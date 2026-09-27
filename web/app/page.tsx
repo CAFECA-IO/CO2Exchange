@@ -15,11 +15,14 @@ import { LogoMark } from "@/components/Logo";
 /// 全部搬到 /about。那些是進場前要讀一次的東西，不是每天回來要看的東西，
 /// 把它們放在首頁，等於讓每天回來看行情的人每次都滑過七千字。
 
-/// 下一步的按鈕會隨著帳戶狀態換：還沒登入就先登入，登入了沒帳戶就建帳戶，
+/// 下一步的按鈕會隨著帳戶狀態換：還沒登入就先登入，登入了但沒開簽章通道就開通道，
 /// 都有了就直接去交易。一個頁面上只出現一個「下一步」，不要讓人自己挑。
+///
+/// 改用 CAFECA 之後少掉了整個「建立錢包」與「把這台裝置的 passkey 裝回來」的分支：
+/// 帳戶就是使用者的身分合約，他一登入就已經有了。
 function NextStep() {
   const { data: session, status } = useSession();
-  const { busy, createAccount, useExistingPasskey, requestThisDevice, config, wallet, thisDeviceActive } = useAccount();
+  const { busy, config, wallet, channelOpen, recheckChannel } = useAccount();
   const [email, setEmail] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const providers = config?.providers ?? [];
@@ -33,11 +36,15 @@ function NextStep() {
     try { await fn(); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
   };
 
-  // 錢包狀態由伺服器回答（地址由登入帳號決定，這台裝置知不知道無關）。
+  const cafecaLogin = () =>
+    run(async () => {
+      const response = await signInWithCafeca();
+      const r = await signIn("cafeca", { response, redirect: false });
+      if (r?.error) throw new Error("登入驗證沒有通過");
+    });
+
   // null = 還沒問到，這時候不要斷言任何一邊。
-  const hasWallet = !!wallet?.exists;
-  const ready = hasWallet && thisDeviceActive;
-  const [sent, setSent] = useState(false);
+  const ready = !!wallet && channelOpen === true;
 
   if (status === "loading") return <div id="login" className="h-10 scroll-mt-24" />;
 
@@ -50,18 +57,7 @@ function NextStep() {
               // 這個 onClick 直接呼叫 signInWithCafeca，中間**不 await 任何東西**：
               // 彈出視窗必須開在使用者手勢的作用範圍內，先 await 一個 fetch
               // 就會被瀏覽器擋下。nonce 是以函式的形式交給 SDK 的，見 lib/client/cafeca.ts。
-              <Button
-                disabled={!!busy}
-                onClick={() =>
-                  run(async () => {
-                    const response = await signInWithCafeca();
-                    const r = await signIn("cafeca", { response, redirect: false });
-                    if (r?.error) throw new Error("登入驗證沒有通過");
-                  })
-                }
-              >
-                以 CAFECA 登入
-              </Button>
+              <Button disabled={!!busy} onClick={cafecaLogin}>以 CAFECA 登入</Button>
             )}
             {providers.includes("dev") && !devOnly && (
               <button onClick={() => setShowDev((v) => !v)} className="text-xs text-ink-300 underline hover:text-ink-50">
@@ -83,28 +79,16 @@ function NextStep() {
             )}
           </>
         ) : !ready ? (
-          // 錢包已經在鏈上、只是這台裝置沒鑰匙的話，主要動作是「把鑰匙裝回來」，
-          // 不是「再建一個錢包」——後者在新模型下根本不存在：一個登入帳號一個錢包。
-          hasWallet ? (
-            <>
-              <Button onClick={() => run(useExistingPasskey)} disabled={!!busy}>{busy ?? "用 passkey 綁定這台裝置"}</Button>
-              <Button
-                variant="secondary"
-                disabled={!!busy || sent}
-                onClick={() => run(async () => { const r = await requestThisDevice(""); setSent(r.pending); })}
-              >
-                申請加入這台裝置
-              </Button>
-              {/* 新裝置不能自己把自己加進來。這句話要在按下去之前說，不是在之後。 */}
-              <span className="w-full text-xs text-ink-300">
-                {sent
-                  ? "已送出申請，請用一台已經在錢包裡的裝置核准。"
-                  : "新裝置要由一台現有裝置核准才能簽字——否則登入被盜就等於錢包被盜。"}
-              </span>
-            </>
-          ) : (
-            <Button onClick={() => run(createAccount)} disabled={!!busy}>{busy ?? "建立鏈上錢包（passkey）"}</Button>
-          )
+          // 登入了但沒開簽章通道：看得到，動不了。這一步要講清楚是缺什麼，
+          // 否則使用者只會看到一堆按下去就失敗的按鈕。
+          <>
+            <Button onClick={cafecaLogin} disabled={!!busy}>{busy ?? "開啟簽章通道"}</Button>
+            <Button variant="secondary" onClick={recheckChannel}>我已經開了，重新檢查</Button>
+            <span className="w-full text-xs text-ink-300">
+              沒有通道就下不了單、也送不出交易。<b>通道不是授權</b>：每一筆都會在 CAFECA
+              錢包顯示實際內容，由你確認才簽，也可以隨時在 CAFECA 關掉。
+            </span>
+          </>
         ) : (
           <>
             <Link href="/trade"><Button>進入交易</Button></Link>
@@ -135,17 +119,18 @@ function NextStep() {
       )}
 
       {session?.user && !ready && (
-        // 「尚未建立鏈上帳戶」對換了裝置的人來說是錯的：錢包好端端在鏈上，
-        // 只是這個瀏覽器沒有那把 passkey。知道了就要照實講。
+        // 「還沒建立帳戶」在新模型下永遠是錯的：帳戶就是使用者的身分合約，
+        // 他一登入就已經有了。缺的是通道，那是另一件事，要照實講。
         <p className="text-xs text-ink-300">
           已登入 {session.user.name ?? session.user.id}。
-          {hasWallet && wallet ? (
+          {wallet ? (
             <>
-              你的錢包是 <span className="font-mono">{wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}</span>
-              ，資產都在，只是<b>這台裝置沒有鑰匙</b>。地址由登入帳號決定，不會因為換裝置而改變。
+              你的帳戶是 <span className="font-mono">{wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}</span>
+              ，持倉都在，只是<b>還沒開啟簽章通道</b>。這個地址是你的 CAFECA 身分合約，
+              換裝置、換 passkey、恢復之後都不會變。
             </>
           ) : (
-            <>錢包地址由登入帳號決定：同一個帳號在任何裝置登入，都是同一個地址。</>
+            <>你的帳戶就是你的 CAFECA 身分合約地址：在任何裝置登入都是同一個。</>
           )}
         </p>
       )}

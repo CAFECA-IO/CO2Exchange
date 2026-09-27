@@ -985,51 +985,58 @@ CAFECA 系統合約的 EIP-712，也拒絕網域名稱是 `CAFECA Sign-In` / `ER
 驗證在公開鏈上一律開啟；本機鏈預設關閉（模擬市場那一百個帳戶不是真的 CAFECA 身分，
 簽不出東西來），`ORDERS_REQUIRE_SIGNATURE=1` 可強制開啟。
 
-**還沒收掉的過渡形狀：** `/trade`、`/retire`、`/enterprise` 目前仍走「使用者以本站 passkey
-自簽鏈上交易」那條路。要讓 CAFECA 帳戶**直接**成為帳本上的地址，這三頁得先改走 Bank
-資產池（未完成事項 2.3）；`sendCalls` 也讓「使用者自己付款上鏈」這條路重新可行，
-兩種做法都要評估。在那之前，CAFECA 決定「你是誰」，本站的 `PasskeyAccount` 仍然負責
-那三頁的「怎麼簽」，兩者以 `accountRef = keccak256("co2x:account:v2:" + CAFECA 地址)` 接起來。
-v1 用的是登入信箱，而信箱可以被登入供應商重新配發給另一個人；v2 的輸入是合約地址，沒有這個問題。
+`/trade`、`/retire`、`/enterprise` 的買賣與註銷走 `sendCalls`：由使用者自己的帳戶
+送出，不經過本站的任何錢包。過渡期的 `accountRef` 推導層已經拆掉了。
 
-### 錢包：一個身分一個錢包，一個錢包多把 passkey（過渡期）
+### 錢包：使用者的 CAFECA 帳戶，本站不再保管任何金鑰
 
-`PasskeyAccount` 的地址是 `CREATE2(salt = accountRef)`，而 `accountRef = keccak256("co2x:account:v2:" + CAFECA 身分合約地址)`。
-**地址不由 passkey 決定**——綁在 passkey 上的話，換一台手機就是換一個錢包，舊錢包裡的碳權不會跟過來，
-而使用者根本不覺得自己做了「開新戶」這件事。所以金鑰在部署**之後**由 factory 呼叫 `initialise()` 補上
-（放進建構子的話 initCode 會變，地址就跟著金鑰跑了）。
+交易由**使用者自己的 CAFECA 帳戶**送出（簽章通道的 `sendCalls`），gas 由平台贊助。
+鏈上的 `msg.sender` 因此是使用者本人，不是我們替他保管的合約錢包——
+對一次移轉（§26）那條論證來說，這個差別是實質的。
 
-一個帳戶可以登錄多把金鑰（`keyId = keccak256(qx, qy)`），任何一把都能簽 `execute`，
-`execute` 因此多收一個 `keyId` 參數——讓合約逐把試會使 gas 隨裝置數線性上升。
+這一版把整個 `PasskeyAccount` 層從前端與 API 拿掉了。跟著消失的有：
 
-四種事故，四條路：
+| 拿掉的 | 為什麼 |
+| --- | --- |
+| `/api/relay`、`/api/relay/prepare` | 交易不再是「本站錢包簽字 → relayer 代送」 |
+| `/api/account` 的 POST、`/pending`、`/freeze` | 加金鑰、核准新裝置、掛失凍結 —— 全部在 CAFECA 錢包裡做 |
+| `lib/client/passkey.ts`、`lib/server/accounts.ts` | 本站不再需要知道哪一把 credentialId 屬於誰 |
+| `lib/server/account-ref.ts` | 沒有推導了。地址就是身分合約地址 |
+| `data/accounts.json` | 連同它那份「哪台裝置屬於哪個人」的個資一起消失 |
 
-| 情形 | 機制 | 誰有權 |
+**這不是功能退步，是邊界劃對了。** 那些操作決定的是「誰控制這個身分」。
+一個交易所如果做得到，那它就做得到——對誰都一樣，不管它怎麼承諾。
+本站現在連凍結使用者帳戶的能力都沒有，這是刻意的。
+
+`/account` 因此從「裝置與安全」縮成三件事：這裡認得的你是誰、你現在能不能交易、
+出事時該去哪裡。最後一項最重要——出事的當下沒有人會回來讀說明書，所以那個連結一直在。
+
+Solidity 那一側 `PasskeyAccount` / `PasskeyAccountFactory` 仍在 repo 與部署腳本裡
+（`test/` 還在測它們），但 Phase 0 的前端已經不走那條路。要不要一併從部署中移除，
+等 Boltchain 的 EVM 版本確認之後再決定——那會影響部署腳本要不要拆。
+
+#### 三個狀態，三句不同的話
+
+「登入」與「能不能簽字」是兩件事。把它們講成一件，就會得到那種最讓人火大的畫面：
+已登入，但每個按鈕按下去都失敗，沒有一句話說得出為什麼。
+
+| 狀態 | 使用者看得到 | 下一步 |
 | --- | --- | --- |
-| 部分裝置遺失 | `removeKey`（經 `executeSelf`） | 任一現存 passkey。即時，不需要平台 |
-| 全部裝置遺失 | `proposeRecovery` → 等 `RECOVERY_DELAY`（72h）→ `finaliseRecovery` | 提案只有 `recoveryAgent`（國家 Safe）能做，且須鏈下重驗身分；期間任一現存金鑰可 `cancelRecovery` |
-| 登入帳號被盜 | 盜用者簽不了字，也加不了金鑰（`addKey` 要現存金鑰簽章）。他能做的只有 `freeze` | — |
-| passkey 被盜 | 從別台 `removeKey`；來不及就 `freeze` | `freeze`：operator / recoveryAgent / self |
+| 沒登入 | 公開頁 | 以 CAFECA 登入 |
+| 登入了，通道沒開 | 自己的持倉與紀錄 | 重新登入以開啟通道 |
+| 恢復中 | 自己的持倉 | 到 CAFECA 否決（不是你發起的話） |
+| 都有了 | 全部 | — |
 
-**凍結與解凍的門檻刻意不對稱。** `freeze` 由平台 relayer 代送（只要通過登入即可），因為需要它的那一刻
-使用者手上多半已經沒有那台裝置了；`unfreeze` 只接受現存 passkey 或治理方。於是只拿到登入權的人
-至多造成阻斷服務，不能把持有人關在門外。凍結中 `execute` 一律擋下，但 `executeSelf` 仍走得通——
-它有 selector 白名單（`addKey` / `removeKey` / `freeze` / `unfreeze` / `cancelRecovery`），
-碰不到任何會動錢的函式，所以凍結不會變成陷阱。
+#### e2e 目前是紅的，而且是刻意的
 
-新裝置**不能自己把自己加進來**：它在後端進「待核准」區（`accounts.json` 的 `pending`），
-等一台現有裝置在 `/account` 按核准（那是一筆 `addKey` 的 `executeSelf`）。
-可以的話，拿到 Google 帳號的人只要登入、建一把自己的 passkey 就成了共同持有人。
+會動用到交易的那幾支（`flow` / `bids` / `enterprise` / `recovery` / `faith` / `shots`）
+用 Chrome 的虛擬 authenticator 模擬 WebAuthn 來簽字。那模擬得出 passkey，
+模擬不出 CAFECA 錢包。`createPasskeyAccount()` 現在會直接丟一個說明為什麼的例外，
+而不是讓測試在某個 selector 上逾時——一個說不出原因的紅燈，跟沒有測試差不多。
 
-治理端的操作：`script/govern.sh build wallet-status|wallet-recover|wallet-cancel|wallet-freeze|wallet-unfreeze <account> …`。
+要重寫它們需要一個 CAFECA 錢包的測試替身（一個假的 `/sdk/cafeca-connect.js`
+加一個會用測試金鑰簽 EIP-712 的假帳戶合約）。**尚未做。**
 
-Phase 0 交易由平台 relayer 代送（`/api/relay`，gas 由平台付），授權來自使用者的 WebAuthn 簽章，relayer 無法竄改內容；
-Phase 1 換成 ERC-4337 EntryPoint + paymaster，帳戶簽章格式與 nonce 語意不變。
-
-角色（管理員 / 查驗機構）以**地址**允許清單判定：`ADMIN_ADDRESSES` / `VERIFIER_ADDRESSES`。
-身分已經是地址，不再有 email。非 production 留空時會退回開發用登入推出來的那兩個地址，
-所以本機與 e2e 零設定就進得去；production 沒設就是**沒有任何管理員**——
-寫死在原始碼裡的管理員地址，在公開鏈上就是一把公開的鑰匙。
 
 ### 費思（站內 AI 助理）
 

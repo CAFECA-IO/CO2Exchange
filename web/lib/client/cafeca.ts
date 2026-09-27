@@ -75,6 +75,7 @@ const STATEMENT = "登入 TideBit-DeFi 碳權交易所";
 ///   · kyc_level —— 決定 KYCRegistry 的 tier，沒有它就只能看不能交易。
 ///   · handle    —— 純顯示用。拒絕了就顯示地址縮寫，不影響任何功能。
 const CLAIMS = ["kyc_level", "handle"];
+const CHANNEL_KEY = "cafeca.channel";
 
 export type CafecaErrorCode =
   | "access_denied" | "closed" | "popup_blocked" | "timeout" | "invalid_nonce"
@@ -100,16 +101,92 @@ export function messageFor(code: string): string {
 /// 所以 nonce 用函式的形式交給 SDK，而不是先 await 再呼叫 signIn——
 /// 先 await 會讓 signIn 離開使用者手勢的作用範圍，於是每一次登入都被擋。
 /// 這個坑很安靜：開發時彈出視窗多半已被允許，一上線才每個人都登不進去。
+/// `channel: true` 同時要求開啟簽章通道。使用者可以只登入、不開通道——
+/// 那樣仍然登得進來，只是下不了單也送不了交易，所以介面要分得開這兩件事：
+/// 「沒登入」與「登入了但沒開通道」需要的下一步不一樣。
 export async function signInWithCafeca(): Promise<string> {
   const c = (await sdk()).create({ wallet: WALLET });
-  const response = await c.signIn({ nonce, statement: STATEMENT, claims: CLAIMS });
+  const response = await c.signIn({ nonce, statement: STATEMENT, claims: CLAIMS, channel: true });
+  // 通道 id 存起來，下次進站不必重新開。存的是 id 不是金鑰——網站端的私鑰由 SDK
+  // 以不可匯出的 CryptoKey 放在 IndexedDB，我們碰不到它，也就洩漏不了它。
+  try {
+    const ch = await c.channel(response);
+    if (ch?.id) localStorage.setItem(CHANNEL_KEY, ch.id);
+    else localStorage.removeItem(CHANNEL_KEY);
+  } catch { /* 沒開通道不影響登入本身 */ }
   return JSON.stringify(response);
 }
 
 /// 整頁導向：行動裝置與擋彈出視窗的環境（App 內建瀏覽器）走這條。
 export async function redirectToCafeca(redirectUri: string): Promise<void> {
   const c = (await sdk()).create({ wallet: WALLET });
-  await c.redirect({ nonce: await nonce(), statement: STATEMENT, claims: CLAIMS, redirectUri });
+  await c.redirect({ nonce: await nonce(), statement: STATEMENT, claims: CLAIMS, channel: true, redirectUri });
+}
+
+/// 這個瀏覽器還留著的通道。沒有、或使用者已經在 CAFECA 關掉它，就回 null。
+export async function currentChannel(): Promise<Channel | null> {
+  let id: string | null = null;
+  try { id = localStorage.getItem(CHANNEL_KEY); } catch { return null; }
+  if (!id) return null;
+  try {
+    const ch = await (await sdk()).create({ wallet: WALLET }).restoreChannel(id);
+    if (!ch) localStorage.removeItem(CHANNEL_KEY);
+    return ch;
+  } catch {
+    return null;
+  }
+}
+
+/// 一筆鏈上呼叫。**站內沿用 `target` 這個欄位名**（各頁本來就這樣組），
+/// 送進通道之前才轉成 CAFECA 的 `to`——轉換只寫在一個地方。
+export type Call = { target: `0x${string}`; value: bigint; data: `0x${string}` };
+
+/// 說明的長度上限由錢包定：title ≤ 60、detail ≤ 500，超過會被拒絕。
+/// 在這裡截斷而不是讓錢包拒絕：一個因為標題多兩個字而失敗的交易，
+/// 錯誤碼會是 `invalid_request`，沒有人查得出原因。
+const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+const desc = (d: Description) => ({
+  title: clip(d.title, 60),
+  detail: d.detail ? clip(d.detail, 500) : undefined,
+});
+
+/// 請使用者簽一筆 EIP-712。
+///
+/// **typedData 必須是伺服器與前端共用的那一份**（`lib/bank/order-typed.ts`）：
+/// 兩邊各組一份是這類協定最常見的壞法，欄位順序差一個 digest 就不一樣，
+/// 而錯誤訊息只會說「簽章無效」。
+export async function signTypedDataViaChannel(typedData: unknown, description: Description): Promise<`0x${string}`> {
+  const ch = await currentChannel();
+  if (!ch) throw new Error("CHANNEL_CLOSED");
+  const { signature } = await ch.signTypedData(typedData, desc(description));
+  return signature;
+}
+
+/// 送一批鏈上呼叫，由**使用者自己的帳戶**執行，gas 由平台贊助。
+///
+/// 這取代了原本「本站 PasskeyAccount 簽字 → relayer 代送」那條路。差別不只是實作：
+/// 現在鏈上的 `msg.sender` 是使用者的 CAFECA 帳戶，不是我們替他保管的合約錢包。
+/// 「錢是使用者自己動的」這句話因此在鏈上成立，而不只是我們的說法——
+/// 對一次移轉（§26）那條論證來說，這個差別是實質的。
+///
+/// 錢包會把我們寫的說明標成「網站說明」，並在下面列出它自己解析出來的實際操作
+/// 供使用者核對。**兩者必須一致**：說明寫「購買 1,000 kg」而實際是 approve 無限額度，
+/// 使用者看到的就是一個在騙他的網站——那比沒有說明更糟。
+///
+/// `transport`：`popup` 要在使用者手勢裡呼叫；`relay` 走 CAFECA 中繼信箱，
+/// 使用者在手機上的 CAFECA 會看到提示，`onPending` 給一個可以做成 QR 的連結。
+export async function sendCallsViaChannel(
+  calls: Call[],
+  description: Description,
+  opts?: { transport?: "popup" | "relay"; onPending?: (p: { link: string }) => void },
+): Promise<{ txHash: `0x${string}`; success: boolean }> {
+  const ch = await currentChannel();
+  if (!ch) throw new Error("CHANNEL_CLOSED");
+  return ch.sendCalls(
+    calls.map((c) => ({ to: c.target, data: c.data, value: c.value ? c.value.toString() : undefined })),
+    desc(description),
+    opts,
+  );
 }
 
 /// 從導向回來時呼叫。沒有結果就回 null（代表這一次不是登入導向回來的）。
