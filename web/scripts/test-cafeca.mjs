@@ -22,6 +22,7 @@ import assert from "node:assert/strict";
 const { newNonce, consumeNonce } = await import("../lib/server/cafeca/nonce.ts");
 const { signInDigest } = await import("../lib/server/cafeca/digest.ts");
 const O = await import("../lib/bank/order-typed.ts");
+const C = await import("../lib/server/cafeca/parse-config.ts");
 
 let n = 0;
 const test = (name, fn) => { fn(); n += 1; console.log(`  ✓ ${name}`); };
@@ -172,6 +173,43 @@ test("網域不能撞上錢包會拒絕的那幾種", () => {
   const td = O.placeTypedData(8018, BANK, order);
   assert.equal(td.domain.verifyingContract, BANK);
   assert.notEqual(td.domain.verifyingContract.toLowerCase(), order.account.toLowerCase());
+});
+
+console.log("設定檔解析");
+
+// cafeca.io/.well-known/cafeca-configuration 在 2026-09-28 真正回的位元組。
+// 用真的那一份當 fixture，因為第一版就是照**摘要過**的文件寫的，
+// 漏掉了 chain 是巢狀的——編得過、型別也對，只有真的連上去才會炸。
+const REAL = JSON.parse(`{"issuer":"http://localhost:10002","protocol":"cafeca-signin","versions":[1],"authorization_endpoint":"http://localhost:10002/dl/auth","custom_scheme":"cafeca://auth","sdk":"http://localhost:10002/sdk/cafeca-connect.js","modes":["popup","redirect","post"],"channel":{"endpoint":"http://localhost:10002/dl/sign","relay":"http://localhost:10002/api/channel","methods":["sign_message","sign_typed_data","send_calls"],"max_ttl_seconds":2592000},"claims_supported":["kyc_level","handle"],"max_ttl_seconds":600,"chain":{"id":8018,"rpc":"https://boltchain.cafeca.io"},"contracts":{"factory":"0x075e377D1096089aE2D44fbD23156BF900b8bd24","keyring":"0x367a9E8a6E8bA108F4cC4B863d03dD618aD7893b","attestation":"0x4b08B5063eE773C084dD9E67E09690aF8cb2A880","recovery":"0xA199a3f7afd81bDBC6CE697400Fa44d5b6a16594","twdc":"0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3","entryPoint":"0xc99102a99B61c9968Db66fa974E69e37b45EFEDE"},"eip712":{"name":"CAFECA Sign-In","version":"1","primaryType":"SignIn","verifyingContract":"<account>"}}`);
+
+test("讀得懂真正的設定檔（chain 是巢狀的，不是平鋪的 chainId）", () => {
+  const c = C.parseConfig(REAL);
+  assert.equal(c.chainId, 8018);
+  assert.equal(c.rpcUrl, "https://boltchain.cafeca.io");
+  assert.equal(c.contracts.attestation, "0x4b08B5063eE773C084dD9E67E09690aF8cb2A880");
+  assert.equal(c.contracts.twdc, "0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3");
+  assert.equal(c.contracts.entryPoint, "0xc99102a99B61c9968Db66fa974E69e37b45EFEDE");
+});
+
+test("平鋪的形狀也讀得懂——對方哪天改格式不該整站登不進去", () => {
+  const c = C.parseConfig({ chainId: 8018, rpc: "https://x", contracts: REAL.contracts });
+  assert.equal(c.chainId, 8018);
+  assert.equal(c.rpcUrl, "https://x");
+});
+
+test("認得出這是開發版錢包的設定檔（端點全在 localhost）", () => {
+  assert.equal(C.looksLocal(C.parseConfig(REAL)), true);
+  assert.equal(C.looksLocal(C.parseConfig({ ...REAL, issuer: "https://cafeca.io" })), false);
+});
+
+test("缺欄位或壞地址一律拒絕，不要拿一個空地址去驗簽章", () => {
+  const bad = [
+    {},
+    { chain: { id: 0 }, contracts: REAL.contracts },
+    { chain: { id: 8018 }, contracts: {} },
+    { chain: { id: 8018 }, contracts: { ...REAL.contracts, attestation: "0xnope" } },
+  ];
+  for (const b of bad) assert.throws(() => C.parseConfig(b), C.ConfigError);
 });
 
 console.log(`\n${n} 項全部通過。`);

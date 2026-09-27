@@ -1,7 +1,10 @@
 import "server-only";
-import { createPublicClient, defineChain, http, isAddress, type Address, type PublicClient } from "viem";
-import { CHAIN_ID, publicClient } from "../chain";
+import { createPublicClient, defineChain, http, type Address, type PublicClient } from "viem";
+import { CHAIN_ID, IS_LOCAL_CHAIN, publicClient } from "../chain";
 import { ApiError } from "../api";
+import { looksLocal, parseConfig, type CafecaConfig } from "./parse-config";
+
+export type { CafecaConfig } from "./parse-config";
 
 /// CAFECA 錢包的設定：這條鏈是哪一條、身分合約在哪裡。
 ///
@@ -13,12 +16,6 @@ import { ApiError } from "../api";
 /// 而且底下每一個從遠端讀回來的欄位都要先驗過形狀才採用——
 /// 遠端設定檔是**資料**，不是可以直接信任的程式碼。
 export const WALLET_ORIGIN = (process.env.CAFECA_WALLET ?? "https://cafeca.io").replace(/\/+$/, "");
-
-export type CafecaConfig = {
-  chainId: number;
-  rpcUrl: string;
-  contracts: { factory: Address; keyring: Address; attestation: Address; recovery: Address };
-};
 
 /// 設定檔讀不到時的退路。把值寫進環境變數就完全不碰網路——
 /// 正式環境應該這樣做：登入能不能用，不該取決於另一個網域此刻醒著沒有。
@@ -36,13 +33,6 @@ function fromEnv(): CafecaConfig | null {
     },
   };
 }
-
-const addr = (v: unknown, name: string): Address => {
-  if (typeof v !== "string" || !isAddress(v)) {
-    throw new ApiError("UPSTREAM_ERROR", `CAFECA 設定檔的 contracts.${name} 不是合法地址`);
-  }
-  return v as Address;
-};
 
 /// 設定檔快取一小時。太短是拿別人的網域當每次登入的相依，太長則換約之後要重啟才生效。
 const TTL_MS = 60 * 60_000;
@@ -67,20 +57,21 @@ export async function cafecaConfig(): Promise<CafecaConfig> {
     throw new ApiError("UPSTREAM_ERROR", `讀不到 CAFECA 設定檔（${WALLET_ORIGIN}）：${(e as Error).message}`);
   }
 
-  const d = raw as { chainId?: unknown; rpc?: unknown; rpcUrl?: unknown; contracts?: Record<string, unknown> };
-  const chainId = Number(d.chainId);
-  if (!Number.isInteger(chainId) || chainId <= 0) throw new ApiError("UPSTREAM_ERROR", "CAFECA 設定檔沒有合法的 chainId");
-  const c = d.contracts ?? {};
-  const value: CafecaConfig = {
-    chainId,
-    rpcUrl: typeof d.rpc === "string" ? d.rpc : typeof d.rpcUrl === "string" ? d.rpcUrl : "",
-    contracts: {
-      factory: addr(c.factory, "factory"),
-      keyring: addr(c.keyring, "keyring"),
-      attestation: addr(c.attestation, "attestation"),
-      recovery: addr(c.recovery, "recovery"),
-    },
-  };
+  let value: CafecaConfig;
+  try {
+    value = parseConfig(raw);
+  } catch (e) {
+    throw new ApiError("UPSTREAM_ERROR", (e as Error).message);
+  }
+  // 開發版的錢包沒設 PUBLIC_ORIGIN 時，設定檔上的端點全是 localhost。合約地址仍然
+  // 是對的，但拿它上線，使用者的瀏覽器會被導去自己的電腦。在這裡喊一次，
+  // 不要等到有人登不進去才查。
+  if (looksLocal(value) && !IS_LOCAL_CHAIN) {
+    console.warn(
+      `[cafeca] ${WALLET_ORIGIN} 的設定檔 issuer 是 ${value.issuer}——這是開發版的錢包，` +
+      `它上面的授權與簽章端點對外都不通。正式站要等對方設好 PUBLIC_ORIGIN。`,
+    );
+  }
   cached = { at: Date.now(), value };
   return value;
 }
