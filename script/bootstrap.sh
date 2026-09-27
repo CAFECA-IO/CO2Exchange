@@ -332,8 +332,8 @@ cmd_deploy () {
   # 那個錯誤完全看不出是上一次中斷造成的。本機鏈重開就好；外部鏈得先確認
   # broadcast/ 底下那一份 run-latest.json 送到哪裡，再決定是續傳還是換一把 deployer。
   echo ">> 部署 ${script} → chainId ${CHAIN_ID}"
-  echo "   這會送出幾十筆交易，需要幾分鐘。**中途不要中斷**——中斷之後重跑會看到"
-  echo "   nonce 相關的錯誤，而那個訊息看不出原因。"
+  echo "   這會送出幾十筆交易。外部鏈上加了 --slow（一筆確認再送下一筆），"
+  echo "   所以要等 筆數 × 出塊時間，可能十幾分鐘。**中途不要中斷。**"
   echo "   COMMITTER = ${COMMITTER}（relayer，這樣 bank:commit 才送得出去）"
   echo "   NATIONAL_OWNERS = ${NATIONAL_OWNERS}（${NATIONAL_THRESHOLD}-of-3）"
   echo "   OPERATOR_OWNERS = ${OPERATOR_OWNERS}（${OPERATOR_THRESHOLD}-of-2）"
@@ -341,7 +341,19 @@ cmd_deploy () {
     && echo "   SETTLEMENT_TOKEN = ${SETTLEMENT_TOKEN}（不會自己發 MockTWD）" \
     || echo "   ⚠️ 沒有 SETTLEMENT_TOKEN，會部署 MockTWD。外部鏈上通常該指定既有的結算幣。"
 
-  forge script "$script" --rpc-url "$RPC_URL" --broadcast | tail -40
+  # 外部鏈預設加 --slow：一筆確認過再送下一筆。
+  #
+  # 為什麼需要它：forge 預設會把整批交易用連續的 nonce **一次送出去**。geth 會把
+  # 未來 nonce 的交易放進佇列等前面那筆到齊，但那是 geth 的行為，不是規範——
+  # 比較簡單的節點實作會直接回 `nonce too high` 把整批打掉。Boltchain
+  # （boltchain/v0.1.0）就是這樣，而那個錯誤訊息看起來像是我們算錯 nonce，
+  # 其實 nonce 是對的（實測 latest == pending，沒有任何卡住的交易）。
+  #
+  # 代價是慢：幾十筆 × 6 秒出塊。本機鏈不需要，所以只在外部鏈開。
+  local extra=""
+  is_local || extra="--slow"
+  # shellcheck disable=SC2086
+  forge script "$script" --rpc-url "$RPC_URL" --broadcast $extra ${FORGE_EXTRA_ARGS:-} | tail -40
 
   local dep="$ROOT/deployments/${CHAIN_ID}.json"
   [ -f "$dep" ] || { echo "!! 部署檔沒有產生：${dep}"; exit 1; }

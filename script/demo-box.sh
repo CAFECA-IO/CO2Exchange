@@ -170,7 +170,10 @@ do_deploy () {
       exit 1; }
     echo ">> 部署（DeployV4，不含示範資料）"
     echo "   這是一筆真的、不可逆的部署，會寫出 deployments/<chainId>.json。"
-    forge script script/DeployV4.s.sol --rpc-url "$RPC_URL" --broadcast \
+    # --slow：一筆確認再送下一筆。forge 預設整批用連續 nonce 一次送出，
+    # 而那依賴節點會把未來 nonce 的交易排進佇列——不是所有節點都這樣做，
+    # 不這樣做的會回 `nonce too high` 把整批打掉。
+    forge script script/DeployV4.s.sol --rpc-url "$RPC_URL" --broadcast --slow \
       > "$LOG/deploy.log" 2>&1 \
       || { echo "!! 部署失敗，看 $LOG/deploy.log"; exit 1; }
   fi

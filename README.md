@@ -780,12 +780,18 @@ CREATE2 是透過鏈上那個標準代理做的。`bootstrap.sh` 與 `preflight.
 兩邊——這一版把那個常數改成讀環境變數，就是為了兩邊不會各寫一個而對不上。
 README 最後那一節「目標鏈沒有 Cancun 的話」只對 8017 主網與其他舊鏈有意義。
 
-#### 三件關於這個端點的事
+#### 四件關於這個端點的事
 
 1. **純 HTTP，沒有 TLS**（443 與 8546 都是 connection refused）。RPC 流量
    在網路上是明文的。測試網展示可以接受，但要知道：任何在路徑上的人看得到
    查詢內容，也改得動回應。正式環境要 TLS。
 2. **沒有 WebSocket**，所以沒有事件訂閱，只能輪詢。本專案本來就是輪詢，不受影響。
+
+3. **txpool 不收未來 nonce 的交易**，所以部署一定要 `--slow`。forge 預設把整批
+   交易用連續 nonce **一次送出**，依賴節點把還輪不到的那幾筆排進佇列等前面到齊——
+   那是 geth 的行為，不是規範。Boltchain 直接回 `nonce too high` 把整批打掉，
+   而那個訊息看起來像我們算錯 nonce（實測 `latest == pending`，一筆卡住的都沒有）。
+   代價是慢：幾十筆 × 6 秒。`bootstrap.sh` 在外部鏈上會自動加。
 3. **瀏覽器碰不到它，而這是好事。** 站台走 HTTPS 時，瀏覽器不能呼叫 `http://` 的
    端點（mixed content）。本專案的「前端不直接跟區塊鏈說話」在這裡剛好付清了成本——
    所有鏈上讀寫都在伺服器端，瀏覽器連節點位址都不知道。
@@ -820,8 +826,9 @@ export DEPLOYER_PK=0x…
 # 結算幣用 CAFECA 的 TWDC，不要自己發一個平行的
 export SETTLEMENT_TOKEN=0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3
 
-# Boltchain 沒有 CREATE2 deployer，所以 v4 的 hook 部署不了，用核心這一支：
-forge script script/Deploy.s.sol --rpc-url chain --broadcast
+# Boltchain 沒有 CREATE2 deployer，所以 v4 的 hook 部署不了，用核心這一支。
+# --slow 不是可選的，理由見下。
+forge script script/Deploy.s.sol --rpc-url chain --broadcast --slow
 ```
 
 #### 結算幣：用 TWDC，不要自己發
@@ -1027,6 +1034,7 @@ creation bytecode 直接 CREATE —— 官方版本是 solc 0.7.6 編的，本�
 | 重跑部署時 `nonce too low` / `replacement transaction underpriced` | 上一次部署中途被中斷，鏈上留下做到一半的狀態。本機鏈重開就好；外部鏈先看 `broadcast/<script>/<chainId>/run-latest.json` 送到哪裡 |
 | 部署被 `PublicKeyOnPublicChain` 擋下 | 有一個角色還用著 anvil 的預設帳戶（常見的是 `NATIONAL_OWNERS`）。`bash script/bootstrap.sh keys` 會一併產生治理 owner |
 | 部署到一半 `missing CREATE2 deployer` | 這條鏈沒有那個標準代理，v4 的 hook 位址挖不出來。`bootstrap.sh` 與 `preflight.sh` 現在會**事先**查並自動改用 `Deploy.s.sol` |
+| 部署一開始就 `nonce too high`，而 `latest == pending`（沒有卡住的交易） | 節點的 txpool 不收未來 nonce 的交易，而 forge 預設整批一次送。加 `--slow`；`bootstrap.sh` 在外部鏈上會自動加 |
 | 重新部署後畫面有資料但對不上鏈 | `web/data/` 的舊紀錄，見下 |
 | 磁碟莫名其妙滿了 | `~/.foundry/anvil/tmp/` 的歷史狀態，見[建立模擬資料](#建立模擬資料) |
 | 首頁地球轉但沒有柱子 | 鏈上還沒有核發資料，跑 `bash script/demo-box.sh rebuild` |
