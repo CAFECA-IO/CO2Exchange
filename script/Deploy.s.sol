@@ -12,6 +12,7 @@ import {ReserveAttestation} from "../src/registry/ReserveAttestation.sol";
 import {IJurisdictions} from "../src/interfaces/IJurisdictions.sol";
 import {Listing} from "../src/market/Listing.sol";
 import {FeeSchedule} from "../src/market/FeeSchedule.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {CarbonCreditToken} from "../src/market/CarbonCreditToken.sol";
 import {CarbonPool} from "../src/market/CarbonPool.sol";
 import {MockTWD} from "../src/mocks/MockTWD.sol";
@@ -63,6 +64,9 @@ contract Deploy is Script {
         uint256 timelockDelay;
         uint256 recoveryDelay;
         address committer;
+        /// 外部結算幣。設了就**不部署 MockTWD**，直接用這個地址。
+        /// Boltchain 上是 CAFECA 的 TWDC（6 decimals，與 MockTWD 相同，所以價格不必換算）。
+        address settlementToken;
     }
 
     Config internal cfg;
@@ -73,7 +77,10 @@ contract Deploy is Script {
     CarbonCredit1155 public credit;
     CarbonRegistry public registry;
     ReserveAttestation public reserve;
+    /// 只有在自己發結算幣時才有值。用外部結算幣（`SETTLEMENT_TOKEN`）時是 address(0)。
     MockTWD public twd;
+    /// 實際使用的結算幣，不論是自己發的還是外部的。合約都只認 IERC20。
+    IERC20 public settlement;
     Listing public listing;
     FeeSchedule public feeSchedule;
     CarbonCreditToken public cct;
@@ -141,6 +148,7 @@ contract Deploy is Script {
         // 提交 epoch 承諾的服務金鑰。與營運 Safe 分開：提交是每天的例行動作，
         // 不該動用治理鑰匙，而它能做的也只有提交——關不掉提領、動不了資產。
         cfg.committer = vm.envOr("COMMITTER", cfg.operator);
+        cfg.settlementToken = vm.envOr("SETTLEMENT_TOKEN", address(0));
 
         _requireNoWellKnownKeys();
         _requireFundedDeployer();
@@ -258,16 +266,28 @@ contract Deploy is Script {
         reserve = new ReserveAttestation(cfg.sovereign, cfg.sovereign, cfg.operator);
 
         // ── 市場層（UUPS）──
-        twd = new MockTWD(cfg.operator);
+        // 結算幣：有外部的就用外部的，不要自己發一個平行的。
+        //
+        // 平台自己發儲值憑證會碰電支執照，所以「用別人發的結算幣」不只是省事，
+        // 它是這個系統想要的終局。MockTWD 從頭到尾只是一個站得住的替代品。
+        if (cfg.settlementToken == address(0)) {
+            twd = new MockTWD(cfg.operator);
+            settlement = IERC20(address(twd));
+        } else {
+            // 地址上沒有合約就停下來。這個值錯了的話，整個市場會部署成功、
+            // 然後每一筆買賣都以看不出原因的方式失敗——那比部署失敗難查得多。
+            require(cfg.settlementToken.code.length > 0, unicode"SETTLEMENT_TOKEN 上沒有合約");
+            settlement = IERC20(cfg.settlementToken);
+        }
         // 各國費率表：預設交易 1%、註銷手續費 0（Phase 0 不收，數字由管理後台設定）
-        feeSchedule = new FeeSchedule(cfg.sovereign, cfg.sovereign, cfg.operator, twd, cfg.treasury, 100, 0);
+        feeSchedule = new FeeSchedule(cfg.sovereign, cfg.sovereign, cfg.operator, settlement, cfg.treasury, 100, 0);
         listing = Listing(
             address(
                 new ERC1967Proxy(
                     address(new Listing()),
                     abi.encodeCall(
                         Listing.initialize,
-                        (cfg.sovereign, cfg.sovereign, cfg.operator, kyc, credit, twd, cfg.treasury, 100)
+                        (cfg.sovereign, cfg.sovereign, cfg.operator, kyc, credit, settlement, cfg.treasury, 100)
                     )
                 )
             )
@@ -317,7 +337,7 @@ contract Deploy is Script {
 
         // Bank：使用者在交易所期間的資產池。內部買賣是帳本更新，每個 epoch 把餘額樹
         // root 提交上鏈。提領預設關閉（Phase 0 不提供），但機制完整且測過。
-        bank = new Bank(address(credit), address(twd), address(nationalSafe), cfg.operator);
+        bank = new Bank(address(credit), address(settlement), address(nationalSafe), cfg.operator);
 
         // 每 24 小時提交一次承諾的服務金鑰。COMMITTER_ROLE 的 admin 是 OPERATOR_ROLE，
         // 所以這一步要由營運角色做——Phase 0 部署者就是營運方，順手在這裡給掉。
@@ -480,9 +500,12 @@ contract Deploy is Script {
         // CCT：只有 DEFAULT_ADMIN（升級）
         cct.grantRole(ADMIN, address(timelock));
         cct.renounceRole(ADMIN, cfg.deployer);
-        // MockTWD：管理權給營運 Safe，鑄幣權保留給 deployer 供 demo faucet
-        twd.grantRole(ADMIN, address(operatorSafe));
-        twd.renounceRole(ADMIN, cfg.deployer);
+        // MockTWD：管理權給營運 Safe，鑄幣權保留給 deployer 供 demo faucet。
+        // 用外部結算幣時沒有這一步可做——那個代幣不是我們的。
+        if (address(twd) != address(0)) {
+            twd.grantRole(ADMIN, address(operatorSafe));
+            twd.renounceRole(ADMIN, cfg.deployer);
+        }
         vm.stopBroadcast();
     }
 
@@ -491,7 +514,12 @@ contract Deploy is Script {
         console2.log("RetirementCertificate", address(cert));
         console2.log("CarbonCredit1155     ", address(credit));
         console2.log("CarbonRegistry       ", address(registry));
-        console2.log("MockTWD              ", address(twd));
+        console2.log("Settlement token     ", address(settlement));
+        if (address(twd) == address(0)) {
+            console2.log(unicode"  ↑ 外部結算幣（SETTLEMENT_TOKEN）。本站沒有鑄幣權，demo faucet 不會運作。");
+        } else {
+            console2.log(unicode"  ↑ MockTWD（本站自己發的，demo faucet 可用）");
+        }
         console2.log("Listing              ", address(listing));
         console2.log("CarbonCreditToken    ", address(cct));
         console2.log("CarbonPool           ", address(pool));
@@ -521,7 +549,10 @@ contract Deploy is Script {
         vm.serializeAddress(j, "carbonRegistry", address(registry));
         vm.serializeAddress(j, "reserveAttestation", address(reserve));
         vm.serializeAddress(j, "feeSchedule", address(feeSchedule));
-        vm.serializeAddress(j, "settlementToken", address(twd));
+        vm.serializeAddress(j, "settlementToken", address(settlement));
+        // 前端據此決定要不要顯示「領取測試幣」。少了它，faucet 按鈕會在
+        // 一個我們沒有鑄幣權的代幣上按下去、然後 revert，而沒有人看得出為什麼。
+        vm.serializeBool(j, "settlementMintable", address(twd) != address(0));
         vm.serializeAddress(j, "listing", address(listing));
         vm.serializeAddress(j, "cct", address(cct));
         vm.serializeAddress(j, "carbonPool", address(pool));

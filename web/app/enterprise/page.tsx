@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useReload } from "@/lib/client/useReload";
 import Link from "next/link";
 import { encodeFunctionData } from "viem";
-import { useAccount } from "@/components/AccountProvider";
+import { useAccount, useCash } from "@/components/AccountProvider";
 import { AccountGate } from "@/components/AccountGate";
 import { AgreementCheck, useAgreementGate } from "@/components/AgreementGate";
 import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/components/ui";
@@ -18,6 +18,7 @@ type Order = { orderId: number; seller: string; batchId: number; remainingKg: nu
 
 export default function EnterprisePage() {
   const { wallet, channelOpen, config, userId, tier, relay: send } = useAccount();
+  const CASH = useCash();
   const [projects, setProjects] = useState<Project[]>([]);
   const [issuances, setIssuances] = useState<Issuance[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
@@ -201,7 +202,7 @@ export default function EnterprisePage() {
                   <div className="mb-2 font-medium">批次 #{h.batchId} · {h.project} · {h.vintageYear} · 持有 {fmtKg(h.kg)}</div>
                   <div className="flex flex-wrap items-end gap-2">
                     <Field label="掛單（噸）"><input className={`${inputCls} w-28`} type="number" step="0.001" value={f.tonnes} onChange={(e) => setListForm({ ...listForm, [h.batchId]: { ...f, tonnes: e.target.value } })} /></Field>
-                    <Field label="mTWD / 噸"><input className={`${inputCls} w-28`} type="number" value={f.price} onChange={(e) => setListForm({ ...listForm, [h.batchId]: { ...f, price: e.target.value } })} /></Field>
+                    <Field label={`${CASH} / 噸`}><input className={`${inputCls} w-28`} type="number" value={f.price} onChange={(e) => setListForm({ ...listForm, [h.batchId]: { ...f, price: e.target.value } })} /></Field>
                     <Field label="最小成交（噸）"><input className={`${inputCls} w-28`} type="number" step="0.001" value={f.minFill} onChange={(e) => setListForm({ ...listForm, [h.batchId]: { ...f, minFill: e.target.value } })} /></Field>
                     <Field label="使用期限"><input className={`${inputCls} w-36`} type="date" value={f.usageDeadline} onChange={(e) => setListForm({ ...listForm, [h.batchId]: { ...f, usageDeadline: e.target.value } })} /></Field>
                     <Button onClick={async () => { await listGate.accept(`batch:${h.batchId}`); list(h); }} disabled={!!busy || !listGate.ok}>掛單</Button>
@@ -221,7 +222,7 @@ export default function EnterprisePage() {
           <ul className="space-y-2 text-sm">
             {orders.map((o) => (
               <li key={o.orderId} className="flex items-center gap-3 rounded-lg border border-ink-500 p-3">
-                <span className="flex-1">掛單 #{o.orderId} · 批次 #{o.batchId} · 剩餘 {fmtKg(o.remainingKg)} · {fmtTwd(o.pricePerTonne)} mTWD / 噸</span>
+                <span className="flex-1">掛單 #{o.orderId} · 批次 #{o.batchId} · 剩餘 {fmtKg(o.remainingKg)} · {fmtTwd(o.pricePerTonne)} {CASH} / 噸</span>
                 <Button variant="secondary" onClick={() => cancel(o)} disabled={!!busy}>取消</Button>
               </li>
             ))}

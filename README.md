@@ -641,10 +641,33 @@ cast wallet new        # 每一把都獨立產生，不要共用，也不要沿�
 ```bash
 export RPC_URL=http://211.22.118.149:8545
 export DEPLOYER_PK=0x…
+# 結算幣用 CAFECA 的 TWDC，不要自己發一個平行的
+export SETTLEMENT_TOKEN=0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3
 
 # Boltchain 有 EIP-1153，所以走完整的這一支（含 v4 展示模組）：
 forge script script/DeployV4.s.sol --rpc-url chain --broadcast
 ```
+
+#### 結算幣：用 TWDC，不要自己發
+
+`SETTLEMENT_TOKEN` 設了就**不部署 MockTWD**，直接把那個地址接到 `FeeSchedule`、
+`Listing` 與 `Bank`。Boltchain 上的 TWDC 是
+`0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3`——
+`CAFECA TWD Test Coin`、symbol `TWDC`、**6 decimals**（與 MockTWD 相同，
+所以價格與所有既有的數字都不必換算）。
+
+這不只是省事，它是這個系統想要的終局：**平台自己發儲值憑證會碰電支執照**，
+而一個能憑空生出結算幣的交易所，它的資產池揭露也就沒有意義了。
+MockTWD 從頭到尾只是一個站得住的替代品。
+
+跟著改變的兩件事：
+
+- **demo faucet 不能用了。** 本站沒有 TWDC 的鑄幣權。部署檔多了一個
+  `settlementMintable` 旗標，`/api/faucet` 據此直接回一句說得清楚的話，
+  前端也不會畫出那顆按鈕——一顆按下去必定失敗的按鈕，比沒有那顆按鈕更糟。
+  測試幣要向發行方取得。
+- **畫面上的幣別字樣跟著部署走**（`useCash()`）。結算幣是 TWDC 卻還寫 mTWD，
+  使用者會以為那是兩種不同的東西，而在一個要給主管機關看的系統裡那是會被問的。
 
 沒有區塊瀏覽器的驗證 API，所以 `--verify` 不適用；要讓外部單位自己對照
 「鏈上跑的位元組碼」與 repo 裡的原始碼，得另外提供建置步驟與 `forge build` 的輸出。

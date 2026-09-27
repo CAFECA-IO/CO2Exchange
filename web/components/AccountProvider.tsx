@@ -245,6 +245,19 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
   return <SessionProvider><Inner>{children}</Inner></SessionProvider>;
 }
 
+/// 結算幣在畫面上叫什麼。
+///
+/// 自己發的是 MockTWD（mTWD）；外部的（Boltchain 上是 CAFECA 的 TWDC）不該還
+/// 叫 mTWD——畫面上寫錯幣別，使用者會以為那是兩種不同的東西，而在一個要給
+/// 主管機關看的系統裡，那是會被問的。
+///
+/// 設定還沒讀到時回空字串而不是猜一個：寧可少一個單位，不要先顯示錯的再改口。
+export function useCash(): string {
+  const { config } = useAccount();
+  if (!config) return "";
+  return config.deployment.settlementMintable === true ? "mTWD" : "TWDC";
+}
+
 export function useAccount() {
   const ctx = useContext(AccountCtx);
   if (!ctx) throw new Error("useAccount outside provider");

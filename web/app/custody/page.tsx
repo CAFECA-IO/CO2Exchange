@@ -6,6 +6,7 @@ import { flagOf } from "@/lib/deployment";
 import type { Custody } from "@/lib/server/reserve";
 import { fetchJson } from "@/lib/client/fetchJson";
 import { BankSolvency } from "@/components/BankSolvency";
+import { useCash } from "@/components/AccountProvider";
 
 /// 託管與資產稽核揭露。
 ///
@@ -34,6 +35,7 @@ const period = (p: number) => `${Math.floor(p / 100)} 年 ${p % 100} 月`;
 const short = (h: string) => (h && !/^0x0+$/.test(h) ? `${h.slice(0, 10)}…${h.slice(-6)}` : "—");
 
 export default function CustodyPage() {
+  const CASH = useCash();
   const [c, setC] = useState<Custody | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -140,13 +142,13 @@ export default function CustodyPage() {
                   <div className="flex justify-between gap-4"><dt className="text-ink-300">信託機構</dt><dd className="text-ink-50">{r.cash.trustee}</dd></div>
                   <div className="flex justify-between gap-4"><dt className="text-ink-300">信託專戶</dt><dd className="tnum font-mono text-xs text-ink-200">{r.cash.accountRef}</dd></div>
                   <div className="flex justify-between gap-4 border-t border-ink-500 pt-2">
-                    <dt className="text-ink-300">專戶餘額</dt><dd className="tnum font-medium text-ink-50">{twd(r.cash.balance)} mTWD</dd>
+                    <dt className="text-ink-300">專戶餘額</dt><dd className="tnum font-medium text-ink-50">{twd(r.cash.balance)} {CASH}</dd>
                   </div>
                   <div className="flex justify-between gap-4">
-                    <dt className="text-ink-300">鏈上發行量（報告）</dt><dd className="tnum text-ink-200">{twd(r.cash.tokenSupply)} mTWD</dd>
+                    <dt className="text-ink-300">鏈上發行量（報告）</dt><dd className="tnum text-ink-200">{twd(r.cash.tokenSupply)} {CASH}</dd>
                   </div>
                   <div className="flex justify-between gap-4">
-                    <dt className="text-ink-300">鏈上發行量（即時）</dt><dd className="tnum text-ink-200">{twd(c.liveTokenSupply)} mTWD</dd>
+                    <dt className="text-ink-300">鏈上發行量（即時）</dt><dd className="tnum text-ink-200">{twd(c.liveTokenSupply)} {CASH}</dd>
                   </div>
                   <div className="flex justify-between gap-4">
                     <dt className="text-ink-300">對帳單雜湊</dt><dd className="font-mono text-xs text-ink-300">{short(r.cash.statementHash)}</dd>

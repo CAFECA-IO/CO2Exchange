@@ -138,6 +138,9 @@ export default function TradePage() {
 
   if (!userId || !wallet || !channelOpen || !config) return <AccountGate />;
   const d = config.deployment;
+  // 結算幣的顯示名稱。自己發的是 MockTWD（mTWD）；外部的（Boltchain 上是
+  // CAFECA 的 TWDC）不該還叫 mTWD——畫面上寫錯幣別，使用者會以為是兩種東西。
+  const CASH = d.settlementMintable === true ? "mTWD" : "TWDC";
 
   async function relay(label: string, calls: Call[], after?: () => Promise<unknown>) {
     setBusy(label); setMsg(null); setConfirm(null);
@@ -320,14 +323,21 @@ export default function TradePage() {
 
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-[--radius-card] border border-ink-500 bg-ink-700 px-4 py-3 text-sm">
         <span className="text-ink-300">可用現金</span>
-        <b className="tnum text-ink-50" data-testid="twd">{h ? fmtTwd(h.twd) : "—"} mTWD</b>
+        <b className="tnum text-ink-50" data-testid="twd">{h ? fmtTwd(h.twd) : "—"} {CASH}</b>
         <span className="text-ink-300">持有碳權</span>
         <b className="tnum text-ink-50" data-testid="batches">
           {myBatches.length ? myBatches.map((b) => `#${b.batchId} ${fmtKg(b.kg)}`).join("、") : "—"}
         </b>
         <div className="ml-auto flex items-center gap-2">
           <Link href="/portfolio" className="text-xs text-tide underline">我的資產</Link>
-          <Button variant="secondary" onClick={faucet} disabled={!!busy}>領取測試用 mTWD</Button>
+          {/*
+            結算幣不是本站發的時候，這顆按鈕按下去必定失敗——我們沒有鑄幣權。
+            與其讓它在鏈上 revert 成一句看不懂的話，不如根本不要畫出來。
+            一顆按下去就失敗的按鈕，比沒有那顆按鈕更糟。
+          */}
+          {d.settlementMintable === true && (
+            <Button variant="secondary" onClick={faucet} disabled={!!busy}>領取測試用 {CASH}</Button>
+          )}
         </div>
       </div>
 
@@ -514,7 +524,7 @@ export default function TradePage() {
                     <input className={inputCls} type="number" step="0.001" min="0.001" data-testid="bid-tonnes"
                       value={bidForm.tonnes} onChange={(e) => setBidForm({ ...bidForm, tonnes: e.target.value })} />
                   </Field>
-                  <Field label="出價（mTWD / 噸）">
+                  <Field label={`出價（${CASH} / 噸）`}>
                     <input className={inputCls} type="number" step="0.01" min="0.01" data-testid="bid-price"
                       placeholder={bestAsk ? twd2(bestAsk) : ""}
                       value={bidForm.price} onChange={(e) => setBidForm({ ...bidForm, price: e.target.value })} />
@@ -522,7 +532,7 @@ export default function TradePage() {
                 </div>
                 <dl className="space-y-1 border-t border-ink-500 pt-3 text-sm">
                   <div className="flex justify-between"><dt className="text-ink-300">鎖定金額</dt>
-                    <dd className="tnum font-medium text-ink-50" data-testid="bid-cost">{twd2(Number(bidForm.tonnes || 0) * Number(bidForm.price || 0))} mTWD</dd></div>
+                    <dd className="tnum font-medium text-ink-50" data-testid="bid-cost">{twd2(Number(bidForm.tonnes || 0) * Number(bidForm.price || 0))} {CASH}</dd></div>
                   {bestAsk !== null && <div className="flex justify-between"><dt className="text-ink-300">目前最佳賣價</dt><dd className="tnum text-down">{twd2(bestAsk)}</dd></div>}
                 </dl>
                 <p className="text-xs leading-6 text-ink-300">
@@ -550,7 +560,7 @@ export default function TradePage() {
                     onChange={(e) => setQtyKg(String(Math.round(Number(e.target.value) * 1000)))}
                   />
                 </Field>
-                <Field label="單價 mTWD / 噸（賣方定價，不可更改）">
+                <Field label={`單價 ${CASH} / 噸（賣方定價，不可更改）`}>
                   <input className={`${inputCls} text-ink-300`} value={fmtTwd(selected.pricePerTonne)} readOnly />
                 </Field>
                 <div className="flex gap-1">
@@ -563,13 +573,13 @@ export default function TradePage() {
                 </div>
 
                 <dl className="space-y-1 border-t border-ink-500 pt-3 text-sm">
-                  <div className="flex justify-between"><dt className="text-ink-300">應付金額</dt><dd className="tnum font-medium text-ink-50">{twd2(buyCost)} mTWD</dd></div>
+                  <div className="flex justify-between"><dt className="text-ink-300">應付金額</dt><dd className="tnum font-medium text-ink-50">{twd2(buyCost)} {CASH}</dd></div>
                   <div className="flex justify-between">
                     <dt className="text-ink-300">餘額</dt>
-                    <dd className={`tnum ${notEnough ? "text-down" : "text-ink-200"}`}>{twd2(balance)} mTWD</dd>
+                    <dd className={`tnum ${notEnough ? "text-down" : "text-ink-200"}`}>{twd2(balance)} {CASH}</dd>
                   </div>
                 </dl>
-                {notEnough && <Notice kind="error">餘額不足，請先領取測試用 mTWD 或減少數量。</Notice>}
+                {notEnough && <Notice kind="error">餘額不足，請先領取測試用 {CASH} 或減少數量。</Notice>}
                 <Button data-testid="submit-buy" onClick={() => setConfirm("buy")} disabled={!!busy || !buyReady} className="w-full">買進</Button>
               </div>
             )
@@ -593,20 +603,20 @@ export default function TradePage() {
                 ))}
               </div>
               <dl className="space-y-1 border-t border-ink-500 pt-3 text-sm">
-                <div className="flex justify-between"><dt className="text-ink-300">目前市價</dt><dd className="tnum text-ink-50">{spot ? twd2(spot) : "—"} mTWD / 噸</dd></div>
+                <div className="flex justify-between"><dt className="text-ink-300">目前市價</dt><dd className="tnum text-ink-50">{spot ? twd2(spot) : "—"} {CASH} / 噸</dd></div>
                 {quote === null ? (
                   <div className="flex justify-between"><dt className="text-ink-300">試算中…</dt><dd className="tnum text-ink-300">—</dd></div>
                 ) : !priced ? null : (
                   <>
-                    <div className="flex justify-between"><dt className="text-ink-300">實際成交價</dt><dd className="tnum text-ink-50">{twd2(priced.perTonne)} mTWD / 噸</dd></div>
-                    <div className="flex justify-between"><dt className="text-ink-300">應付金額</dt><dd className="tnum font-medium text-ink-50" data-testid="mbuy-cost">{twd2(priced.twd)} mTWD</dd></div>
+                    <div className="flex justify-between"><dt className="text-ink-300">實際成交價</dt><dd className="tnum text-ink-50">{twd2(priced.perTonne)} {CASH} / 噸</dd></div>
+                    <div className="flex justify-between"><dt className="text-ink-300">應付金額</dt><dd className="tnum font-medium text-ink-50" data-testid="mbuy-cost">{twd2(priced.twd)} {CASH}</dd></div>
                     {impact !== null && (
                       <div className="flex justify-between">
                         <dt className="text-ink-300">價格影響</dt>
                         <dd className={`tnum ${impact > 0.05 ? "text-warn" : "text-ink-200"}`}>{(impact * 100).toFixed(1)}%</dd>
                       </div>
                     )}
-                    <div className="flex justify-between"><dt className="text-ink-300">最高支付</dt><dd className="tnum text-ink-200">{twd2(priced.twd * (1 + SLIPPAGE))} mTWD</dd></div>
+                    <div className="flex justify-between"><dt className="text-ink-300">最高支付</dt><dd className="tnum text-ink-200">{twd2(priced.twd * (1 + SLIPPAGE))} {CASH}</dd></div>
                   </>
                 )}
               </dl>
@@ -676,7 +686,7 @@ export default function TradePage() {
                         <div className="flex justify-between"><dt className="text-ink-300">他要的核發國</dt>
                           <dd className="text-ink-50">{selectedBid.country || "不限"}</dd></div>
                         <div className="flex justify-between"><dt className="text-ink-300">出價</dt>
-                          <dd className="tnum font-medium text-up">{fmtTwd(selectedBid.pricePerTonne)} mTWD / 噸</dd></div>
+                          <dd className="tnum font-medium text-up">{fmtTwd(selectedBid.pricePerTonne)} {CASH} / 噸</dd></div>
                         <div className="flex justify-between"><dt className="text-ink-300">還要多少</dt>
                           <dd className="tnum text-ink-200">{fmtKg(selectedBid.remainingKg)}</dd></div>
                       </dl>
@@ -689,7 +699,7 @@ export default function TradePage() {
                     <dl className="space-y-1 border-t border-ink-500 pt-3 text-sm">
                       <div className="flex justify-between"><dt className="text-ink-300">預估實收</dt>
                         <dd className="tnum font-medium text-ink-50">
-                          {twd2(Number(sf?.tonnes ?? 0) * (Number(BigInt(selectedBid.pricePerTonne)) / 1e6) * (1 - (m?.listingFeeBps ?? 0) / 10000))} mTWD
+                          {twd2(Number(sf?.tonnes ?? 0) * (Number(BigInt(selectedBid.pricePerTonne)) / 1e6) * (1 - (m?.listingFeeBps ?? 0) / 10000))} {CASH}
                         </dd></div>
                       <div className="flex justify-between"><dt className="text-ink-300">手續費</dt>
                         <dd className="tnum text-ink-300">{(m?.listingFeeBps ?? 0) / 100}%（賣方承擔）</dd></div>
@@ -699,10 +709,10 @@ export default function TradePage() {
                   </div>
                 ) : mode === "limit" ? (
                   <>
-                    <Field label="單價 mTWD / 噸">
+                    <Field label={`單價 ${CASH} / 噸`}>
                       <input className={inputCls} type="number" value={sf?.price ?? ""} onChange={(e) => setSf({ price: e.target.value })} />
                     </Field>
-                    {spot && <p className="text-xs text-ink-300">市場參考價 {twd2(spot)} mTWD / 噸</p>}
+                    {spot && <p className="text-xs text-ink-300">市場參考價 {twd2(spot)} {CASH} / 噸</p>}
                     <button onClick={() => setAdvanced((v) => !v)} className="text-xs text-ink-300 underline">
                       {advanced ? "收起進階設定" : "進階設定（最小成交量、使用期限）"}
                     </button>
@@ -717,9 +727,9 @@ export default function TradePage() {
                       </div>
                     )}
                     <dl className="space-y-1 border-t border-ink-500 pt-3 text-sm">
-                      <div className="flex justify-between"><dt className="text-ink-300">預計成交金額</dt><dd className="tnum text-ink-50">{twd2(sellProceeds)} mTWD</dd></div>
+                      <div className="flex justify-between"><dt className="text-ink-300">預計成交金額</dt><dd className="tnum text-ink-50">{twd2(sellProceeds)} {CASH}</dd></div>
                       <div className="flex justify-between"><dt className="text-ink-300">平台手續費 {(m?.listingFeeBps ?? 0) / 100}%</dt><dd className="tnum text-down">− {twd2(sellFee)}</dd></div>
-                      <div className="flex justify-between"><dt className="text-ink-300">實收</dt><dd className="tnum font-medium text-ink-50">{twd2(sellProceeds - sellFee)} mTWD</dd></div>
+                      <div className="flex justify-between"><dt className="text-ink-300">實收</dt><dd className="tnum font-medium text-ink-50">{twd2(sellProceeds - sellFee)} {CASH}</dd></div>
                     </dl>
                     <Button data-testid="submit-sell" onClick={() => setConfirm("sell")} disabled={!!busy || !sellReady} className="w-full">賣出（上架）</Button>
                   </>
@@ -735,9 +745,9 @@ export default function TradePage() {
                       </Notice>
                     )}
                     <dl className="space-y-1 border-t border-ink-500 pt-3 text-sm">
-                      <div className="flex justify-between"><dt className="text-ink-300">目前市價</dt><dd className="tnum text-ink-50">{spot ? twd2(spot) : "—"} mTWD / 噸</dd></div>
-                      <div className="flex justify-between"><dt className="text-ink-300">預估實收</dt><dd className="tnum font-medium text-ink-50">{twd2(mSellProceeds)} mTWD</dd></div>
-                      <div className="flex justify-between"><dt className="text-ink-300">最低實收</dt><dd className="tnum text-ink-200">{twd2(mSellProceeds * (1 - SLIPPAGE))} mTWD</dd></div>
+                      <div className="flex justify-between"><dt className="text-ink-300">目前市價</dt><dd className="tnum text-ink-50">{spot ? twd2(spot) : "—"} {CASH} / 噸</dd></div>
+                      <div className="flex justify-between"><dt className="text-ink-300">預估實收</dt><dd className="tnum font-medium text-ink-50">{twd2(mSellProceeds)} {CASH}</dd></div>
+                      <div className="flex justify-between"><dt className="text-ink-300">最低實收</dt><dd className="tnum text-ink-200">{twd2(mSellProceeds * (1 - SLIPPAGE))} {CASH}</dd></div>
                     </dl>
                     <Button data-testid="submit-market-sell" onClick={() => setConfirm("msell")} disabled={!!busy || !mSellReady} className="w-full">市價賣出</Button>
                   </>
@@ -757,7 +767,7 @@ export default function TradePage() {
               <li key={`o${o.orderId}`} className="flex flex-wrap items-center gap-3 rounded-[--radius-card] border border-ink-500 p-3">
                 <span className="rounded bg-down/15 px-1.5 py-0.5 text-[10px] text-down">賣</span>
                 <CountryTag code={o.country} scheme={o.scheme} />
-                <span className="flex-1">掛單 #{o.orderId} · 批次 #{o.batchId} · 剩餘 {fmtKg(o.remainingKg)} · {fmtTwd(o.pricePerTonne)} mTWD / 噸</span>
+                <span className="flex-1">掛單 #{o.orderId} · 批次 #{o.batchId} · 剩餘 {fmtKg(o.remainingKg)} · {fmtTwd(o.pricePerTonne)} {CASH} / 噸</span>
                 <Button variant="secondary" onClick={() => cancelOrder(o)} disabled={!!busy}>取消掛單</Button>
               </li>
             ))}
@@ -767,9 +777,9 @@ export default function TradePage() {
                 <span className="rounded bg-up/15 px-1.5 py-0.5 text-[10px] text-up">買</span>
                 {b.country ? <CountryTag code={b.country} /> : <span className="text-xs text-ink-300">不限核發國</span>}
                 <span className="flex-1">
-                  買單 #{b.bidId} · 還要 {fmtKg(b.remainingKg)} · {fmtTwd(b.pricePerTonne)} mTWD / 噸
+                  買單 #{b.bidId} · 還要 {fmtKg(b.remainingKg)} · {fmtTwd(b.pricePerTonne)} {CASH} / 噸
                   <span className="ml-2 text-xs text-ink-300">
-                    鎖定 {twd2(b.remainingKg / 1000 * Number(BigInt(b.pricePerTonne)) / 1e6)} mTWD
+                    鎖定 {twd2(b.remainingKg / 1000 * Number(BigInt(b.pricePerTonne)) / 1e6)} {CASH}
                   </span>
                 </span>
                 <Button variant="secondary" data-testid={`cancel-bid-${b.bidId}`} onClick={() => doCancelBid(b.bidId)} disabled={!!busy}>取消買單（退款）</Button>
@@ -798,8 +808,8 @@ export default function TradePage() {
             ["核發國 / 機制", `${flagOf(selected.country)} ${selected.country}　${selected.scheme}`],
             ["批次 / 年份", `#${selected.batchId}　${selected.vintageYear}`],
             ["數量", fmtKg(Number(qtyKg))],
-            ["單價", `${fmtTwd(selected.pricePerTonne)} mTWD / 噸`],
-            ["應付金額", `${twd2(buyCost)} mTWD`],
+            ["單價", `${fmtTwd(selected.pricePerTonne)} {CASH} / 噸`],
+            ["應付金額", `${twd2(buyCost)} {CASH}`],
             ["手續費", "0（買方不負擔，手續費由賣方承擔）"],
           ]}
         >
@@ -822,9 +832,9 @@ export default function TradePage() {
           rows={[
             ["方式", "市價即時成交"],
             ["數量", `${marketTonnes} 噸`],
-            ["目前市價", `${spot ? twd2(spot) : "—"} mTWD / 噸`],
-            ["預估金額", `${twd2(mBuyCost)} mTWD`],
-            ["最高支付", `${twd2(mBuyCost * (1 + SLIPPAGE))} mTWD`],
+            ["目前市價", `${spot ? twd2(spot) : "—"} {CASH} / 噸`],
+            ["預估金額", `${twd2(mBuyCost)} {CASH}`],
+            ["最高支付", `${twd2(mBuyCost * (1 + SLIPPAGE))} {CASH}`],
             ["交割方式", "成交後立刻拆解為具體批次"],
           ]}
         >
@@ -848,9 +858,9 @@ export default function TradePage() {
             ["批次 / 專案", `#${sb.batchId}　${sb.project}`],
             ["核發國 / 機制", `${flagOf(sb.country)} ${sb.country}　${sb.scheme}`],
             ["數量", `${Number(sf.tonnes).toLocaleString("zh-TW", { maximumFractionDigits: 3 })} 噸`],
-            ["單價", `${twd2(Number(sf.price))} mTWD / 噸`],
-            [`平台手續費 ${(m?.listingFeeBps ?? 0) / 100}%`, `− ${twd2(sellFee)} mTWD`],
-            ["實收", `${twd2(sellProceeds - sellFee)} mTWD`],
+            ["單價", `${twd2(Number(sf.price))} {CASH} / 噸`],
+            [`平台手續費 ${(m?.listingFeeBps ?? 0) / 100}%`, `− ${twd2(sellFee)} {CASH}`],
+            ["實收", `${twd2(sellProceeds - sellFee)} {CASH}`],
             ["使用期限（依第 12 條申報）", sf.usageDeadline || "未填"],
           ]}
         >
@@ -874,9 +884,9 @@ export default function TradePage() {
             ["方式", "市價即時成交"],
             ["批次 / 專案", `#${sb.batchId}　${sb.project}`],
             ["數量", `${Number(sf.tonnes).toLocaleString("zh-TW", { maximumFractionDigits: 3 })} 噸`],
-            ["目前市價", `${spot ? twd2(spot) : "—"} mTWD / 噸`],
-            ["預估實收", `${twd2(mSellProceeds)} mTWD`],
-            ["最低實收", `${twd2(mSellProceeds * (1 - SLIPPAGE))} mTWD`],
+            ["目前市價", `${spot ? twd2(spot) : "—"} {CASH} / 噸`],
+            ["預估實收", `${twd2(mSellProceeds)} {CASH}`],
+            ["最低實收", `${twd2(mSellProceeds * (1 - SLIPPAGE))} {CASH}`],
           ]}
         >
           <p className="text-xs leading-6 text-ink-300">

@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useAccount } from "@/components/AccountProvider";
+import { useAccount, useCash } from "@/components/AccountProvider";
 import { AccountGate } from "@/components/AccountGate";
 import { AreaChart, BarList, Donut, StatTile } from "@/components/charts";
 import { Card, Notice, fmtKg } from "@/components/ui";
@@ -35,6 +35,7 @@ type Cert = {
 
 export default function PortfolioPage() {
   const { wallet, userId } = useAccount();
+  const CASH = useCash();
   const [p, setP] = useState<Portfolio | null>(null);
   const [certs, setCerts] = useState<Cert[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -88,8 +89,8 @@ export default function PortfolioPage() {
       {!p ? <p className="text-sm text-ink-300">讀取中…</p> : (
         <>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <StatTile label="資產總值" value={`${twd(p.totalValue)} mTWD`} sub="現金 + 碳權市值" />
-            <StatTile label="可用現金" value={`${twd(p.twd)} mTWD`} sub="存於信託專戶" />
+            <StatTile label="資產總值" value={`${twd(p.totalValue)} ${CASH}`} sub="現金 + 碳權市值" />
+            <StatTile label="可用現金" value={`${twd(p.twd)} ${CASH}`} sub="存於信託專戶" />
             <StatTile
               label="持有碳權"
               value={fmtKg(p.holdingKg)}
@@ -97,7 +98,7 @@ export default function PortfolioPage() {
             />
             <StatTile
               label="總損益"
-              value={`${signed(totalPnl)} mTWD`}
+              value={`${signed(totalPnl)} ${CASH}`}
               accent={totalPnl > 0 ? "up" : totalPnl < 0 ? "down" : "neutral"}
               sub={`已實現 ${signed(p.realisedPnl)}．未實現 ${p.unrealisedPnl == null ? "—" : signed(p.unrealisedPnl)}`}
             />
@@ -107,8 +108,8 @@ export default function PortfolioPage() {
             <Card title="資產配置">
               <Donut
                 slices={[
-                  { label: "碳權市值", value: p.marketValue, hint: `${twd(p.marketValue)} mTWD` },
-                  { label: "現金 mTWD", value: p.twd, hint: `${twd(p.twd)} mTWD` },
+                  { label: "碳權市值", value: p.marketValue, hint: `${twd(p.marketValue)} ${CASH}` },
+                  { label: "現金 mTWD", value: p.twd, hint: `${twd(p.twd)} ${CASH}` },
                 ]}
                 centerLabel="資產總值"
                 centerValue={twd(p.totalValue)}

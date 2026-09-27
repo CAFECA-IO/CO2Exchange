@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useReload } from "@/lib/client/useReload";
-import { useAccount } from "@/components/AccountProvider";
+import { useAccount, useCash } from "@/components/AccountProvider";
 import { Button, Card, Field, Notice, fmtKg, inputCls } from "@/components/ui";
 import { PURPOSE_LABEL, TIER_LABEL, flagOf } from "@/lib/deployment";
 import { fetchJson, postJson } from "@/lib/client/fetchJson";
@@ -34,6 +34,7 @@ type Fees = {
 
 export default function AdminPage() {
   const { me } = useAccount();
+  const CASH = useCash();
   const [tab, setTab] = useState<(typeof tabs)[number]>("KYC 審核");
   const [kyc, setKyc] = useState<KycReq[]>([]);
   const [certs, setCerts] = useState<Cert[]>([]);
@@ -154,7 +155,7 @@ export default function AdminPage() {
                     value={draft.__default?.tradeBps ?? String(fees.defaultTradeBps)}
                     onChange={(e) => setDraft({ ...draft, __default: { tradeBps: e.target.value, retire: draft.__default?.retire ?? String(Number(fees.defaultRetireFeePerTonne) / 1e6) } })} />
                 </Field>
-                <Field label="註銷（mTWD / 噸）">
+                <Field label={`註銷（${CASH} / 噸）`}>
                   <input className={`${inputCls} w-28`} type="number" min="0" step="0.01"
                     value={draft.__default?.retire ?? String(Number(fees.defaultRetireFeePerTonne) / 1e6)}
                     onChange={(e) => setDraft({ ...draft, __default: { tradeBps: draft.__default?.tradeBps ?? String(fees.defaultTradeBps), retire: e.target.value } })} />
@@ -173,7 +174,7 @@ export default function AdminPage() {
                 <thead className="text-left text-ink-300">
                   <tr>
                     <th className="py-1">轄區</th><th>機制</th><th>狀態</th>
-                    <th>交易（bps）</th><th>註銷（mTWD / 噸）</th><th></th>
+                    <th>交易（bps）</th><th>註銷（{CASH} / 噸）</th><th></th>
                   </tr>
                 </thead>
                 <tbody>

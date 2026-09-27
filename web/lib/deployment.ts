@@ -10,6 +10,11 @@ export type Deployment = {
   reserveAttestation: Address;
   feeSchedule: Address;
   settlementToken: Address; listing: Address; cct: Address; carbonPool: Address;
+  /// 這個結算幣是不是本站自己發的（MockTWD）。
+  /// false ＝ 外部代幣（Boltchain 上是 CAFECA 的 TWDC），本站沒有鑄幣權，
+  /// demo faucet 不能用。舊的部署檔沒有這個欄位，所以是 optional；
+  /// 讀的時候當 undefined 為「不確定」而不是 true——猜錯的方向要選安全的那一邊。
+  settlementMintable?: boolean;
   poolManager: Address; hook: Address; router: Address; accountFactory: Address;
   /// 交易所資產池。使用者在交易所期間，碳權與結算幣都在這裡；每個 epoch 提交餘額樹 root。
   /// 舊的部署檔沒有這個欄位——Bank 是後來才加的，沒有它就代表這條鏈還沒有資產池。
