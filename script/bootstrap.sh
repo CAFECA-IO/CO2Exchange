@@ -26,6 +26,11 @@ cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 RPC_URL=${RPC_URL:-http://127.0.0.1:28545}
 ENV_FILE=${ENV_FILE:-$ROOT/web/.env.local}
+# 治理金鑰**不放在 web/.env.local**。那個檔案是網站執行期讀的——
+# 讓網站伺服器持有國家 Safe 的 owner 金鑰，等於把主權／營運分權整個抵銷掉：
+# 攻進網站的人就拿到了凍結任何人、撤換營運方、升級合約的能力。
+# 所以另外一個檔案，網站永遠不會讀它。
+GOV_FILE=${GOV_FILE:-$ROOT/.governance.env}
 DEPLOY_GAS=${DEPLOY_GAS:-60000000}
 SERVICE_GAS=${SERVICE_GAS:-20000000}
 SAFETY=${SAFETY:-2}
@@ -135,7 +140,78 @@ cmd_keys () {
     printf '   %-22s 已產生        %s\n' "$k" "$(addr_of "$pk")"
     unset out pk
   done
-  echo ">> 金鑰寫在 ${ENV_FILE}（權限 600，已在 .gitignore）。私鑰不會印出來。"
+  echo ">> 服務金鑰寫在 ${ENV_FILE}（權限 600，已在 .gitignore）。私鑰不會印出來。"
+  echo
+  cmd_gov_keys
+}
+
+# ── 治理 Safe 的 owner ──────────────────────────────────────────────
+#
+# 國家 Safe 2-of-3、營運 Safe 1-of-2。部署腳本吃的是**地址清單**
+# （NATIONAL_OWNERS / OPERATOR_OWNERS），私鑰只有之後用 govern.sh 簽字時才會用到。
+#
+# 預設值是 anvil 的帳戶 5~9，而那些金鑰印在 anvil 的啟動畫面上——所以在公開鏈上
+# 部署腳本會直接 revert（PublicKeyOnPublicChain）。那個檢查是對的：用它們部署
+# 等於把治理權公開送出去。
+#
+# ⚠️ **這裡產生的五把金鑰全部落在同一台機器上。**
+#    對 Phase 0 展示可以，對真正的治理不行——2-of-3 的意義在於三把金鑰由三個
+#    不同的人、在三台不同的裝置上保管。正式部署時應該由各持有人自己產生，
+#    只把**地址**交出來，設成 NATIONAL_OWNERS / OPERATOR_OWNERS 就好，
+#    這支腳本會直接沿用、不會另外產生。
+GOV_KEYS="NATIONAL_OWNER_1_PK NATIONAL_OWNER_2_PK NATIONAL_OWNER_3_PK OPERATOR_OWNER_1_PK OPERATOR_OWNER_2_PK"
+
+gov_get () { [ -f "$GOV_FILE" ] && sed -n "s/^$1=\(.*\)$/\1/p" "$GOV_FILE" | tail -1 || true; }
+gov_set () {
+  local k=$1 v=$2 tmp; tmp=$(mktemp)
+  if [ -f "$GOV_FILE" ] && grep -q "^${k}=" "$GOV_FILE"; then
+    awk -v k="$k" -v v="$v" -F= 'BEGIN{OFS="="} $1==k {print k "=" v; next} {print}' "$GOV_FILE" > "$tmp"
+  else
+    [ -f "$GOV_FILE" ] && cat "$GOV_FILE" > "$tmp"
+    printf '%s=%s\n' "$k" "$v" >> "$tmp"
+  fi
+  mv "$tmp" "$GOV_FILE"; chmod 600 "$GOV_FILE"
+}
+
+cmd_gov_keys () {
+  # 外部已經給了地址清單就照用，不要另外產生——那才是正式的樣子。
+  if [ -n "${NATIONAL_OWNERS:-}" ] && [ -n "${OPERATOR_OWNERS:-}" ]; then
+    echo ">> 治理 owner 由環境變數提供，不另外產生"
+    echo "   NATIONAL_OWNERS  ${NATIONAL_OWNERS}"
+    echo "   OPERATOR_OWNERS  ${OPERATOR_OWNERS}"
+    return 0
+  fi
+  [ -f "$GOV_FILE" ] || { : > "$GOV_FILE"; chmod 600 "$GOV_FILE"; }
+  echo ">> 治理 Safe 的 owner（國家 2-of-3、營運 1-of-2）"
+  local k cur out pk
+  for k in $GOV_KEYS; do
+    cur=$(gov_get "$k")
+    if usable "$cur"; then
+      printf '   %-22s 已存在，保留  %s\n' "$k" "$(addr_of "$cur")"
+      continue
+    fi
+    out=$(cast wallet new)
+    pk=$(printf '%s' "$out" | sed -n 's/^Private key: *//p')
+    [ -n "$pk" ] || { echo "!! cast wallet new 的輸出看不懂，中止"; exit 1; }
+    gov_set "$k" "$pk"
+    printf '   %-22s 已產生        %s\n' "$k" "$(addr_of "$pk")"
+    unset out pk
+  done
+  echo ">> 治理金鑰寫在 ${GOV_FILE}（權限 600，網站**不會**讀它）"
+  echo "   ⚠️ 五把都在這一台機器上。2-of-3 的意義是三個人三台裝置——"
+  echo "      正式部署請由各持有人自己產生，只把地址設成 NATIONAL_OWNERS / OPERATOR_OWNERS。"
+}
+
+# 把治理金鑰換算成部署腳本要的地址清單
+gov_owner_lists () {
+  if [ -n "${NATIONAL_OWNERS:-}" ] && [ -n "${OPERATOR_OWNERS:-}" ]; then return 0; fi
+  local n1 n2 n3 o1 o2
+  n1=$(addr_of "$(gov_get NATIONAL_OWNER_1_PK)"); n2=$(addr_of "$(gov_get NATIONAL_OWNER_2_PK)"); n3=$(addr_of "$(gov_get NATIONAL_OWNER_3_PK)")
+  o1=$(addr_of "$(gov_get OPERATOR_OWNER_1_PK)"); o2=$(addr_of "$(gov_get OPERATOR_OWNER_2_PK)")
+  [ -n "$n1" ] && [ -n "$n2" ] && [ -n "$n3" ] && [ -n "$o1" ] && [ -n "$o2" ] \
+    || { echo "!! 治理金鑰還沒產生，先跑 bash script/bootstrap.sh keys"; exit 1; }
+  export NATIONAL_OWNERS="$n1,$n2,$n3"
+  export OPERATOR_OWNERS="$o1,$o2"
 }
 
 # ── fund ───────────────────────────────────────────────────────────
@@ -194,6 +270,7 @@ cmd_fund () {
   for k in $KEY_NAMES; do
     [ "$(key_gas "$k")" = "0" ] && printf '   %s 不需要餘額：%s\n' "$k" "$(key_role "$k")"
   done
+  echo "   治理 Safe 的 owner 也不需要餘額：簽章是鏈下的，execTransaction 的 gas 由 SENDER_PK 付"
   if [ "$short" = "1" ]; then
     echo
     echo ">> 還沒夠。撥款到上面標 ✗ 的地址，然後再跑一次："
@@ -220,14 +297,28 @@ cmd_deploy () {
   export DEPLOYER_PK=$pk
   export RPC_URL
 
+  # 治理 owner。沒有這一步，公開鏈上會撞到 PublicKeyOnPublicChain——
+  # 部署腳本拒絕用 anvil 的預設帳戶當國家 Safe 的持有人，而那是對的。
+  gov_owner_lists
+  export NATIONAL_THRESHOLD=${NATIONAL_THRESHOLD:-2}
+  export OPERATOR_THRESHOLD=${OPERATOR_THRESHOLD:-1}
+
   local script=script/DeployV4.s.sol
   # 沒有 EIP-1153 的鏈部署不了 v4，改用核心那一支。
   local probe
   probe=$(rpc_result '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"data":"0x600160005D60005C60005260206000F3"},"latest"]}') || true
   case "$probe" in *1) ;; *) script=script/Deploy.s.sol; echo ">> 這條鏈沒有 EIP-1153，改用 ${script}（少 v4 展示模組，主市場不受影響）";; esac
 
+  # 部署是一串幾十筆交易。中途按 Ctrl-C 或連線斷掉，鏈上會留下做到一半的狀態，
+  # 而**下一次重跑會撞上 "nonce too low" / "replacement transaction underpriced"**——
+  # 那個錯誤完全看不出是上一次中斷造成的。本機鏈重開就好；外部鏈得先確認
+  # broadcast/ 底下那一份 run-latest.json 送到哪裡，再決定是續傳還是換一把 deployer。
   echo ">> 部署 ${script} → chainId ${CHAIN_ID}"
+  echo "   這會送出幾十筆交易，需要幾分鐘。**中途不要中斷**——中斷之後重跑會看到"
+  echo "   nonce 相關的錯誤，而那個訊息看不出原因。"
   echo "   COMMITTER = ${COMMITTER}（relayer，這樣 bank:commit 才送得出去）"
+  echo "   NATIONAL_OWNERS = ${NATIONAL_OWNERS}（${NATIONAL_THRESHOLD}-of-3）"
+  echo "   OPERATOR_OWNERS = ${OPERATOR_OWNERS}（${OPERATOR_THRESHOLD}-of-2）"
   [ -n "${SETTLEMENT_TOKEN:-}" ] \
     && echo "   SETTLEMENT_TOKEN = ${SETTLEMENT_TOKEN}（不會自己發 MockTWD）" \
     || echo "   ⚠️ 沒有 SETTLEMENT_TOKEN，會部署 MockTWD。外部鏈上通常該指定既有的結算幣。"
@@ -261,6 +352,8 @@ PY
   echo ">> 還要做的兩件事："
   echo "   1. web/.env.local 的 SITE_ORIGIN 要與瀏覽器網址列逐字相同（含 scheme 與 port）"
   echo "   2. 登入一次，把 /account 上的地址填進 ADMIN_ADDRESSES，然後重啟"
+  echo "   3. ./script/govern.sh status —— 每一格都該是 true，admin 指向 Timelock、sov 指向國家 Safe"
+  echo "      之後要動治理時：govern.sh 的簽章金鑰在 ${GOV_FILE}，送出 execTransaction 需要 SENDER_PK（任何有餘額的帳戶）"
 }
 
 # ── status ─────────────────────────────────────────────────────────

@@ -246,6 +246,19 @@ cd web && npm install && npm run build && npm start
 **四、寫回設定檔並印出地址。** `RPC_URL` / `CHAIN_ID` / `SETTLEMENT_TOKEN` 寫進
 `web/.env.local`，合約地址從 `deployments/<chainId>.json` 列出來。
 
+**治理 Safe 的 owner 也會一起產生**（國家 2-of-3、營運 1-of-2），寫在
+`.governance.env`——**不是** `web/.env.local`。這個分野是實質的：讓網站伺服器持有
+國家 Safe 的 owner 金鑰，等於把主權／營運分權整個抵銷掉，攻進網站的人就拿到了
+凍結任何人、撤換營運方、升級合約的能力。
+
+> ⚠️ 腳本產生的五把治理金鑰**全部落在同一台機器上**。對 Phase 0 展示可以，
+> 對真正的治理不行——2-of-3 的意義在於三把金鑰由三個人、在三台裝置上保管。
+> 正式部署時由各持有人自己產生，只把**地址**設成 `NATIONAL_OWNERS` /
+> `OPERATOR_OWNERS`，腳本就會直接沿用、不另外產生。
+
+owner 也不需要餘額：Safe 的簽章是鏈下的，`execTransaction` 的 gas 由 `SENDER_PK`
+（任何有餘額的帳戶）付。
+
 它還順手修掉一個一定會踩的坑：`COMMITTER` 預設等於 `OPERATOR`（也就是 deployer），
 但送出承諾的腳本用的是 `COMMITTER_PK ?? RELAYER_PK`。兩邊對不上，第一次
 `npm run bank:commit` 必定 AccessControl revert，而那個錯誤看不出是這裡設錯。
@@ -999,6 +1012,8 @@ creation bytecode 直接 CREATE —— 官方版本是 solc 0.7.6 編的，本�
 | 下單被擋，說簽章沒有通過驗證 | 公開鏈上委託單一定要簽。前端要先走簽章通道，`expiry` 也必須由呼叫端帶 |
 | 「領取測試幣」按鈕不見了 | 結算幣是外部代幣（TWDC），本站沒有鑄幣權。這是對的，測試幣要向發行方取得 |
 | 部署腳本最後一筆 `AttestationExpired` | anvil 閒置太久，見下 |
+| 重跑部署時 `nonce too low` / `replacement transaction underpriced` | 上一次部署中途被中斷，鏈上留下做到一半的狀態。本機鏈重開就好；外部鏈先看 `broadcast/<script>/<chainId>/run-latest.json` 送到哪裡 |
+| 部署被 `PublicKeyOnPublicChain` 擋下 | 有一個角色還用著 anvil 的預設帳戶（常見的是 `NATIONAL_OWNERS`）。`bash script/bootstrap.sh keys` 會一併產生治理 owner |
 | 重新部署後畫面有資料但對不上鏈 | `web/data/` 的舊紀錄，見下 |
 | 磁碟莫名其妙滿了 | `~/.foundry/anvil/tmp/` 的歷史狀態，見[建立模擬資料](#建立模擬資料) |
 | 首頁地球轉但沒有柱子 | 鏈上還沒有核發資料，跑 `bash script/demo-box.sh rebuild` |
