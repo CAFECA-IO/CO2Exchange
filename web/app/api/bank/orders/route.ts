@@ -52,7 +52,7 @@ const big = (v: string | undefined, d = 0n) => (v === undefined || v === "" ? d 
 export async function GET() {
   try {
     const m = await requireRole("user");
-    const wallet = await walletOf(m.email, m.id);
+    const wallet = await walletOf(m.address);
     const account = wallet.address as Address;
     const h = head();
     const events = readEvents();
@@ -77,7 +77,7 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const m = await requireRole("user");
-    const wallet = await walletOf(m.email, m.id);
+    const wallet = await walletOf(m.address);
     const account = wallet.address as Address;
     if (!isAddress(account)) return fail("INVALID_ADDRESS", { details: { param: "account" } });
 

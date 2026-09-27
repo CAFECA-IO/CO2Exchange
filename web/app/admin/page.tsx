@@ -6,7 +6,7 @@ import { Button, Card, Field, Notice, fmtKg, inputCls } from "@/components/ui";
 import { PURPOSE_LABEL, TIER_LABEL, flagOf } from "@/lib/deployment";
 import { fetchJson, postJson } from "@/lib/client/fetchJson";
 
-type KycReq = { id: string; account: string; tier: number; idNumberMasked: string; name: string; email: string; status: string; reason?: string; txHash?: string; createdAt: string; decidedBy?: string };
+type KycReq = { id: string; account: string; tier: number; idNumberMasked: string; name: string; submittedBy: string; status: string; reason?: string; txHash?: string; createdAt: string; decidedBy?: string };
 type Cert = { certId: number; batchId: number; amountKg: number; beneficiary: string; purpose: number; retiredAt: number; owner: string; pdfHash: string | null; onchainHash: string | null; anchored: boolean };
 type Gov = {
   matrix: { name: string; address: string; admin: boolean; sovereign: boolean | null; operator: boolean | null }[];
@@ -94,7 +94,7 @@ export default function AdminPage() {
               {pendingKyc.map((r) => (
                 <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-ink-500 p-3" data-testid="kyc-row">
                   <div className="flex-1">
-                    <div>{TIER_LABEL[r.tier]} · {r.name || "—"} · {r.idNumberMasked} · {r.email}</div>
+                    <div>{TIER_LABEL[r.tier]} · {r.name || "—"} · {r.idNumberMasked} · {r.submittedBy}</div>
                     <div className="font-mono text-xs text-ink-300">{r.account}</div>
                   </div>
                   <Button onClick={() => act("核准", () => post("/api/kyc/decide", { id: r.id, approve: true }))} disabled={!!busy}>核准</Button>

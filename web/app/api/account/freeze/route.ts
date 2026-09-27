@@ -19,7 +19,7 @@ import { submit } from "@/lib/server/tx";
 export async function POST() {
   try {
     const m = await requireRole("user");
-    const w = await walletOf(m.email, m.id);
+    const w = await walletOf(m.address);
     if (!w.exists) throw new ApiError("WALLET_NOT_DEPLOYED", "還沒有鏈上錢包，沒有東西可以凍結");
     if (w.frozen) return ok({ ...w, alreadyFrozen: true });
 
@@ -27,6 +27,6 @@ export async function POST() {
       address: w.address, abi: passkeyAccountAbi, functionName: "freeze", account: relayerClient.account,
     });
     const { hash: txHash } = await submit(request);
-    return ok({ ...(await walletOf(m.email, m.id)), txHash });
+    return ok({ ...(await walletOf(m.address)), txHash });
   } catch (e) { return handleError(e); }
 }

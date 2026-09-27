@@ -31,6 +31,12 @@ export const ERRORS = {
   VERIFIER_REQUIRED: { status: 403, message: "需要查驗機構權限" },
   /// 登入了，但鏈上身分不足（未驗證、過期、被凍結）
   KYC_REQUIRED: { status: 403, message: "這個操作需要有效的鏈上身分驗證" },
+  /// 「以 CAFECA 登入」沒有通過驗證。網域不符、nonce 重用或過期、身分合約不承認簽章
+  /// ——都收斂到同一個碼。理由是安全：對外分辨不出是哪一項失敗，攻擊者就少一條
+  /// 逐項試探的路；真正的原因放在訊息裡給人看、也進伺服器日誌。
+  SIGNIN_REJECTED: { status: 401, message: "登入驗證沒有通過" },
+  /// 身分正在恢復中（有人正在主張自己是這個帳戶的主人）。敏感操作先停。
+  IDENTITY_RECOVERING: { status: 409, message: "這個身分正在恢復中，暫時無法執行這個操作" },
 
   // ── 輸入 ─────────────────────────────────────────────────────
   INVALID_PARAM: { status: 400, message: "參數不正確" },

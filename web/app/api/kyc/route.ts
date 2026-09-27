@@ -31,7 +31,7 @@ export async function POST(req: Request) {
     if (tier !== TIER.Individual && tier !== TIER.Corporate) throw new ApiError("INVALID_PARAM", "身分等級只能是自然人或法人", { param: "tier" });
     const idn = validateId(tier, String(body.idNumber ?? ""));
     const row = insert<KycRequest>("kyc-requests", {
-      account, tier, idNumber: idn, name: String(body.name ?? "").slice(0, 100), email: m.email, status: "pending",
+      account, tier, idNumber: idn, name: String(body.name ?? "").slice(0, 100), submittedBy: m.address, status: "pending",
     });
     if (process.env.KYC_AUTO_APPROVE === "1") {
       const r = await attestAndRegister(account, tier, idn);

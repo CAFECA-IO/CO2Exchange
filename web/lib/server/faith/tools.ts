@@ -28,7 +28,6 @@ import { PURPOSE_LABEL, TIER_LABEL, countryToBytes2 } from "@/lib/deployment";
 export type Ctx = {
   /// 已登入者的錢包地址。null = 匿名訪客，只能問公開資料。
   address?: `0x${string}`;
-  email?: string;
   userId?: string;
   /// 使用者現在在看哪一頁
   path?: string;
@@ -157,7 +156,7 @@ export const TOOLS: { spec: FaithTool; run: Impl; needsLogin?: boolean }[] = [
     },
     needsLogin: true,
     run: async (_a, ctx) => {
-      const w = await walletOf(ctx.email, ctx.userId);
+      const w = await walletOf(ctx.address!);
       // credentialId 與公鑰不必進模型的上下文：它們對回答問題沒有幫助，
       // 而少送一點使用者的識別資料就是少一點。
       return {

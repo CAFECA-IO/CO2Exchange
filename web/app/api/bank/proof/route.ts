@@ -18,7 +18,7 @@ import { walletOf } from "@/lib/server/wallet";
 export async function GET() {
   try {
     const m = await requireRole("user");
-    const wallet = await walletOf(m.email, m.id);
+    const wallet = await walletOf(m.address);
     const account = wallet.address;
     if (!isAddress(account)) return fail("INVALID_ADDRESS", { details: { param: "account" } });
 

@@ -34,7 +34,7 @@ export async function GET(req: Request) {
     }
 
     const m = await requireRole("user");
-    return ok(await walletOf(m.email, m.id));
+    return ok(await walletOf(m.address));
   } catch (e) { return handleError(e); }
 }
 
@@ -56,7 +56,7 @@ export async function POST(req: Request) {
     const keyId = keyIdOf(qx, qy);
     const name = (label ?? "這台裝置").slice(0, 64);
 
-    const before = await walletOf(m.email, m.id);
+    const before = await walletOf(m.address);
     const d = deployment();
 
     if (!before.exists) {
@@ -67,9 +67,9 @@ export async function POST(req: Request) {
       const { hash: txHash } = await submit(request);
       putKey({
         credentialId, publicKey: publicKey as Hex, keyId, accountRef: before.accountRef,
-        address: before.address, label: name, userId: m.id, email: m.email,
+        address: before.address, label: name, userId: m.id,
       });
-      return ok({ ...(await walletOf(m.email, m.id)), created: true, txHash, keyId });
+      return ok({ ...(await walletOf(m.address)), created: true, txHash, keyId });
     }
 
     // 錢包已經在鏈上。這把金鑰已經註冊過的話，補上本機對照就好——
@@ -78,9 +78,9 @@ export async function POST(req: Request) {
     if (known) {
       putKey({
         credentialId, publicKey: publicKey as Hex, keyId, accountRef: before.accountRef,
-        address: before.address, label: known.label || name, userId: m.id, email: m.email,
+        address: before.address, label: known.label || name, userId: m.id,
       });
-      return ok({ ...(await walletOf(m.email, m.id)), created: false, keyId });
+      return ok({ ...(await walletOf(m.address)), created: false, keyId });
     }
 
     // 新的一把金鑰，但錢包已經有主人了。**不能**就這樣加進去——
@@ -88,8 +88,8 @@ export async function POST(req: Request) {
     // 就直接成為錢包的共同持有人。所以它進待核准區，等某一台現有裝置簽字。
     putKey({
       credentialId, publicKey: publicKey as Hex, keyId, accountRef: before.accountRef,
-      address: before.address, label: name, userId: m.id, email: m.email, pending: true,
+      address: before.address, label: name, userId: m.id, pending: true,
     });
-    return ok({ ...(await walletOf(m.email, m.id)), created: false, keyId, needsExistingKey: true });
+    return ok({ ...(await walletOf(m.address)), created: false, keyId, needsExistingKey: true });
   } catch (e) { return handleError(e); }
 }

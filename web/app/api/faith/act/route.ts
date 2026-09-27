@@ -18,10 +18,10 @@ export async function POST(req: Request) {
     const { kind, params } = (await req.json()) as { kind?: string; params?: Record<string, unknown> };
     if (!kind) throw new ApiError("MISSING_PARAM", "缺少 kind", { param: "kind" });
     const who = await me();
-    const wallet = who ? await walletOf(who.email, who.id).catch(() => null) : null;
+    const wallet = who ? await walletOf(who.address).catch(() => null) : null;
     const preview = await buildAction(kind as ActionKind, params ?? {}, {
       address: wallet?.exists ? wallet.address : undefined,
-      email: who?.email, userId: who?.id,
+      userId: who?.id,
     });
     return ok(preview);
   } catch (e) { return handleError(e); }

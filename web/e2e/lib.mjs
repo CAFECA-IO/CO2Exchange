@@ -9,7 +9,8 @@ export const BASE = process.env.BASE_URL ?? "http://localhost:10010";
 /// 固定 email 因此等於跨執行共用同一個帳戶：第二次跑的 alice 會帶著上一次的
 /// 餘額與持倉開始，於是「領取 mTWD 之後餘額是 100,000」這種檢查就會爆掉——
 /// 爆的不是功能，是測試自己留下的狀態。
-/// 管理員與查驗機構不能這樣做：它們的權限是 ADMIN_EMAILS / VERIFIER_EMAILS 白名單。
+/// 管理員與查驗機構不能這樣做：它們的權限是 ADMIN_ADDRESSES / VERIFIER_ADDRESSES 白名單，
+/// 而開發用登入是從這個字串推出一個固定地址，所以那兩個標籤必須維持不變。
 const RUN = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 /// 所有 API 都回 `{ok,data}` / `{ok,error}` 的信封（見 lib/server/api.ts）。
 /// e2e 想看的幾乎都是信封裡那一層，所以在這裡拆一次，各個測試就不必各拆各的。
@@ -66,7 +67,7 @@ export async function login(page, email) {
   await page.goto(BASE);
   await page.waitForFunction(() => document.cookie.includes("csrf") || !!document.querySelector("form"), null, { timeout: 15_000 }).catch(() => {});
   const submit = async () => {
-    await page.getByPlaceholder("you@example.com").fill(email);
+    await page.getByPlaceholder("0x… 或 alice").fill(email);
     await page.getByRole("button", { name: "登入", exact: true }).click();
     return page.locator("text=登出").waitFor({ timeout: 20_000 }).then(() => true, () => false);
   };

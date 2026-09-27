@@ -47,7 +47,7 @@ export async function POST(req: Request) {
     const ext = report.name.toLowerCase().endsWith(".pdf") ? ".pdf" : "";
     const saved = saveUpload(buf, ext);
     const row = insert<IssuanceRequest>("issuance-requests", {
-      projectId, projectName: p.name, owner, submittedBy: m.email, monitoringStart, monitoringEnd, amountKg,
+      projectId, projectName: p.name, owner, submittedBy: m.address, monitoringStart, monitoringEnd, amountKg,
       reportFile: saved.name, reportHash: saved.sha256, reportName: report.name, note, status: "pending",
     });
     return ok(row);

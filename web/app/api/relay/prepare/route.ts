@@ -38,7 +38,7 @@ export async function POST(req: Request) {
       // intent 一律綁**目前登入者自己的**錢包，不看呼叫端給的地址：
       // 金鑰管理是這個系統裡最敏感的一組操作，沒有理由讓它接受外來的目標地址。
       const m = await requireRole("user");
-      const w = await walletOf(m.email, m.id);
+      const w = await walletOf(m.address);
       if (!w.exists) throw new ApiError("WALLET_NOT_DEPLOYED", "還沒有鏈上錢包");
       account = w.address;
       typed = callsFor(w.address, body.intent);

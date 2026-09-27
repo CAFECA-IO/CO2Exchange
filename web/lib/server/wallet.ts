@@ -59,8 +59,8 @@ export function addressFor(accountRef: Hex): Promise<Address> {
   });
 }
 
-export async function walletOf(email?: string | null, userId?: string | null): Promise<WalletView> {
-  const accountRef = refOf(email, userId);
+export async function walletOf(identity: Address): Promise<WalletView> {
+  const accountRef = refOf(identity);
   const address = await addressFor(accountRef);
   const code = await publicClient.getCode({ address });
   const local = keysOfRef(accountRef);

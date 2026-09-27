@@ -63,13 +63,13 @@ export async function POST(req: Request) {
     const recent = history.slice(-12);
 
     const who = await me();
-    const wallet = who ? await walletOf(who.email, who.id).catch(() => null) : null;
+    const wallet = who ? await walletOf(who.address).catch(() => null) : null;
     const ctx: Ctx = {
       address: wallet?.exists ? wallet.address : undefined,
-      email: who?.email, userId: who?.id,
+      userId: who?.id,
       path: typeof body.path === "string" ? body.path.slice(0, 120) : undefined,
     };
-    rateLimit(who?.email ?? req.headers.get("x-forwarded-for") ?? "anon");
+    rateLimit(who?.address ?? req.headers.get("x-forwarded-for") ?? "anon");
 
     const tools = [...toolSpecs(ctx), PROPOSE];
     const turns: Turn[] = recent.map((m) => ({ role: m.role, content: m.content }));

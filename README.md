@@ -931,9 +931,44 @@ python3 scripts/gen-globe-mask.py ./package > lib/globe-mask.ts
 否則申請會卡在沒有人能核准的佇列裡（要走查驗核發那條線同理，`VERIFIER_EMAILS` 也要加）。憑證 PDF 用 `fonts/NotoSansTC-Subset.otf`（Big5 常用字子集），
 檔案 SHA-256 由 `DOCUMENT_SIGNER_PK`（`DOCUMENT_ROLE`）回寫鏈上，任何人可重算比對。
 
-### 錢包：一個登入帳號一個錢包，一個錢包多把 passkey
+### 身分：以 CAFECA 登入
 
-`PasskeyAccount` 的地址是 `CREATE2(salt = accountRef)`，而 `accountRef = keccak256("co2x:account:v1:" + 登入 email)`。
+登入 = **證明你控制一個 CAFECA 身分合約**。那個合約地址就是使用者在本站的唯一 ID。
+
+協定是 EIP-712 的 `SignIn` 結構加 ERC-1271：後端發一個一次性 nonce，錢包讓使用者以 Passkey 簽下
+「要登入哪個網域、用哪個 nonce、同意提供哪些資料」，後端再以一次 `eth_call` 問那個身分合約
+`isValidSignature` ——回 `0x1626ba7e` 就代表這個人確實控制它。不需要向 CAFECA 註冊、
+不需要 client ID，驗證過程也不經過 CAFECA 的伺服器。
+
+三道檢查，缺一不可（`web/lib/server/cafeca/verify.ts`）：
+
+| 檢查 | 擋掉什麼 | 要點 |
+| --- | --- | --- |
+| `message.domain` 與 `SITE_ORIGIN` **逐字**相同 | 仿冒網站 | 在假網站上簽的訊息帶的是假網站的網域。**不能用 `endsWith` 或只比主機名**——那樣 `shop.example.attacker.com` 會過關 |
+| nonce 是本站發的、沒用過、沒過期 | 重送 | nonce 帶 HMAC（所以不必存狀態就知道是不是自己發的），另存一份用過清單；並綁在一個 httpOnly cookie 上，所以別的瀏覽器送不進來 |
+| 身分合約自己承認這個簽章 | 冒充 | ERC-1271。合約不存在、鏈連不上、回錯 magic value——三種都當作驗證失敗 |
+
+`kyc_level`（0 未實名 / 2 證件＋臉部）與 `handle` 是使用者可以**逐項取消**的。
+`kyc_level` 決定 `KYCRegistry` 的 tier；`handle` 純顯示，而且要向錢包查一次才採信——
+回應裡自稱的那一個不進簽章，改了也不會讓驗證失敗。
+
+> **AI 子錢包是獨立地址，也能產生有效簽章，但不會有實名等級。**
+> 所以「只接受本人」的操作一律要求 `kyc_level ≥ 2`，這道門順帶把子錢包擋在外面。
+
+**目前的缺口，不要在對外文件上說過頭：** CAFECA 的登入通道依設計只簽 `SignIn` 這一種結構，
+**不會替本站簽任意訊息**，也沒有 EIP-1193 provider。所以：
+
+- 委託單簽章（未完成事項 2.1）**沒有**因此補上。「這張單是這個帳戶下的」靠的仍然是 session。
+- `/trade`、`/retire`、`/enterprise` 目前仍走「使用者以本站 passkey 自簽鏈上交易」那條路。
+  要讓 CAFECA 帳戶**直接**成為帳本上的地址，這三頁必須先改走 Bank 資產池（未完成事項 2.3）——
+  在託管模型下使用者的動作是帳本分錄，平台執行上鏈，本來就不需要使用者自簽。
+- 在那之前是**過渡形狀**：CAFECA 決定「你是誰」，本站的 `PasskeyAccount` 仍然負責「怎麼簽」，
+  兩者以 `accountRef = keccak256("co2x:account:v2:" + CAFECA 地址)` 接起來。
+  v1 用的是登入信箱，而信箱可以被登入供應商重新配發給另一個人；v2 的輸入是合約地址，沒有這個問題。
+
+### 錢包：一個身分一個錢包，一個錢包多把 passkey（過渡期）
+
+`PasskeyAccount` 的地址是 `CREATE2(salt = accountRef)`，而 `accountRef = keccak256("co2x:account:v2:" + CAFECA 身分合約地址)`。
 **地址不由 passkey 決定**——綁在 passkey 上的話，換一台手機就是換一個錢包，舊錢包裡的碳權不會跟過來，
 而使用者根本不覺得自己做了「開新戶」這件事。所以金鑰在部署**之後**由 factory 呼叫 `initialise()` 補上
 （放進建構子的話 initCode 會變，地址就跟著金鑰跑了）。
@@ -965,7 +1000,10 @@ python3 scripts/gen-globe-mask.py ./package > lib/globe-mask.ts
 Phase 0 交易由平台 relayer 代送（`/api/relay`，gas 由平台付），授權來自使用者的 WebAuthn 簽章，relayer 無法竄改內容；
 Phase 1 換成 ERC-4337 EntryPoint + paymaster，帳戶簽章格式與 nonce 語意不變。
 
-Apple / Google 登入：在 `.env.local` 設 `AUTH_GOOGLE_ID/SECRET`、`AUTH_APPLE_ID/SECRET` 後自動出現；登入只建立 session，不是身分根。
+角色（管理員 / 查驗機構）以**地址**允許清單判定：`ADMIN_ADDRESSES` / `VERIFIER_ADDRESSES`。
+身分已經是地址，不再有 email。非 production 留空時會退回開發用登入推出來的那兩個地址，
+所以本機與 e2e 零設定就進得去；production 沒設就是**沒有任何管理員**——
+寫死在原始碼裡的管理員地址，在公開鏈上就是一把公開的鑰匙。
 
 ### 費思（站內 AI 助理）
 

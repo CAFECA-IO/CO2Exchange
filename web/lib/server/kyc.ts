@@ -8,7 +8,7 @@ import { ApiError } from "./api";
 
 export type KycRequest = {
   id: string; createdAt: string; updatedAt: string;
-  account: Address; tier: number; idNumber: string; name: string; email: string;
+  account: Address; tier: number; idNumber: string; name: string; submittedBy: string;
   status: "pending" | "approved" | "rejected"; reason?: string; txHash?: Hex; identityHash?: Hex; decidedBy?: string;
 };
 

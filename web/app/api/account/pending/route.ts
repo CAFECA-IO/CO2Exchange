@@ -19,7 +19,7 @@ async function target(req: Request) {
   const keyId = new URL(req.url).searchParams.get("keyId") ?? (await req.json().catch(() => ({}))).keyId;
   if (!isHex(keyId) || keyId.length !== 66) throw new ApiError("INVALID_PARAM", "keyId 必須是 32 bytes 的十六進位字串", { param: "keyId" });
   const row = keyById(keyId as Hex);
-  const w = await walletOf(m.email, m.id);
+  const w = await walletOf(m.address);
   if (!row || row.accountRef.toLowerCase() !== w.accountRef.toLowerCase()) throw new ApiError("NOT_FOUND", "找不到這個待核准的裝置請求");
   return { m, w, row, keyId: keyId as Hex };
 }
@@ -29,12 +29,12 @@ async function target(req: Request) {
 export async function POST(req: Request) {
   try {
     const { m, row, keyId } = await target(req);
-    const after = await walletOf(m.email, m.id);
+    const after = await walletOf(m.address);
     if (!after.keys.some((k) => k.keyId.toLowerCase() === keyId.toLowerCase())) {
       throw new ApiError("KEY_NOT_ON_CHAIN", "這把金鑰還沒上鏈，核准尚未生效");
     }
     putKey({ ...row, pending: false });
-    return ok(await walletOf(m.email, m.id));
+    return ok(await walletOf(m.address));
   } catch (e) { return handleError(e); }
 }
 
@@ -44,6 +44,6 @@ export async function DELETE(req: Request) {
   try {
     const { m, keyId } = await target(req);
     dropKey(keyId);
-    return ok(await walletOf(m.email, m.id));
+    return ok(await walletOf(m.address));
   } catch (e) { return handleError(e); }
 }

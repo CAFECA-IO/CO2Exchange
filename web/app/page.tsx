@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useAccount } from "@/components/AccountProvider";
 import { Button, Field, Notice, inputCls } from "@/components/ui";
 import { NO_LOGIN_BODY, NO_LOGIN_TITLE, hasLogin } from "@/lib/login";
+import { signInWithCafeca } from "@/lib/client/cafeca";
 import GlobeHero from "@/components/GlobeHero";
 import { LogoMark } from "@/components/Logo";
 
@@ -24,7 +25,7 @@ function NextStep() {
   const providers = config?.providers ?? [];
   // dev 是唯一的登入方式時（本機開發、Phase 0 展示），表單直接攤開。
   // 把唯一的入口收在一個「開發用登入」按鈕後面，只是讓每個人都多點一下。
-  const devOnly = providers.includes("dev") && !providers.includes("google") && !providers.includes("apple");
+  const devOnly = providers.includes("dev") && !providers.includes("cafeca");
   const [showDev, setShowDev] = useState(false);
 
   const run = async (fn: () => Promise<unknown>) => {
@@ -45,11 +46,22 @@ function NextStep() {
       <div className="flex flex-wrap items-center gap-2">
         {!session?.user ? (
           <>
-            {providers.includes("google") && (
-              <Button onClick={() => signIn("google", { callbackUrl: "/" })}>使用 Google 登入</Button>
-            )}
-            {providers.includes("apple") && (
-              <Button variant="secondary" onClick={() => signIn("apple", { callbackUrl: "/" })}>使用 Apple 登入</Button>
+            {providers.includes("cafeca") && (
+              // 這個 onClick 直接呼叫 signInWithCafeca，中間**不 await 任何東西**：
+              // 彈出視窗必須開在使用者手勢的作用範圍內，先 await 一個 fetch
+              // 就會被瀏覽器擋下。nonce 是以函式的形式交給 SDK 的，見 lib/client/cafeca.ts。
+              <Button
+                disabled={!!busy}
+                onClick={() =>
+                  run(async () => {
+                    const response = await signInWithCafeca();
+                    const r = await signIn("cafeca", { response, redirect: false });
+                    if (r?.error) throw new Error("登入驗證沒有通過");
+                  })
+                }
+              >
+                以 CAFECA 登入
+              </Button>
             )}
             {providers.includes("dev") && !devOnly && (
               <button onClick={() => setShowDev((v) => !v)} className="text-xs text-ink-300 underline hover:text-ink-50">
@@ -110,13 +122,13 @@ function NextStep() {
           onSubmit={(e) => {
             e.preventDefault();
             run(async () => {
-              const r = await signIn("dev", { email, redirect: false });
+              const r = await signIn("dev", { address: email, redirect: false });
               if (r?.error) throw new Error("登入失敗");
             });
           }}
         >
-          <Field label="開發用登入（任意 email）">
-            <input className={inputCls} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" required />
+          <Field label="開發用登入（地址或代號）">
+            <input className={inputCls} type="text" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="0x… 或 alice" required />
           </Field>
           <Button type="submit">登入</Button>
         </form>
@@ -126,7 +138,7 @@ function NextStep() {
         // 「尚未建立鏈上帳戶」對換了裝置的人來說是錯的：錢包好端端在鏈上，
         // 只是這個瀏覽器沒有那把 passkey。知道了就要照實講。
         <p className="text-xs text-ink-300">
-          已登入 {session.user.email}。
+          已登入 {session.user.name ?? session.user.id}。
           {hasWallet && wallet ? (
             <>
               你的錢包是 <span className="font-mono">{wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}</span>

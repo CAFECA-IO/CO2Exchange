@@ -12,8 +12,8 @@ export async function POST(req: Request, ctx: RouteContext<"/api/issuance/[id]">
     const row = find<IssuanceRequest>("issuance-requests", id);
     if (!row) throw new ApiError("NOT_FOUND", "找不到這筆核發申請");
     if (row.status !== "pending") throw new ApiError("ALREADY_EXISTS", "這筆申請已經處理過了");
-    if (!approve) return ok(patch<IssuanceRequest>("issuance-requests", id, { status: "rejected", reason: reason ?? "", decidedBy: m.email }));
+    if (!approve) return ok(patch<IssuanceRequest>("issuance-requests", id, { status: "rejected", reason: reason ?? "", decidedBy: m.address }));
     const r = await signAndIssue(row);
-    return ok(patch<IssuanceRequest>("issuance-requests", id, { status: "issued", batchId: r.batchId, txHash: r.txHash, serialHash: r.serialHash, decidedBy: m.email }));
+    return ok(patch<IssuanceRequest>("issuance-requests", id, { status: "issued", batchId: r.batchId, txHash: r.txHash, serialHash: r.serialHash, decidedBy: m.address }));
   } catch (e) { return handleError(e); }
 }

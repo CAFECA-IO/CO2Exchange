@@ -11,8 +11,8 @@ export async function POST(req: Request) {
     const row = find<KycRequest>("kyc-requests", id);
     if (!row) throw new ApiError("NOT_FOUND", "找不到這筆身分驗證申請");
     if (row.status !== "pending") throw new ApiError("ALREADY_EXISTS", "這筆申請已經處理過了");
-    if (!approve) return ok(patch<KycRequest>("kyc-requests", id, { status: "rejected", reason: reason ?? "", decidedBy: m.email }));
+    if (!approve) return ok(patch<KycRequest>("kyc-requests", id, { status: "rejected", reason: reason ?? "", decidedBy: m.address }));
     const r = await attestAndRegister(row.account, row.tier, row.idNumber);
-    return ok(patch<KycRequest>("kyc-requests", id, { status: "approved", txHash: r.txHash, identityHash: r.identityHash, decidedBy: m.email }));
+    return ok(patch<KycRequest>("kyc-requests", id, { status: "approved", txHash: r.txHash, identityHash: r.identityHash, decidedBy: m.address }));
   } catch (e) { return handleError(e); }
 }
