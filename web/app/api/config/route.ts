@@ -11,6 +11,11 @@ import { handleError, ok } from "@/lib/server/api";
 ///   · 不會出現「瀏覽器讀到一條鏈、伺服器讀到另一條」：內網節點、IP 白名單、
 ///     公司防火牆之下，兩邊看到的根本不是同一份狀態。
 ///   · 合約 ABI 只留在伺服器端，改版時不必擔心某個瀏覽器還快取著舊的那一份。
+///
+/// 改用 Boltchain 之後這條界線從「好習慣」變成「不這樣做就不能上線」：
+/// 節點是 `http://`（沒有 TLS），而 HTTPS 頁面的瀏覽器根本呼叫不到 http:// 端點。
+/// 任何把節點位址發到前端的路，在 localhost 會正常、在正式站台直接壞掉。
+/// `npm run check:boundary` 會擋下它。
 export async function GET() {
   try {
     return ok({ deployment: deployment(), providers: providerIds });
