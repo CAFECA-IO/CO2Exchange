@@ -567,51 +567,177 @@ NATIONAL_OWNER_PKS=0x…,0x… SENDER_PK=0x… \
 改成真多簽不只是為了換鏈：以前測的是「如果 Safe 說要，帳戶會照做」，
 現在測的是「要讓 Safe 說要，得幾個人簽字」——後者才是治理。
 
-## 部署到既有的私有鏈
+## 部署到 Boltchain（chainId 8018）
 
-不是 Anvil、而是已經在跑的鏈（自建 Besu / geth 系私有鏈等），先跑部署前檢查：
+CAFECA 的身分合約在 Boltchain 上，所以交易所也要在同一條鏈——合約發不出跨鏈的
+`eth_call`，分開的話逃生門與委託單爭議都會退化成只能鏈下處理。
+
+### 〇、先問這條鏈是不是 Cancun
+
+**這一步決定後面走哪條路，不要跳過。**
 
 ```bash
-./script/preflight.sh http://127.0.0.1:20024
+./script/preflight.sh https://boltchain.cafeca.io
 ```
 
-它會檢查五件事並直接印出該用哪道部署指令：
+它會回答五件事並直接印出該用哪道部署指令：
 
-| 檢查 | 為什麼重要 |
+| 檢查 | 不滿足時 |
 |---|---|
-| chainId | 決定部署檔寫到 `deployments/<chainId>.json`，前端 `CHAIN_ID` 要對上 |
-| **EIP-1153（TSTORE）** | Uniswap v4 `PoolManager` 的硬需求。缺了就改用 `Deploy.s.sol` |
-| **EIP-5656（MCOPY）** | `evm_version = cancun` 編出來的碼會用到。缺了整條鏈都跑不了，見下方 |
-| EIP-1559 | 沒有 `baseFeePerGas` 的鏈，`forge script` 要加 `--legacy` |
-| 部署者餘額 | 私有鏈上 Anvil 預設金鑰是 0 餘額，要設 `DEPLOYER_PK` |
+| chainId | 部署檔會寫到 `deployments/<chainId>.json`，前端 `CHAIN_ID` 要對上 |
+| **EIP-5656（MCOPY）** | **整套都跑不了**（不只 v4）。要降 `evm_version` 重編，而那條路還卡在 Safe，見下 |
+| EIP-1153（TSTORE） | v4 展示模組不能部署，改用 `Deploy.s.sol`。主市場是 Listing，功能不受影響 |
+| EIP-1559 | 沒有 `baseFeePerGas` 的鏈，`forge script` 要加 `--legacy`（實測 Boltchain 有，不用加） |
+| 部署者餘額 | 要一把在 Boltchain 上有 BOLT 的金鑰 |
+
+2026-09-28 從 Explorer 的 `/api/status` 看到的：6 秒出塊、PoS、16 個驗證者、
+`baseFee` 10,000,000 wei、gasLimit 30,000,000。**EVM 版本還沒確認過**——
+Explorer 標示 8017 = Mainnet、8018 = Testnet，而 8017 過去的節點版本是
+`iSunCoin/v1.12.3-stable`（go-ethereum 1.12.3，pre-Cancun）。8018 是不是同一個
+build，preflight 會說。
+
+### 一、金鑰
+
+部署與四把服務金鑰**都要在 Boltchain 上有餘額**：
 
 ```bash
-export RPC_URL=http://127.0.0.1:20024
-export DEPLOYER_PK=0x<這條鏈上有餘額的私鑰>
-forge script script/DeployV4.s.sol --rpc-url chain --broadcast  # 鏈支援 Cancun
-forge script script/Deploy.s.sol   --rpc-url chain --broadcast  # 鏈沒有 EIP-1153
+cast wallet new        # 每一把都獨立產生，不要共用，也不要沿用其他鏈的
 ```
 
-前端接上去：`web/.env.local` 設 `RPC_URL` / `CHAIN_ID`，並確認 `RELAYER_PK`、`DOCUMENT_SIGNER_PK`
-在那條鏈上**有餘額** —— Phase 0 由平台代付 gas，沒錢的話建帳戶與註銷都會失敗。
+| 金鑰 | 用途 | 要不要餘額 |
+|---|---|---|
+| `DEPLOYER_PK` | 部署整套合約 | 要（整套約數千萬 gas，含 Safe 基礎設施） |
+| `RELAYER_PK` | 平台端交易：`retireFor`、承諾上鏈 | 要 |
+| `IDENTITY_VERIFIER_PK` | 簽發 KYC attestation | 要 |
+| `CARBON_VERIFIER_PK` | 查驗機構核發額度 | 要 |
+| `DOCUMENT_SIGNER_PK` | 憑證文件雜湊回寫 | 要 |
+
+> **使用者的交易不用平台出 gas**：買賣與註銷走 CAFECA 簽章通道的 `sendCalls`，
+> 由使用者自己的帳戶送出、CAFECA 贊助 gas。平台金鑰付的是**平台自己**要做的事。
+
+程式會在啟動時擋下 Anvil 的公開金鑰（`requireOwnKey`）——那把印在 anvil 的啟動畫面上，
+在這裡同時能凍結錢包、簽發身分、核發額度。
+
+### 二、部署
+
+```bash
+export RPC_URL=https://boltchain.cafeca.io
+export DEPLOYER_PK=0x…
+
+# preflight 說支援 EIP-1153：
+forge script script/DeployV4.s.sol --rpc-url chain --broadcast
+# 不支援（主市場不受影響）：
+forge script script/Deploy.s.sol   --rpc-url chain --broadcast
+```
+
+部署檔會寫到 `deployments/8018.json`。按 chainId 分檔，所以本機那份 `31337.json`
+不受影響，兩邊可以並存。
+
+治理角色不設就全部指向部署者（展示可以，正式不行）：
+
+```bash
+export SOVEREIGN=0x…  OPERATOR=0x…  TREASURY=0x…  COMMITTER=0x…
+export NATIONAL_OWNERS=0x…,0x…  NATIONAL_THRESHOLD=2
+export OPERATOR_OWNERS=0x…      OPERATOR_THRESHOLD=1
+export TIMELOCK_DELAY=172800    # 48h
+```
+
+`COMMITTER` 預設 = `OPERATOR`，而且只有在 `DEPLOYER == OPERATOR` 時腳本才授得了
+`COMMITTER_ROLE`；不相等時它會印出要手動執行的 `cast send`。**沒授就沒授**——
+第一次 `npm run bank:commit` 會直接 AccessControl revert。
+
+### 三、前端設定（`web/.env.local`）
+
+```bash
+RPC_URL=https://boltchain.cafeca.io
+CHAIN_ID=8018
+
+# ── 以 CAFECA 登入 ────────────────────────────────────────
+# SITE_ORIGIN 是防仿冒的全部：錢包簽的訊息帶著要登入的網域，後端**逐字**比對。
+# 它必須與瀏覽器網址列完全相同（含 scheme 與 port）。這是最容易設錯的一行，
+# 而設錯的症狀是「登入一直說驗證沒有通過」，看不出是網域的問題。
+SITE_ORIGIN=https://你的網域
+AUTH_URL=https://你的網域
+AUTH_SECRET=<openssl rand -base64 32>     # 同時是 nonce 的 HMAC 金鑰，production 沒設會起不來
+CAFECA_WALLET=https://cafeca.io
+NEXT_PUBLIC_CAFECA_WALLET=https://cafeca.io
+
+# 服務金鑰（第一節那幾把）
+RELAYER_PK=0x…
+IDENTITY_VERIFIER_PK=0x…
+CARBON_VERIFIER_PK=0x…
+DOCUMENT_SIGNER_PK=0x…
+IDENTITY_SALT=<換掉>   # 鏈上存 keccak(身分證號 + salt)，用範例值等於沒有雜湊
+
+# 角色（地址，不是 email 了）
+ADMIN_ADDRESSES=
+VERIFIER_ADDRESSES=
+```
+
+**`ADMIN_ADDRESSES` 有一個先有雞還是先有蛋**：你的地址是 CAFECA 身分合約地址，
+要登入一次才知道。所以順序是 —— 先啟動、以 CAFECA 登入、在 `/account` 複製地址、
+填進 `.env.local`、重啟。沒做這一步的話 `/admin` 與 `/verifier` 進不去，
+而 `KYC_AUTO_APPROVE=0` 時申請會卡在沒有人能核准的佇列裡。
+
+### 四、清掉屬於舊鏈的資料
+
+```bash
+cd web && npm install && npm run data:reset
+```
+
+KYC 申請、憑證紀錄、委託單 log 都綁在**上一個部署**上（檔案裡有部署指紋）。
+不清的話前端會回 `DATA_STALE`。`data:reset` 是**搬**不是刪——舊資料進
+`data.bak-<時間戳>`，裡面有明文身分證號，確認不需要要自己刪掉。
+
+`npm install` 不能省：這一輪多了 `server-only` 這個 devDependency。
+
+### 五、驗一次整條路走得通
+
+```bash
+npm run build && npm start
+# 另一個終端
+npm run bank:seed     # 鏡像鏈上事件 + 一組示範委託單 → log（僅限本機鏈，會拒絕在 8018 執行）
+npm run bank:plan     # 看這一期會提交什麼
+npm run bank:commit   # 承諾上鏈
+npm run bank:verify   # 用鏈上的 root 獨立驗一次
+npm run bank:proofs   # 匯出每個帳戶的提領證據
+```
+
+> `bank:seed` 只在 chainId 31337 / 1337 執行（它直接寫 log 檔，正式環境寫 log 的
+> 唯一入口是收單 API）。在 8018 上要用真的下單流程產生 log。
+
+### 六、上去之後會撞到的幾件事
+
+1. **委託單簽章在公開鏈自動開啟**（`ORDERS_REQUIRE_SIGNATURE` 沒設時跟著鏈走）。
+   前端下單要先走 CAFECA 簽章通道拿簽章，`expiry` 也必須由呼叫端帶——
+   伺服器不能套預設值，否則必然對不上 digest。
+2. **`kyc_level` → tier 的映射還沒實作。** 使用者在 CAFECA 有實名等級，
+   但本站的 `KYCRegistry` tier 仍走人工審核流程。
+3. **19 處 `fromBlock: 0n`。** Boltchain 現在才一萬多個區塊，還撐得住，
+   但它會隨時間單調惡化。Bank 那幾支已經改用 `deployedAtBlock` 了，其餘還沒。
+4. **e2e 會紅。** 六支需要 CAFECA 錢包的測試替身，見「錢包」那一節。
+5. **時間**：6 秒出塊，不是本機的即時。回填模擬資料要算進去。
 
 ### 目標鏈沒有 Cancun 的話
 
 比 Cancun 舊的鏈（例如 geth 1.12.x）連核心合約都跑不了，不只是少掉 v4：
-`evm_version = cancun` 編出來的碼會用到 MCOPY。要降到 `evm_version = shanghai` 重編，
-而那條路目前卡在一個點上（`foundry.toml` 的 `[profile.shanghai]` 有完整紀錄）：
+`evm_version = cancun` 編出來的碼會用到 MCOPY。要降到 `evm_version = shanghai`
+重編，而那條路卡在一個點上（`foundry.toml` 的 `[profile.shanghai]` 有完整紀錄）：
 
 - `via_ir = false` → `Listing`、`CarbonPool`、`CarbonRegistry`、`CarbonCredit1155`、
-  `RetirementCertificate` 五個全部 stack too deep。沒有 MCOPY 時 solc 的記憶體搬移碼比較吃堆疊，
-  這是系統性的，不是某個函式區域變數太多。
-- `via_ir = true` → 上面五個都過，只剩 Safe v1.4.1 的 `execTransaction` 編不過
+  `RetirementCertificate` 五個全部 stack too deep。沒有 MCOPY 時 solc 的記憶體搬移碼
+  比較吃堆疊，這是系統性的，不是某個函式區域變數太多。
+- `via_ir = true` → 上面五個都過，**只剩 Safe v1.4.1 的 `execTransaction` 編不過**
   （Safe 的 inline assembly 沒標 memory-safe，是 Safe 已知的 via_ir 問題）。
+  2026-09-27 實測：把四個相依 Safe 的檔案 skip 掉之後，其餘全部編譯成功，
+  包含 A/B/C 期整套資產池。
 
-所以唯一的阻塞點是 Safe。解法是不要編譯 Safe，改用 Safe v1.4.1 的 canonical creation bytecode
-直接 CREATE —— 官方版本是 solc 0.7.6 編的，本來就不含 Cancun 指令，而且部署出來的 Safe
-會與已稽核的版本位元組完全一致。**尚未實作**（Phase 0 決定留在 Anvil）。
+所以唯一的阻塞點是 Safe。解法是不要編譯 Safe，改用 Safe v1.4.1 的 canonical
+creation bytecode 直接 CREATE —— 官方版本是 solc 0.7.6 編的，本來就不含 Cancun 指令，
+而且部署出來的 Safe 會與已稽核的版本位元組完全一致。**尚未實作。**
 
-**Phase 1 的 Besu 必須在 genesis 啟用 Cancun**，否則會撞上同一面牆。
+最省事的另一條路：把 Boltchain 的節點升級到有 Cancun（EIP-1153 + EIP-5656）的版本。
+
 
 ## 前端（web/，Next.js 16 + React 19）
 
