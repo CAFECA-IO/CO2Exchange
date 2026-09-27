@@ -187,6 +187,7 @@ cd CO2Exchange && bash setup.sh
 cd web && npm install && cp .env.example .env.local && cd ..
 
 # 3. 鏈 + 部署 + 一年份的市場資料（一道指令，約三到五分鐘）
+#    目標鏈看 RPC_URL；沒設就是本機 anvil。rebuild 只適用於本機開發鏈
 bash script/demo-box.sh rebuild
 
 # 4. 前端（另一個終端）
@@ -198,7 +199,7 @@ cd web && npm run dev
 | | 埠 | 覆蓋方式 |
 |---|---|---|
 | 前端 | **10010** | `PORT=xxxx npm run dev`（e2e 則是 `BASE_URL`） |
-| anvil | **28545** | `RPC=http://127.0.0.1:xxxx bash script/demo-box.sh rebuild`；`demo-box.sh` 會從這個位址推出 anvil 要開在哪個埠 |
+| 鏈 | **28545** | `RPC_URL=http://127.0.0.1:xxxx bash script/demo-box.sh rebuild`；本機鏈時 `demo-box.sh` 會從這個位址推出 anvil 要開在哪個埠 |
 
 前端與鏈都刻意避開預設埠（3000／8545）：那兩個埠上什麼都可能在跑，
 連到別人的服務上而不自知，比連不上更難查。
@@ -375,9 +376,14 @@ Phase 0 的營運動作分三種節奏。**誰做**那一欄很重要：營運�
 所以展示機的作法**不是「跑一次然後放著」，而是每天重建一次**：
 
 ```bash
-# 每天早上六點重鋪一年份的市場
+# 每天早上六點重鋪一年份的市場（本機 anvil 展示機）
 0 6 * * *  cd /path/to/CO2Exchange && bash script/demo-box.sh rebuild >> /tmp/demo-box.log 2>&1
 ```
+
+> **這一招只適用於本機開發鏈。** 外部鏈上 `rebuild` 會直接拒絕——鏈不是我們的，
+> 停不掉也重開不了；時間不是我們的，回填一年份做不到；而且每天重新部署會讓
+> 前一次的部署變成孤兒，上面可能有真的餘額。外部鏈的作法見
+> [部署到 Boltchain › 五](#五驗一次整條路走得通)。
 
 重建是安全的：Anvil 從同一個部署者、同樣的 nonce 順序跑同一支腳本，
 **十七個合約地址一字不差**（只有部署檔裡的 `deployedAt` 會變）。
@@ -717,6 +723,18 @@ MockTWD 從頭到尾只是一個站得住的替代品。
 沒有區塊瀏覽器的驗證 API，所以 `--verify` 不適用；要讓外部單位自己對照
 「鏈上跑的位元組碼」與 repo 裡的原始碼，得另外提供建置步驟與 `forge build` 的輸出。
 
+`demo-box.sh` 也認得這條鏈——它看 `RPC_URL`，不是寫死 anvil：
+
+```bash
+export RPC_URL=http://211.22.118.149:8545
+bash script/demo-box.sh deploy    # 等同上面那道 forge script，外加 web/data 重置
+bash script/demo-box.sh status    # chainId、是不是本機鏈、部署檔在不在
+```
+
+**`rebuild` 在外部鏈上會直接拒絕**，而且應該拒絕：鏈不是我們的（停不掉、重開不了）、
+時間不是我們的（沒有 `anvil_setTime`，回填一年份做不到）、每天重新部署會讓前一次的
+部署變成孤兒而上面可能有真的餘額。外部鏈只有「部署一次」與「從現在開始鋪資料」。
+
 部署檔會寫到 `deployments/8018.json`。按 chainId 分檔，所以本機那份 `31337.json`
 不受影響，兩邊可以並存。
 
@@ -801,6 +819,16 @@ npm run bank:proofs   # 匯出每個帳戶的提領證據
 
 > `bank:seed` 只在 chainId 31337 / 1337 執行（它直接寫 log 檔，正式環境寫 log 的
 > 唯一入口是收單 API）。在 8018 上要用真的下單流程產生 log。
+
+要在這條鏈上鋪市場資料：
+
+```bash
+bash script/demo-box.sh seed      # 縮時，不是回填
+```
+
+外部鏈沒有 `anvil_setTime`，所以劇本的一年會**壓縮成現在這一段時間**——K 線的橫軸
+是真實日期，不會有一年的歷史。而且模擬用的一百個帳戶要在這條鏈上有 gas，
+否則交易會一路失敗。這兩件事在本機鏈上都不存在，很容易忘記。
 
 #### 六、上去之後會撞到的幾件事
 
