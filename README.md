@@ -4,7 +4,11 @@
 由查驗機構在鏈上簽章核發額度；額度可販售給個人、機構或其他企業，買方註銷後取得可附於申報文件的憑證。
 
 由卡菲卡金融科技股份有限公司（CAFECA）建置，**設計為控制權可完整移轉給國家單位、由 CAFECA 代運營**。
-目前是 **Phase 0**：功能完整、可以從頭走到尾，但身分驗證與查驗簽章是模擬的，結算幣是測試幣。
+目前是 **Phase 0**：功能完整、可以從頭走到尾，但身分驗證與查驗簽章是模擬的。
+
+目標鏈是 **Boltchain 8018**（CAFECA 的身分合約在那裡，交易所要同鏈），結算幣是鏈上既有的
+**TWDC**，登入是**以 CAFECA 登入**（EIP-712 SignIn + ERC-1271）。
+**正式與測試環境都不用 anvil**——它只出現在本機開發與自動測試。
 
 | 你是誰 | 從哪裡開始 |
 |---|---|
@@ -174,7 +178,47 @@ forge test
 | forge-std | v1.16.2 |
 | safe-smart-account | v1.4.1 |
 
-### 啟動：一台全新的機器
+### 先決定接哪一條鏈
+
+**正式與測試環境都不用 anvil。** anvil 只出現在兩種場合：本機開發，以及跑自動測試。
+
+| | 鏈 | 什麼時候用 | 能不能砍掉重來 |
+|---|---|---|---|
+| **A** | **Boltchain 8018**（`http://211.22.118.149:8545`） | 測試環境、對外展示、任何要給別人看的東西 | 不能。鏈不是我們的 |
+| **B** | 本機 anvil（chainId 31337） | 寫程式、跑 `forge test` / `npm run e2e` | 可以，而且預設就是重來 |
+
+這個分野會一路影響下去，不是只有一個位址的差別：
+
+- **時間**。anvil 可以把鏈的時間調到一年前再回填（`anvil_setTime`），所以首頁那一整年的
+  行情是真的有一年的區塊。外部鏈做不到，劇本的一年只能**壓縮**成現在這一段。
+- **重來**。`demo-box.sh rebuild` 在外部鏈上會直接拒絕——停不掉、重開不了，
+  而且每天重新部署會讓前一次的部署變成孤兒，上面可能有真的餘額。
+- **金鑰**。anvil 的預設帳戶在外部鏈上會被程式在啟動時擋下（`requireOwnKey`）。
+
+腳本一律看 `RPC_URL`（與 `web/.env.local` 同一個變數），沒設才退回本機。
+所以「接哪一條鏈」是一個環境變數的事，不是改程式。
+
+### A. 接上 Boltchain 8018
+
+```bash
+bash setup.sh                                          # 只有第一次
+export RPC_URL=http://211.22.118.149:8545
+./script/preflight.sh "$RPC_URL"                       # 這條鏈跑不跑得動這套合約
+export DEPLOYER_PK=0x…                                 # 一把在這條鏈上有 BOLT 的私鑰
+export SETTLEMENT_TOKEN=0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3   # CAFECA 的 TWDC
+bash script/demo-box.sh deploy                         # 部署（一次就好）
+cd web && cp .env.example .env.local                   # 照下面那節填 RPC_URL / SITE_ORIGIN / 服務金鑰
+npm install && npm run build && npm start
+```
+
+完整步驟、每一個環境變數為什麼要設、以及上去之後會撞到的幾件事，
+見 [六 › 部署到 Boltchain](#部署到-boltchainchainid-8018)。那一節才是這條路的正本，
+這裡只是最短路徑。
+
+### B. 本機開發鏈（anvil）：一台全新的機器
+
+> 這條路**只用於開發與跑測試**。要給別人看的東西走 A。
+
 
 需要的東西只有三樣：git、Node 20+、curl。Foundry 由 `setup.sh` 自己裝。
 
@@ -187,7 +231,7 @@ cd CO2Exchange && bash setup.sh
 cd web && npm install && cp .env.example .env.local && cd ..
 
 # 3. 鏈 + 部署 + 一年份的市場資料（一道指令，約三到五分鐘）
-#    目標鏈看 RPC_URL；沒設就是本機 anvil。rebuild 只適用於本機開發鏈
+#    rebuild 會自己開 anvil、部署、回填。只適用於本機開發鏈（chainId 31337 / 1337）
 bash script/demo-box.sh rebuild
 
 # 4. 前端（另一個終端）
@@ -244,6 +288,10 @@ curl -s localhost:10010/api/market/by-country | head -c 200        # 各轄區�
 `sov` 指向國家 Safe。有 `false` 就是部署沒完成，不要繼續往下用。
 
 ### 建立模擬資料
+
+> 這一節的三個等級**都假設本機鏈**（要回填就要能調整區塊時間）。
+> 外部鏈上只有一種做法：`bash script/demo-box.sh seed`，縮時、從現在開始，
+> 而且那一百個模擬帳戶要在那條鏈上有 gas。見 [六 › 五、驗一次整條路走得通](#五驗一次整條路走得通)。
 
 `demo()` 只鋪一張最小的桌子：幾個專案、幾張掛單，夠把流程走一次，但行情圖上只有一兩根 K 棒、
 首頁的地球只有一個國家有柱子。要讓畫面像個市場，有三個等級：
@@ -363,7 +411,10 @@ Phase 0 的營運動作分三種節奏。**誰做**那一欄很重要：營運�
 `timelock state` 查現在到哪一步。完整 SOP（緊急凍結、升級、簽章者管理、移轉驗收）
 見 project 文件「CO2Exchange 治理操作手冊」。
 
-### 持續運作（展示機）
+### 持續運作（本機展示機）
+
+> **這一節從頭到尾都是本機 anvil 的事。** 外部鏈不能每天砍掉重來，
+> 它的資料就是它的歷史。
 
 想讓一台機器一直開著、資料一直看起來是新的，有一件事必須先知道：
 
@@ -453,14 +504,24 @@ bash script/demo-box.sh status
 | 契約條文（`web/contracts/*.md`） | 不必重部署，但**條文雜湊會變，既有同意紀錄失效、使用者要重簽**——這是預期行為 |
 | 地球的地理資料 | 只有要換底圖或加轄區才需要重跑 `scripts/gen-globe-mask.py`（來源 `scripts/world-land-0.6deg.json.gz` 也在版控裡），產生出來的 `lib/globe-mask.ts` 已經在版控裡 |
 
-合約改了就一定要重新部署，重新部署就一定要處理 `web/data/`：
+合約改了就一定要重新部署，重新部署就一定要處理 `web/data/`。
+
+**本機（開發時）**：
 
 ```bash
 forge build && forge test
-anvil --port 28545 --prune-history                                 # 重開鏈
-forge script script/DemoFlowV4.s.sol --rpc-url anvil --broadcast --sig "demo()"
-cd web && npm run data:reset                                       # 搬到 data.bak-<時間戳>，不是刪除
-npm run build && npm run e2e                                       # 收工前跑一次
+bash script/demo-box.sh rebuild     # 重開 anvil、部署、data:reset、回填
+cd web && npm run build && npm run e2e
+```
+
+**Boltchain（測試環境）**：合約改版是一次**新的部署**，舊的那一份仍在鏈上、
+上面可能還有餘額與紀錄。所以這件事不是「重來」，是「搬家」，要先決定舊部署怎麼處理
+（讓使用者提領、或宣告作廢）再動手：
+
+```bash
+export RPC_URL=http://211.22.118.149:8545 DEPLOYER_PK=0x…
+export SETTLEMENT_TOKEN=0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3
+bash script/demo-box.sh deploy      # 會寫出新的 deployments/8018.json 並 data:reset
 ```
 
 `data:reset` 為什麼跳不過，見「[七、出問題怎麼修 › 重新部署之後](#重新部署之後webdata-的舊紀錄)」。備份裡有使用者上傳的身分文件，
@@ -502,11 +563,11 @@ v4 的編譯期相依已經從核心拆出去，所以「要不要 v4」是選�
 account1 = 減量企業，account2 = 做市商，account3 = 自然人。流程：憑證 attestation 註冊 → 專案登錄 →
 查驗簽章核發 100 噸 → 30 噸掛單、60 噸入池、做市商提供 v4 流動性 → 自然人從掛單與 v4 各買一次 → 兩邊註銷取得憑證。
 
-### 從 Anvil 換到公開鏈：四件在本機是免費的事
+### 換到外部鏈：四件在本機是免費的事
 
-> **目標鏈現在是 Boltchain 8018**（身分合約在那裡），步驟見
-> [部署到 Boltchain](#部署到-boltchainchainid-8018)。這一節講的是**換到任何公開鏈**
-> 都要面對的四件事，Boltchain 與 Base Sepolia 都適用。
+> **目標鏈是 Boltchain 8018**（身分合約在那裡），步驟見
+> [部署到 Boltchain](#部署到-boltchainchainid-8018)。這一節講的是**離開本機 anvil**
+> 之後一定會面對的四件事，Boltchain 與 Base Sepolia 都適用。
 >
 > Base Sepolia（chainId 84532）仍然可用，`foundry.toml` 的 `base_sepolia` 端點與
 > `--verify` 的 etherscan 設定都還在——它有現成的區塊瀏覽器，要讓外部單位自己
@@ -869,7 +930,7 @@ creation bytecode 直接 CREATE —— 官方版本是 solc 0.7.6 編的，本�
 
 | | 內容 | 鏈 |
 |---|---|---|
-| **Phase 0**（現在） | 提案展示。功能完整、可以從頭走到尾；身分驗證與查驗簽章是模擬的，結算幣是測試幣 | Anvil / Boltchain 8018 |
+| **Phase 0**（現在） | 提案展示。功能完整、可以從頭走到尾；身分驗證與查驗簽章是模擬的 | **Boltchain 8018**（anvil 僅開發與測試） |
 | **Phase 1** | 試點。真實憑證整合、查驗機構自行簽章、ERC-4337、索引器與監控、金鑰移交 HSM | Besu + QBFT 四節點（genesis 必須啟用 Cancun） |
 | **Phase 2** | 正式。結算幣落地、指定做市商、第三方稽核、法遵定案、控制權移轉演練 | — |
 
@@ -903,7 +964,7 @@ creation bytecode 直接 CREATE —— 官方版本是 solc 0.7.6 編的，本�
 | 磁碟莫名其妙滿了 | `~/.foundry/anvil/tmp/` 的歷史狀態，見[建立模擬資料](#建立模擬資料) |
 | 首頁地球轉但沒有柱子 | 鏈上還沒有核發資料，跑 `bash script/demo-box.sh rebuild` |
 | 前端報 `0x` 開頭的八位十六進位、看不出原因 | `web/lib/error-abi.ts` 沒跟上合約，`cd web && npm run gen:errors` |
-| 市場突然安靜、只剩零星成交 | 持續模式把年度需求跑完了，見[持續運作](#持續運作展示機) |
+| 市場突然安靜、只剩零星成交 | 持續模式把年度需求跑完了，見[持續運作](#持續運作本機展示機) |
 
 #### 登入一直說「驗證沒有通過」
 
