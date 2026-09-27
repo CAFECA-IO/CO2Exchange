@@ -9,10 +9,35 @@ import { postJson } from "./fetchJson";
 
 const WALLET = process.env.NEXT_PUBLIC_CAFECA_WALLET ?? "https://cafeca.io";
 
+/// 簽章通道。登入時帶 `channel: true`、使用者同意之後才拿得到。
+///
+/// **通道不是授權。** 每一筆請求都會在 CAFECA 錢包顯示我們寫的說明、
+/// 以及錢包自己解析出來的實際內容，由使用者按下去才簽——網站沒有辦法
+/// 在使用者不知情的情況下簽出任何東西。所以「開了通道」不等於「可以動他的錢」，
+/// 這一點在介面上也要這樣講，不要寫成「授權本站」。
+export type Channel = {
+  id: string;
+  signMessage(message: string, description: Description): Promise<{ signature: `0x${string}` }>;
+  signTypedData(typedData: unknown, description: Description): Promise<{ signature: `0x${string}` }>;
+  sendCalls(
+    calls: { to: string; data?: string; value?: string }[],
+    description: Description,
+    opts?: { transport?: "popup" | "relay"; onPending?: (p: { link: string }) => void },
+  ): Promise<{ txHash: `0x${string}`; success: boolean }>;
+};
+
+/// 每一筆都必須附說明，沒有說明錢包會直接拒絕。
+/// 而且**要寫得和實際內容一致**：錢包會把我們的說明標成「網站說明」，
+/// 並在下面列出它自己解析出來的實際操作供使用者核對。兩者不符，
+/// 使用者看到的就是一個在騙他的網站——那比沒有說明更糟。
+export type Description = { title: string; detail?: string };
+
 type Connect = {
   signIn(opts: Record<string, unknown>): Promise<unknown>;
   redirect(opts: Record<string, unknown>): Promise<unknown>;
   authLink(opts: Record<string, unknown>): string;
+  channel(response: unknown): Promise<Channel | null>;
+  restoreChannel(id: string): Promise<Channel | null>;
 };
 type Sdk = {
   create(o: { wallet: string }): Connect;
@@ -51,7 +76,9 @@ const STATEMENT = "登入 TideBit-DeFi 碳權交易所";
 ///   · handle    —— 純顯示用。拒絕了就顯示地址縮寫，不影響任何功能。
 const CLAIMS = ["kyc_level", "handle"];
 
-export type CafecaErrorCode = "access_denied" | "closed" | "popup_blocked" | "timeout" | "invalid_nonce" | "unknown";
+export type CafecaErrorCode =
+  | "access_denied" | "closed" | "popup_blocked" | "timeout" | "invalid_nonce"
+  | "rejected" | "channel_closed" | "invalid_request" | "unknown";
 
 export function messageFor(code: string): string {
   switch (code) {
@@ -60,6 +87,10 @@ export function messageFor(code: string): string {
     case "popup_blocked": return "瀏覽器擋下了登入視窗。請允許彈出視窗，或改用手機掃碼登入";
     case "timeout": return "登入逾時，請再試一次";
     case "invalid_nonce": return "登入請求已失效，請再試一次";
+    case "rejected": return "你在 CAFECA 錢包裡拒絕了這筆簽章";
+    case "channel_closed":
+    case "CHANNEL_CLOSED": return "簽章通道已關閉。請重新登入一次以開啟——沒有它就沒辦法簽委託單";
+    case "invalid_request": return "這筆請求被錢包擋下了（缺少說明或內容不合規）";
     default: return "登入沒有完成";
   }
 }

@@ -955,16 +955,42 @@ python3 scripts/gen-globe-mask.py ./package > lib/globe-mask.ts
 > **AI 子錢包是獨立地址，也能產生有效簽章，但不會有實名等級。**
 > 所以「只接受本人」的操作一律要求 `kyc_level ≥ 2`，這道門順帶把子錢包擋在外面。
 
-**目前的缺口，不要在對外文件上說過頭：** CAFECA 的登入通道依設計只簽 `SignIn` 這一種結構，
-**不會替本站簽任意訊息**，也沒有 EIP-1193 provider。所以：
+### 簽章通道：委託單的不可否認性
 
-- 委託單簽章（未完成事項 2.1）**沒有**因此補上。「這張單是這個帳戶下的」靠的仍然是 session。
-- `/trade`、`/retire`、`/enterprise` 目前仍走「使用者以本站 passkey 自簽鏈上交易」那條路。
-  要讓 CAFECA 帳戶**直接**成為帳本上的地址，這三頁必須先改走 Bank 資產池（未完成事項 2.3）——
-  在託管模型下使用者的動作是帳本分錄，平台執行上鏈，本來就不需要使用者自簽。
-- 在那之前是**過渡形狀**：CAFECA 決定「你是誰」，本站的 `PasskeyAccount` 仍然負責「怎麼簽」，
-  兩者以 `accountRef = keccak256("co2x:account:v2:" + CAFECA 地址)` 接起來。
-  v1 用的是登入信箱，而信箱可以被登入供應商重新配發給另一個人；v2 的輸入是合約地址，沒有這個問題。
+登入時帶 `channel: true`，使用者同意之後網站就能請他簽 `signMessage` / `signTypedData`，
+或執行 `sendCalls`。**通道不是授權**：每一筆都會在 CAFECA 錢包顯示我們寫的說明，
+以及錢包自己解析出來的實際內容，由使用者按下去才簽。介面上也要這樣講，
+不要寫成「授權本站」。
+
+委託單因此**真的簽了、也真的驗了**（未完成事項 2.1 已補上）。結構在
+`web/lib/bank/order-typed.ts`，前後端共用同一個函式產生——兩邊各組一份是這類協定
+最常見的壞法：欄位順序差一個、型別寫成 uint128，digest 就不一樣，
+而錯誤訊息只會說「簽章無效」。
+
+| | |
+| --- | --- |
+| 網域 | `TideBit-DeFi Carbon Exchange` / v1 / chainId / `verifyingContract = Bank` |
+| 簽的欄位 | account、side、batchId、country、amountKg、pricePerTonne、minFillKg、expiry、nonce |
+| **沒簽的** | 序號（seq）與收單時間（at）——那是交易所給的，使用者下單當下還不知道 |
+| 驗法 | ERC-1271：算 digest → 問帳戶合約 `isValidSignature` → 要回 `0x1626ba7e` |
+
+`verifyingContract` 指向 **Bank** 有兩個理由：語意上這張單是對這個資產池下的（換池子就是
+不同的簽章），而且錢包會**拒絕** `verifyingContract` 指向使用者帳戶、EntryPoint 或
+CAFECA 系統合約的 EIP-712，也拒絕網域名稱是 `CAFECA Sign-In` / `ERC4337` 的——
+那是防止網站借通道偽造登入或帳戶操作。測試裡有一條專門守著這件事。
+
+數值一律用**十進位字串**（JSON 沒有 bigint，錢包也明確要求）。log 裡是 bigint，
+兩邊必須算出同一個 digest，否則收單時驗得過、事後重播時就驗不過了——測試有守。
+
+驗證在公開鏈上一律開啟；本機鏈預設關閉（模擬市場那一百個帳戶不是真的 CAFECA 身分，
+簽不出東西來），`ORDERS_REQUIRE_SIGNATURE=1` 可強制開啟。
+
+**還沒收掉的過渡形狀：** `/trade`、`/retire`、`/enterprise` 目前仍走「使用者以本站 passkey
+自簽鏈上交易」那條路。要讓 CAFECA 帳戶**直接**成為帳本上的地址，這三頁得先改走 Bank
+資產池（未完成事項 2.3）；`sendCalls` 也讓「使用者自己付款上鏈」這條路重新可行，
+兩種做法都要評估。在那之前，CAFECA 決定「你是誰」，本站的 `PasskeyAccount` 仍然負責
+那三頁的「怎麼簽」，兩者以 `accountRef = keccak256("co2x:account:v2:" + CAFECA 地址)` 接起來。
+v1 用的是登入信箱，而信箱可以被登入供應商重新配發給另一個人；v2 的輸入是合約地址，沒有這個問題。
 
 ### 錢包：一個身分一個錢包，一個錢包多把 passkey（過渡期）
 

@@ -63,6 +63,26 @@ export type CafecaUser = {
   state?: string;
 };
 
+/// 這個帳戶合約承不承認這個簽章（ERC-1271）。
+///
+/// 登入與委託單驗的是同一件事，只有 digest 不同，所以只寫一次。
+///
+/// **讀不到就是不承認。** 合約不存在、還沒部署、RPC 連不上——三種都回 false，
+/// 不是丟例外讓呼叫端自己決定。理由是這個函式的答案只有一個安全的預設值：
+/// 一個「我不知道」被當成「有效」的分支，就是一個任何人都能走進來的門。
+export async function accountAcceptsSignature(account: Address, digest: Hex, signature: Hex): Promise<boolean> {
+  if (!/^0x[0-9a-fA-F]*$/.test(signature)) return false;
+  try {
+    const { client } = await identityClient();
+    const magic = await client.readContract({
+      address: account, abi: erc1271Abi, functionName: "isValidSignature", args: [digest, signature],
+    });
+    return magic.toLowerCase() === ERC1271_MAGIC;
+  } catch {
+    return false;
+  }
+}
+
 const fail = (why: string): never => {
   throw new ApiError("SIGNIN_REJECTED", why);
 };
@@ -129,17 +149,9 @@ export async function verifySignIn(res: SignInResponse): Promise<CafecaUser> {
   if (typeof signature !== "string" || !/^0x[0-9a-fA-F]*$/.test(signature)) fail("登入回應沒有帶合法的簽章");
 
   const { client, sameChain } = await identityClient();
-  let magic: Hex;
-  try {
-    magic = await client.readContract({
-      address: account as Address, abi: erc1271Abi, functionName: "isValidSignature",
-      args: [digest, signature as Hex],
-    });
-  } catch (e) {
-    // 合約不存在、還沒部署、或這條鏈連不上——三種都不能當成「簽章有效」。
-    throw new ApiError("SIGNIN_REJECTED", `身分合約沒有回應驗證請求：${(e as Error).message}`);
+  if (!(await accountAcceptsSignature(account as Address, digest, signature as Hex))) {
+    fail("身分合約不承認這個簽章");
   }
-  if (magic.toLowerCase() !== ERC1271_MAGIC) fail("身分合約不承認這個簽章");
 
   // ── 6. 使用者同意提供的那些 claims ──────────────────────────
   const consented = new Set(String(m!.claims ?? "").split(",").map((s) => s.trim()).filter(Boolean));

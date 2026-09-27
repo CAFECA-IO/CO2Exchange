@@ -1,8 +1,10 @@
 import type { Address, Hex } from "viem";
-import { deployment, isAddress } from "@/lib/server/chain";
+import { CHAIN_ID, IS_LOCAL_CHAIN, deployment, isAddress } from "@/lib/server/chain";
+import { cancelDigest, cancelMessageOf, placeDigest, placeMessageOf } from "@/lib/bank/order-typed";
+import { accountAcceptsSignature } from "@/lib/server/cafeca/verify";
 import { replay } from "@/lib/bank/replay";
 import { append, head, nextNonce, readEvents } from "@/lib/server/bank/log-store";
-import { fail, handleError, ok } from "@/lib/server/api";
+import { ApiError, fail, handleError, ok } from "@/lib/server/api";
 import { requireRole } from "@/lib/server/roles";
 import { walletOf } from "@/lib/server/wallet";
 
@@ -18,20 +20,22 @@ import { walletOf } from "@/lib/server/wallet";
 /// 收據為什麼重要：沒有它，雜湊鏈只證明「交易所選擇記下來的那些事情的順序」——
 /// 不收某張單，鏈上看起來完美無瑕。有了它，使用者手上就有一份交易所自己簽名的承諾。
 ///
-/// ## ⚠️ 尚未實作：簽章驗證
+/// ## 簽章驗證
 ///
-/// 這一支**收下 `signature` 並寫進 log，但沒有驗證它**。
+/// 每一筆都以 ERC-1271 驗過才寫進 log：拿 `lib/bank/order-typed.ts` 的 EIP-712
+/// 結構算 digest，問使用者的帳戶合約 `isValidSignature`。回 `0x1626ba7e` 才收。
 ///
-/// 現在的效果是：log 裡有一個欄位叫簽章，而它證明不了任何事。
-/// 意思表示的不可否認性——「這張單確實是這個帳戶下的」——目前靠的是登入的
-/// session，不是簽章。對 Phase 0 的展示夠用，對「委託單是法律憑據」這個定位不夠。
+/// 這是「委託單是法律憑據」這個定位的前提。沒有它，log 裡有一個叫簽章的欄位，
+/// 而它證明不了任何事——不可否認性其實來自登入 session，也就是來自交易所自己。
 ///
-/// 要補的是：使用者的錢包是 `PasskeyAccount`（ERC-1271），所以驗法是拿委託單的
-/// 正規化位元組算 digest，呼叫帳戶合約的 `isValidSignature`。鏈上驗一次成本不低，
-/// 可行的折衷是收單時在鏈下用 P-256 驗（公鑰從 `keys()` 讀得到），
-/// 爭議時才在鏈上驗——兩者用同一組位元組，所以結論一致。
+/// 驗的欄位就是使用者看到並同意的那些（CAFECA 錢包會把 EIP-712 的內容攤開給他核對），
+/// **不包含序號與收單時間**：那兩個是交易所給的，使用者下單當下還不知道。
+/// 對不上時，使用者手上那張交易所簽名的收據才是武器。
 ///
-/// 在補上之前，任何對外文件都不該說「委託單經過簽章驗證」。
+/// 驗證在本機鏈上預設關閉（`ORDERS_REQUIRE_SIGNATURE=1` 可強制開啟）。
+/// 理由和 `requireOwnKey` 那裡一樣：模擬市場的一百個帳戶不是真的 CAFECA 身分，
+/// 簽不出東西來。但**公開鏈上一律開啟，而且不提供關閉的環境變數以外的路徑**——
+/// 漏開一條公開鏈的代價是任何登入者都能以別人的名義下單。
 
 type Body = {
   action?: "place" | "cancel";
@@ -48,6 +52,26 @@ type Body = {
 };
 
 const big = (v: string | undefined, d = 0n) => (v === undefined || v === "" ? d : BigInt(v));
+
+/// 公開鏈一律要驗；本機鏈預設不驗（模擬市場的帳戶簽不出東西），可用環境變數強制開啟。
+const REQUIRE_SIGNATURE = process.env.ORDERS_REQUIRE_SIGNATURE
+  ? process.env.ORDERS_REQUIRE_SIGNATURE === "1"
+  : !IS_LOCAL_CHAIN;
+
+/// 簽章的網域綁在 Bank 上（見 order-typed.ts）。部署檔沒有它就不能收單——
+/// 沒有 Bank 位址就算不出 digest，而「算不出來所以先收下」正是不能有的分支。
+function bankAddress(): Address {
+  const b = deployment().bank;
+  if (!b) throw new ApiError("DEPLOYMENT_MISMATCH", "部署檔裡沒有 bank 位址，無法驗證委託單簽章");
+  return b;
+}
+
+async function checkSignature(account: Address, digest: `0x${string}`, signature: Hex): Promise<void> {
+  if (!REQUIRE_SIGNATURE) return;
+  if (!(await accountAcceptsSignature(account, digest, signature))) {
+    throw new ApiError("SIGNATURE_INVALID", "這張單的簽章沒有通過帳戶合約的驗證");
+  }
+}
 
 export async function GET() {
   try {
@@ -89,6 +113,7 @@ export async function POST(req: Request) {
     if (b.action === "cancel") {
       const orderSeq = big(b.orderSeq);
       if (orderSeq <= 0n) return fail("INVALID_PARAM", { message: "要帶 orderSeq", details: { param: "orderSeq" } });
+      await checkSignature(account, cancelDigest(CHAIN_ID, bankAddress(), cancelMessageOf({ account, orderSeq, nonce })), b.signature);
       const { event, receipt } = await append({ kind: "cancel", account, orderSeq, nonce, signature: b.signature });
       return ok({ event, receipt });
     }
@@ -104,8 +129,15 @@ export async function POST(req: Request) {
       return fail("INVALID_PARAM", { message: "數量與價格要大於零" });
     }
 
-    const { event, receipt } = await append({
-      kind: "place",
+    // 沒帶期限就給 30 日——交易拍賣及移轉管理辦法 §12①⑤ 的定價交易期間下限。
+    // **要驗簽章時不能套預設值**：使用者簽的是一個具體的期限，伺服器自己補一個
+    // 就必然對不上 digest，而錯誤訊息只會說「簽章無效」，沒有人查得出原因。
+    const expiry = big(b.expiry);
+    if (REQUIRE_SIGNATURE && expiry <= 0n) {
+      return fail("MISSING_PARAM", { message: "要帶 expiry——它在簽章涵蓋的範圍內", details: { param: "expiry" } });
+    }
+
+    const order = {
       account,
       side: b.side,
       batchId: big(b.batchId),
@@ -113,11 +145,13 @@ export async function POST(req: Request) {
       amountKg,
       pricePerTonne,
       minFillKg: big(b.minFillKg),
+      expiry: expiry || BigInt(Math.floor(Date.now() / 1000) + 30 * 86400),
       nonce,
-      // 沒帶期限就給 30 日——交易拍賣及移轉管理辦法 §12①⑤ 的定價交易期間下限。
-      expiry: big(b.expiry) || BigInt(Math.floor(Date.now() / 1000) + 30 * 86400),
-      signature: b.signature,
-    });
+    } as const;
+
+    await checkSignature(account, placeDigest(CHAIN_ID, bankAddress(), placeMessageOf(order)), b.signature);
+
+    const { event, receipt } = await append({ kind: "place", ...order, signature: b.signature });
 
     // 寫下去之後立刻重播一次，回報這張單現在的狀態。
     // **重播是唯一的真相來源**——不在這裡另外算一份「剛剛成交了多少」。
