@@ -12,7 +12,7 @@
 架構決策、風險與分期紀錄於 Claude project `CO2Exchange › claude/architecture-decisions.md`。
 
 **要動手的人看這裡**：[營運手冊](#營運手冊) — [啟動（全新機器）](#啟動一台全新的機器)、[建立模擬資料](#建立模擬資料)、[更新](#更新)、[日常營運](#日常營運)、[持續運作](#持續運作展示機)、[出事的時候](#出事的時候)。
-其餘章節是設計說明：[分層](#分層)、[治理](#治理safe--timelock)、[安裝](#安裝)、[部署到私有鏈](#部署到既有的私有鏈)、
+其餘章節是設計說明：[分層](#分層)、[治理](#治理safe--timelock)、[安裝](#安裝)、[部署到 Boltchain](#部署到-boltchain-chainid-8018)、
 [前端](#前端webnextjs-16--react-19)、[模擬市場](#模擬市場100-個有人格的帳戶)、[測試](#測試113)、[自我審查](#自我審查self-review--audit-prep)。
 
 ## 分層
@@ -451,11 +451,15 @@ cd web && npm run data:reset   # 搬到 data.bak-<時間戳>，不是刪除
 
 備份裡有上傳的身分文件，確認不需要再自行刪除。想把兩個部署的資料分開留著，設 `DATA_DIR` 指到不同資料夾即可。
 
-## 部署到公開測試鏈（Base Sepolia）
+## 從 Anvil 換到公開鏈：四件在本機是免費的事
 
-Phase 0 的展示從本機 Anvil 換到公開測試鏈：**Base Sepolia（chainId 84532）**。
-Cancun 齊備（v4 要的 EIP-1153 有）、兩秒出塊、gas 幾乎免費，而且有區塊瀏覽器——
-國家單位可以自己去 basescan 對照鏈上的治理狀態，不必相信我們的截圖。
+> **目標鏈現在是 Boltchain 8018**（身分合約在那裡），步驟見
+> [部署到 Boltchain](#部署到-boltchain-chainid-8018)。這一節講的是**換到任何公開鏈**
+> 都要面對的四件事，Boltchain 與 Base Sepolia 都適用。
+>
+> Base Sepolia（chainId 84532）仍然可用，`foundry.toml` 的 `base_sepolia` 端點與
+> `--verify` 的 etherscan 設定都還在——它有現成的區塊瀏覽器，要讓外部單位自己
+> 對照鏈上狀態時比較方便。
 
 換鏈不是只改一個 RPC 位址。下面這幾件事在 Anvil 上是免費的，在公開鏈上不是。
 
