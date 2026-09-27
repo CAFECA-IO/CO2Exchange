@@ -241,7 +241,8 @@ cd web && npm install && npm run build && npm start
 > 撥款給它們不會壞掉，但那是白放的錢，而且會讓人以為它們會動鏈。
 
 **三、驗了才部署。** 餘額不夠就停在這裡並印出差多少，不會部署到一半沒錢。
-夠了才跑 `forge script`；沒有 EIP-1153 的鏈自動改用不含 v4 的 `Deploy.s.sol`。
+夠了才跑 `forge script`。v4 要兩個條件（EIP-1153 **和** CREATE2 deployer），
+缺一個就自動改用不含 v4 的 `Deploy.s.sol`——兩個都事先查，不會跑到一半才撞上。
 
 **四、寫回設定檔並印出地址。** `RPC_URL` / `CHAIN_ID` / `SETTLEMENT_TOKEN` 寫進
 `web/.env.local`，合約地址從 `deployments/<chainId>.json` 列出來。
@@ -758,14 +759,25 @@ CAFECA 的身分合約在 Boltchain 上，所以交易所也要在同一條鏈�
 | 檢查 | 結果 |
 |---|---|
 | chainId | **8018**（`net_version` 一致） |
-| **EIP-1153（TSTORE）** | ✅ 有 —— **v4 展示模組可以部署** |
+| **EIP-1153（TSTORE）** | ✅ 有 |
 | **EIP-5656（MCOPY）** | ✅ 有 —— `evm_version = cancun` 直接可用 |
 | PUSH0、`excessBlobGas` | ✅ 有 —— Cancun 的區塊欄位齊備 |
 | EIP-1559 | ✅ `baseFeePerGas` = 10,000,000 wei（0.01 gwei），不用 `--legacy` |
 | gasLimit / 出塊 | 30,000,000 / 6 秒；5 個 peer，已同步 |
+| **CREATE2 deployer** | ❌ **沒有** —— `0x4e59b448…`、CreateX、Safe Singleton Factory 三個都查過。**v4 因此部署不了** |
 
 **所以 `[profile.shanghai]` 那條路不用走了。** Safe v1.4.1 的 `via_ir` 阻塞點
-在這條鏈上碰不到——整套以 `cancun` 編出來的碼直接跑，包含 Uniswap v4。
+在這條鏈上碰不到——整套以 `cancun` 編出來的碼直接跑。
+
+**但 v4 仍然部署不了**，卡在另一件事：這條鏈上沒有 CREATE2 deployer。
+v4 的 hook 位址要把權限旗標挖進低 14 bits，只能用 CREATE2，而 forge script 的
+CREATE2 是透過鏈上那個標準代理做的。`bootstrap.sh` 與 `preflight.sh` 會**事先**查出來
+並自動改用 `Deploy.s.sol`——少掉的只有 v4 展示模組，主市場是 `Listing`，
+而 v4 的 `PoolManager` 是 BUSL-1.1、本來就只能非生產展示。
+
+要補的話是在 Boltchain 上部署一個 CREATE2 工廠（哪一個都行）；之後
+`CREATE2_DEPLOYER=<位址>` 會同時套用到 `HookMiner` 與 `forge --create2-deployer`
+兩邊——這一版把那個常數改成讀環境變數，就是為了兩邊不會各寫一個而對不上。
 README 最後那一節「目標鏈沒有 Cancun 的話」只對 8017 主網與其他舊鏈有意義。
 
 #### 三件關於這個端點的事
@@ -808,8 +820,8 @@ export DEPLOYER_PK=0x…
 # 結算幣用 CAFECA 的 TWDC，不要自己發一個平行的
 export SETTLEMENT_TOKEN=0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3
 
-# Boltchain 有 EIP-1153，所以走完整的這一支（含 v4 展示模組）：
-forge script script/DeployV4.s.sol --rpc-url chain --broadcast
+# Boltchain 沒有 CREATE2 deployer，所以 v4 的 hook 部署不了，用核心這一支：
+forge script script/Deploy.s.sol --rpc-url chain --broadcast
 ```
 
 #### 結算幣：用 TWDC，不要自己發
@@ -1014,6 +1026,7 @@ creation bytecode 直接 CREATE —— 官方版本是 solc 0.7.6 編的，本�
 | 部署腳本最後一筆 `AttestationExpired` | anvil 閒置太久，見下 |
 | 重跑部署時 `nonce too low` / `replacement transaction underpriced` | 上一次部署中途被中斷，鏈上留下做到一半的狀態。本機鏈重開就好；外部鏈先看 `broadcast/<script>/<chainId>/run-latest.json` 送到哪裡 |
 | 部署被 `PublicKeyOnPublicChain` 擋下 | 有一個角色還用著 anvil 的預設帳戶（常見的是 `NATIONAL_OWNERS`）。`bash script/bootstrap.sh keys` 會一併產生治理 owner |
+| 部署到一半 `missing CREATE2 deployer` | 這條鏈沒有那個標準代理，v4 的 hook 位址挖不出來。`bootstrap.sh` 與 `preflight.sh` 現在會**事先**查並自動改用 `Deploy.s.sol` |
 | 重新部署後畫面有資料但對不上鏈 | `web/data/` 的舊紀錄，見下 |
 | 磁碟莫名其妙滿了 | `~/.foundry/anvil/tmp/` 的歷史狀態，見[建立模擬資料](#建立模擬資料) |
 | 首頁地球轉但沒有柱子 | 鏈上還沒有核發資料，跑 `bash script/demo-box.sh rebuild` |

@@ -28,7 +28,15 @@ import {Deploy} from "./Deploy.s.sol";
 ///   ./script/preflight.sh <rpc>   # 先確認鏈支援 EIP-1153
 ///   forge script script/DeployV4.s.sol --rpc-url chain --broadcast
 contract DeployV4 is Deploy {
-    address constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
+    /// forge script 的 CREATE2 透過鏈上這個標準代理執行。多數鏈預先部署了它，
+    /// **新鏈通常沒有**——那時 v4 的 hook 部署不了（它的位址要把權限旗標挖進
+    /// 低 14 bits，非 CREATE2 不可），而錯誤是 `missing CREATE2 deployer`，
+    /// 會在跑了好幾分鐘、部署到一半的時候才出現。
+    ///
+    /// 從環境變數讀，是為了讓「挖位址用的 deployer」與「forge 實際用的 deployer」
+    /// 一定是同一個：`forge script --create2-deployer <addr>` 換掉了 forge 那一邊，
+    /// 而 HookMiner 這一邊如果還寫死常數，挖出來的位址就對不上。
+    address immutable CREATE2_DEPLOYER = vm.envOr("CREATE2_DEPLOYER", address(0x4e59b44847b379578588920cA78FbF26c0B4956C));
 
     /// @dev 部署 PoolManager、挖出符合權限旗標的 hook 地址、部署 TrustedRouter。
     function _deployV4() internal virtual override {

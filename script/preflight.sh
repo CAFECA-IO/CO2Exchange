@@ -65,6 +65,19 @@ case "$RES" in
 esac
 echo
 
+# --- 2b. CREATE2 deployer ------------------------------------------------
+# v4 的 hook 要把權限旗標挖進位址的低 14 bits，只能用 CREATE2 部署，而 forge script
+# 的 CREATE2 是透過鏈上這個標準代理做的。多數鏈預先部署了它，**新鏈通常沒有**——
+# 而缺了它的症狀是部署跑到一半才丟 `missing CREATE2 deployer`，前面幾分鐘白跑。
+C2=${CREATE2_DEPLOYER:-0x4e59b44847b379578588920cA78FbF26c0B4956C}
+HAS_CREATE2=0
+if [ "$(cast code "$C2" --rpc-url "$RPC" 2>/dev/null)" != "0x" ]; then
+  HAS_CREATE2=1; ok "CREATE2 deployer 在（${C2}）"
+else
+  bad "沒有 CREATE2 deployer（${C2}）—— v4 模組部署不了，改用 script/Deploy.s.sol"
+fi
+echo
+
 # --- 3. EIP-5656 MCOPY ---------------------------------------------------
 echo "[3/5] EIP-5656（MCOPY）— solc evm_version=cancun 產出的碼會用到"
 HAS_MCOPY=0
@@ -153,12 +166,13 @@ if [ "$HAS_MCOPY" = "0" ] || [ "$HAS_TSTORE" = "0" ]; then
   exit 2
 fi
 
-if [ "$HAS_TSTORE" = "1" ]; then
+if [ "$HAS_TSTORE" = "1" ] && [ "$HAS_CREATE2" = "1" ]; then
   echo "結論：完整部署（含 v4 展示模組）"
   echo
   echo "  forge script script/DeployV4.s.sol --rpc-url ${RPC} --broadcast${LEGACY_FLAG}"
 else
   echo "結論：用 script/Deploy.s.sol 部署（登錄 / 身分 / Listing 市場 / 池化 / 治理全都會部署，只少掉 v4 展示模組）"
+  [ "$HAS_CREATE2" = "0" ] && echo "（原因是沒有 CREATE2 deployer；v4 的 hook 位址非 CREATE2 挖不出來）"
   echo "v4 本來就只是展示用，主市場是 Listing，功能不受影響。"
   echo
   echo "  forge script script/Deploy.s.sol --rpc-url ${RPC} --broadcast${LEGACY_FLAG}"

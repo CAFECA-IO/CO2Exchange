@@ -303,11 +303,29 @@ cmd_deploy () {
   export NATIONAL_THRESHOLD=${NATIONAL_THRESHOLD:-2}
   export OPERATOR_THRESHOLD=${OPERATOR_THRESHOLD:-1}
 
-  local script=script/DeployV4.s.sol
-  # 沒有 EIP-1153 的鏈部署不了 v4，改用核心那一支。
+  # v4 要兩個條件，缺一個就得改用核心那一支。**兩個都要查**——
+  # 只查 EIP-1153 的話，會在跑了好幾分鐘、部署到一半的時候才撞上第二個。
+  local script=script/DeployV4.s.sol why=""
   local probe
   probe=$(rpc_result '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"data":"0x600160005D60005C60005260206000F3"},"latest"]}') || true
-  case "$probe" in *1) ;; *) script=script/Deploy.s.sol; echo ">> 這條鏈沒有 EIP-1153，改用 ${script}（少 v4 展示模組，主市場不受影響）";; esac
+  case "$probe" in *1) ;; *) why="沒有 EIP-1153（TSTORE）";; esac
+
+  # 第二個條件：CREATE2 deployer。v4 的 hook 位址要把權限旗標挖進低 14 bits，
+  # 只能用 CREATE2 部署，而 forge script 的 CREATE2 是透過鏈上那個標準代理做的。
+  # 多數鏈預先部署了它，新鏈通常沒有。
+  if [ -z "$why" ]; then
+    local c2 code
+    c2=${CREATE2_DEPLOYER:-0x4e59b44847b379578588920cA78FbF26c0B4956C}
+    code=$(rpc_result "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_getCode\",\"params\":[\"$c2\",\"latest\"]}") || true
+    [ "${code:-0x}" = "0x" ] && why="沒有 CREATE2 deployer（${c2}）"
+  fi
+
+  if [ -n "$why" ]; then
+    script=script/Deploy.s.sol
+    echo ">> 這條鏈${why}，改用 ${script}"
+    echo "   少掉的只有 v4 展示模組。主市場是 Listing，功能不受影響，"
+    echo "   而 v4 的 PoolManager 是 BUSL-1.1、本來就只能非生產展示。"
+  fi
 
   # 部署是一串幾十筆交易。中途按 Ctrl-C 或連線斷掉，鏈上會留下做到一半的狀態，
   # 而**下一次重跑會撞上 "nonce too low" / "replacement transaction underpriced"**——
