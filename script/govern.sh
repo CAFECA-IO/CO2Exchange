@@ -153,13 +153,29 @@ cmd_sign() { local hash=$1; shift; cast wallet sign --no-hash "$hash" "$@"; }
 
 # ───────────────────────── status ─────────────────────────
 has() { call "$1" 'hasRole(bytes32,address)(bool)' "$2" "$3"; }
+
+# 這個部署有沒有 v4。用 script/Deploy.s.sol 部署（目標鏈沒有 EIP-1153 或沒有
+# CREATE2 deployer）時，hook / poolManager / router 三個地址是 0——**那是正常狀態**，
+# 不是壞掉。前端早就依這個自動隱藏 v4 的 UI 了，這支腳本以前沒跟上：
+# 它照樣去 cast call 零地址，於是印出三行 "does not have any code"，
+# 看起來像部署出了問題，而其實一切正常。
+ZERO=0x0000000000000000000000000000000000000000
+has_v4() { [ -n "$PM" ] && [ "$PM" != "$ZERO" ]; }
 cmd_status() {
   echo "chainId=$CHAIN_ID  nationalSafe=$NATIONAL ($(call "$NATIONAL" 'getThreshold()(uint256)')-of-$(call "$NATIONAL" 'getOwners()(address[])' | tr ',' '\n' | wc -l))  operatorSafe=$OPERATOR  timelock=$TIMELOCK (delay $(call "$TIMELOCK" 'getMinDelay()(uint256)' | awk '{print $1}')s)"
   printf "%-10s %-14s %-14s %-14s\n" contract admin=timelock sov=national op=operator
-  for c in kyc cert listing pool hook; do a=$(contract_by_name $c); printf "%-10s %-14s %-14s %-14s\n" $c "$(has $a $ROLE_ADMIN $TIMELOCK)" "$(has $a $ROLE_SOV $NATIONAL)" "$(has $a $ROLE_OP $OPERATOR)"; done
+  local core="kyc cert listing pool"
+  has_v4 && core="$core hook"
+  for c in $core; do a=$(contract_by_name $c); printf "%-10s %-14s %-14s %-14s\n" $c "$(has $a $ROLE_ADMIN $TIMELOCK)" "$(has $a $ROLE_SOV $NATIONAL)" "$(has $a $ROLE_OP $OPERATOR)"; done
   for c in credit registry; do a=$(contract_by_name $c); printf "%-10s %-14s %-14s %-14s\n" $c "$(has $a $ROLE_ADMIN $TIMELOCK)" "$(has $a $ROLE_SOV $NATIONAL)" -; done
   printf "%-10s %-14s\n" cct "$(has $CCT $ROLE_ADMIN $TIMELOCK)"
-  echo "poolManager.owner=$(call "$PM" 'owner()(address)')  listing.paused=$(call "$LISTING" 'paused()(bool)')  pool.paused=$(call "$POOL" 'paused()(bool)')  hook.trustedRouter=$(call "$HOOK" 'trustedRouter()(address)')"
+  printf "listing.paused=%s  pool.paused=%s" "$(call "$LISTING" 'paused()(bool)')" "$(call "$POOL" 'paused()(bool)')"
+  if has_v4; then
+    printf "  poolManager.owner=%s  hook.trustedRouter=%s" "$(call "$PM" 'owner()(address)')" "$(call "$HOOK" 'trustedRouter()(address)')"
+  else
+    printf "  v4=未部署（這個部署沒有 hook / poolManager / router，屬正常）"
+  fi
+  echo
   echo "timelock proposer=national:$(has $TIMELOCK $ROLE_PROPOSER $NATIONAL) executor=national:$(has $TIMELOCK $ROLE_EXECUTOR $NATIONAL) canceller=national:$(has $TIMELOCK $ROLE_CANCELLER $NATIONAL)"
 }
 

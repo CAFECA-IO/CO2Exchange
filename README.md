@@ -1035,6 +1035,7 @@ creation bytecode 直接 CREATE —— 官方版本是 solc 0.7.6 編的，本�
 | 部署被 `PublicKeyOnPublicChain` 擋下 | 有一個角色還用著 anvil 的預設帳戶（常見的是 `NATIONAL_OWNERS`）。`bash script/bootstrap.sh keys` 會一併產生治理 owner |
 | 部署到一半 `missing CREATE2 deployer` | 這條鏈沒有那個標準代理，v4 的 hook 位址挖不出來。`bootstrap.sh` 與 `preflight.sh` 現在會**事先**查並自動改用 `Deploy.s.sol` |
 | 部署一開始就 `nonce too high`，而 `latest == pending`（沒有卡住的交易） | 節點的 txpool 不收未來 nonce 的交易，而 forge 預設整批一次送。加 `--slow`；`bootstrap.sh` 在外部鏈上會自動加 |
+| `govern.sh status` 印出 `does not have any code` | 這個部署沒有 v4（hook / poolManager / router 是 0），屬正常。已修成跳過並標示「v4=未部署」 |
 | 重新部署後畫面有資料但對不上鏈 | `web/data/` 的舊紀錄，見下 |
 | 磁碟莫名其妙滿了 | `~/.foundry/anvil/tmp/` 的歷史狀態，見[建立模擬資料](#建立模擬資料) |
 | 首頁地球轉但沒有柱子 | 鏈上還沒有核發資料，跑 `bash script/demo-box.sh rebuild` |
