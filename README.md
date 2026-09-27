@@ -576,29 +576,43 @@ NATIONAL_OWNER_PKS=0x…,0x… SENDER_PK=0x… \
 CAFECA 的身分合約在 Boltchain 上，所以交易所也要在同一條鏈——合約發不出跨鏈的
 `eth_call`，分開的話逃生門與委託單爭議都會退化成只能鏈下處理。
 
-### 〇、先問這條鏈是不是 Cancun
+### 〇、RPC 位址與這條鏈的能力
 
-**這一步決定後面走哪條路，不要跳過。**
+**RPC 不是 `https://boltchain.cafeca.io`** —— 那個網域上跑的是 Explorer，
+它的 HTTP server 只支援 GET，POST JSON-RPC 一律不通（`/`、`/rpc`、`/api/rpc`、
+`/eth` 全試過）。`/.well-known/cafeca-configuration` 的 `chain.rpc` 指向它，
+是設定檔的問題，不是你設錯。
+
+實際的節點：
 
 ```bash
-./script/preflight.sh https://boltchain.cafeca.io
+./script/preflight.sh http://211.22.118.149:8545
 ```
 
-它會回答五件事並直接印出該用哪道部署指令：
+2026-09-28 實測結果（`boltchain/v0.1.0`，不是 iSunCoin 那條 go-ethereum 1.12.3 血統）：
 
-| 檢查 | 不滿足時 |
+| 檢查 | 結果 |
 |---|---|
-| chainId | 部署檔會寫到 `deployments/<chainId>.json`，前端 `CHAIN_ID` 要對上 |
-| **EIP-5656（MCOPY）** | **整套都跑不了**（不只 v4）。要降 `evm_version` 重編，而那條路還卡在 Safe，見下 |
-| EIP-1153（TSTORE） | v4 展示模組不能部署，改用 `Deploy.s.sol`。主市場是 Listing，功能不受影響 |
-| EIP-1559 | 沒有 `baseFeePerGas` 的鏈，`forge script` 要加 `--legacy`（實測 Boltchain 有，不用加） |
-| 部署者餘額 | 要一把在 Boltchain 上有 BOLT 的金鑰 |
+| chainId | **8018**（`net_version` 一致） |
+| **EIP-1153（TSTORE）** | ✅ 有 —— **v4 展示模組可以部署** |
+| **EIP-5656（MCOPY）** | ✅ 有 —— `evm_version = cancun` 直接可用 |
+| PUSH0、`excessBlobGas` | ✅ 有 —— Cancun 的區塊欄位齊備 |
+| EIP-1559 | ✅ `baseFeePerGas` = 10,000,000 wei（0.01 gwei），不用 `--legacy` |
+| gasLimit / 出塊 | 30,000,000 / 6 秒；5 個 peer，已同步 |
 
-2026-09-28 從 Explorer 的 `/api/status` 看到的：6 秒出塊、PoS、16 個驗證者、
-`baseFee` 10,000,000 wei、gasLimit 30,000,000。**EVM 版本還沒確認過**——
-Explorer 標示 8017 = Mainnet、8018 = Testnet，而 8017 過去的節點版本是
-`iSunCoin/v1.12.3-stable`（go-ethereum 1.12.3，pre-Cancun）。8018 是不是同一個
-build，preflight 會說。
+**所以 `[profile.shanghai]` 那條路不用走了。** Safe v1.4.1 的 `via_ir` 阻塞點
+在這條鏈上碰不到——整套以 `cancun` 編出來的碼直接跑，包含 Uniswap v4。
+README 最後那一節「目標鏈沒有 Cancun 的話」只對 8017 主網與其他舊鏈有意義。
+
+#### 三件關於這個端點的事
+
+1. **純 HTTP，沒有 TLS**（443 與 8546 都是 connection refused）。RPC 流量
+   在網路上是明文的。測試網展示可以接受，但要知道：任何在路徑上的人看得到
+   查詢內容，也改得動回應。正式環境要 TLS。
+2. **沒有 WebSocket**，所以沒有事件訂閱，只能輪詢。本專案本來就是輪詢，不受影響。
+3. **瀏覽器碰不到它，而這是好事。** 站台走 HTTPS 時，瀏覽器不能呼叫 `http://` 的
+   端點（mixed content）。本專案的「前端不直接跟區塊鏈說話」在這裡剛好付清了成本——
+   所有鏈上讀寫都在伺服器端，瀏覽器連節點位址都不知道。
 
 ### 一、金鑰
 
@@ -625,14 +639,15 @@ cast wallet new        # 每一把都獨立產生，不要共用，也不要沿�
 ### 二、部署
 
 ```bash
-export RPC_URL=https://boltchain.cafeca.io
+export RPC_URL=http://211.22.118.149:8545
 export DEPLOYER_PK=0x…
 
-# preflight 說支援 EIP-1153：
+# Boltchain 有 EIP-1153，所以走完整的這一支（含 v4 展示模組）：
 forge script script/DeployV4.s.sol --rpc-url chain --broadcast
-# 不支援（主市場不受影響）：
-forge script script/Deploy.s.sol   --rpc-url chain --broadcast
 ```
+
+沒有區塊瀏覽器的驗證 API，所以 `--verify` 不適用；要讓外部單位自己對照
+「鏈上跑的位元組碼」與 repo 裡的原始碼，得另外提供建置步驟與 `forge build` 的輸出。
 
 部署檔會寫到 `deployments/8018.json`。按 chainId 分檔，所以本機那份 `31337.json`
 不受影響，兩邊可以並存。
@@ -653,7 +668,7 @@ export TIMELOCK_DELAY=172800    # 48h
 ### 三、前端設定（`web/.env.local`）
 
 ```bash
-RPC_URL=https://boltchain.cafeca.io
+RPC_URL=http://211.22.118.149:8545
 CHAIN_ID=8018
 
 # ── 以 CAFECA 登入 ────────────────────────────────────────
@@ -665,6 +680,15 @@ AUTH_URL=https://你的網域
 AUTH_SECRET=<openssl rand -base64 32>     # 同時是 nonce 的 HMAC 金鑰，production 沒設會起不來
 CAFECA_WALLET=https://cafeca.io
 NEXT_PUBLIC_CAFECA_WALLET=https://cafeca.io
+# 把這幾個設死，就完全不去讀對方的 .well-known。**目前必須設**：
+# 那份設定檔的 chain.rpc 指向 Explorer（不服務 JSON-RPC），而且 issuer 還是
+# http://localhost:10002（開發版錢包沒設 PUBLIC_ORIGIN）。
+CAFECA_CHAIN_ID=8018
+CAFECA_RPC_URL=http://211.22.118.149:8545
+CAFECA_ATTESTATION=0x4b08B5063eE773C084dD9E67E09690aF8cb2A880
+CAFECA_RECOVERY=0xA199a3f7afd81bDBC6CE697400Fa44d5b6a16594
+CAFECA_FACTORY=0x075e377D1096089aE2D44fbD23156BF900b8bd24
+CAFECA_KEYRING=0x367a9E8a6E8bA108F4cC4B863d03dD618aD7893b
 
 # 服務金鑰（第一節那幾把）
 RELAYER_PK=0x…
@@ -721,6 +745,9 @@ npm run bank:proofs   # 匯出每個帳戶的提領證據
    但它會隨時間單調惡化。Bank 那幾支已經改用 `deployedAtBlock` 了，其餘還沒。
 4. **e2e 會紅。** 六支需要 CAFECA 錢包的測試替身，見「錢包」那一節。
 5. **時間**：6 秒出塊，不是本機的即時。回填模擬資料要算進去。
+6. **CAFECA 錢包本身還沒對外**：`.well-known` 的 `issuer` 與所有端點都是
+   `http://localhost:10002`，所以「以 CAFECA 登入」在部署站台上還不會通。
+   合約地址是對的（在鏈上），要等對方把 `PUBLIC_ORIGIN` 設成正式網址。
 
 ### 目標鏈沒有 Cancun 的話
 
