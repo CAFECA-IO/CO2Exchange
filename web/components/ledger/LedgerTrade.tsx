@@ -152,6 +152,24 @@ export function LedgerTrade() {
             <div><dt className="text-xs text-ink-300">可動用</dt><dd className="tnum text-lg text-ink-50">{fmtTwd(available)} <span className="text-xs text-ink-300">{CASH}</span></dd></div>
             <div><dt className="text-xs text-ink-300">買單鎖定中</dt><dd className="tnum text-lg text-ink-50">{fmtTwd(locked)} <span className="text-xs text-ink-300">{CASH}</span></dd></div>
           </dl>
+          {lg.me?.wallet && (
+            <dl className="mt-3 space-y-1 border-t border-ink-700 pt-3 text-xs">
+              <div className="flex justify-between gap-3">
+                <dt className="text-ink-300">錢包裡（可存入）</dt>
+                <dd className="tnum text-ink-100" data-testid="wallet-cash">
+                  {lg.me.wallet.balance === null ? "讀不到" : `${fmtTwd(BigInt(lg.me.wallet.balance))} ${CASH}`}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-ink-300">結算幣合約</dt>
+                <dd className="break-all text-right font-mono text-ink-200" title={lg.me.wallet.settlementToken}>{lg.me.wallet.settlementToken}</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-ink-300">存入對象（帳本合約）</dt>
+                <dd className="break-all text-right font-mono text-ink-200" title={lg.me.wallet.ledger}>{lg.me.wallet.ledger}</dd>
+              </div>
+            </dl>
+          )}
           <div className="mt-4 flex items-end gap-2">
             <Field label={`存入金額（${CASH}）`}>
               <input className={inputCls} inputMode="decimal" value={depositTwd} onChange={(e) => setDepositTwd(e.target.value)} />

@@ -6,6 +6,8 @@ import {
   appendUser, devDeposit, devSign, devSignerFor, domains, nextNonce, syncCash, userMessage, type UserBody,
 } from "@/lib/server/ledger/write";
 import { userTypedData } from "@/lib/ledger/typed";
+import { erc20Abi } from "@/lib/abis";
+import { deployment, publicClient } from "@/lib/server/chain";
 
 /// 帳本的使用者入口（設計 v4 第 3 期）：掛單、撤單、註銷、登錄專案。
 ///
@@ -86,6 +88,12 @@ export async function GET() {
     const orders = [...state.book.values()].filter((o) => o.account.toLowerCase() === a).sort((x, y) => (x.seq < y.seq ? 1 : -1));
     const fills = state.fills.filter((f) => f.buyer.toLowerCase() === a || f.seller.toLowerCase() === a).slice(-50).reverse();
     const credits = [...(state.credits.get(a) ?? new Map<string, bigint>()).entries()].map(([batchId, kg]) => ({ batchId, kg }));
+    // 錢包裡（還沒存進帳本合約）的結算幣，以及是哪一個代幣合約——存入前使用者要能自己核對。
+    // 讀不到（RPC 斷線）就回 null，畫面顯示「讀不到」，不要假裝是 0。
+    const settlementToken = deployment().settlementToken;
+    const walletCash = await publicClient
+      .readContract({ address: settlementToken, abi: erc20Abi, functionName: "balanceOf", args: [m.address] })
+      .catch(() => null);
     return ok({
       domains: domains(),
       account: m.address,
@@ -93,6 +101,7 @@ export async function GET() {
       devSigning: !!(await devSignerFor(m.address)),
       head,
       cash: { available: state.cash.get(a) ?? 0n, locked: state.lockedCash.get(a) ?? 0n },
+      wallet: { settlementToken, ledger: deployment().ledger, balance: walletCash },
       credits,
       orders,
       fills,

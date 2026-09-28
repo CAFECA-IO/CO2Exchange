@@ -22,6 +22,8 @@ export type LedgerMe = {
   devSigning: boolean;
   head: { seq: string; runningHash: string };
   cash: { available: string; locked: string };
+  /// 錢包裡（還沒存進帳本合約）的結算幣。balance 是 null 代表讀不到。
+  wallet: { settlementToken: `0x${string}`; ledger: `0x${string}`; balance: string | null };
   credits: { batchId: string; kg: string }[];
   orders: {
     seq: string; side: "buy" | "sell"; batchId: string; country: string; amountKg: string; remainingKg: string;
