@@ -21,6 +21,10 @@ set -uo pipefail
 # macOS 內建的 bash 3.2 會把後面的多位元組字元當成識別字的一部分，
 # 於是 "$CHAIN_ID）" 會被解析成變數 "CHAIN_ID）"，在 set -u 下直接 unbound variable。
 
+# 目標鏈：參數／shell 的 RPC_URL → web/.env.local 的 RPC_URL → 本機 anvil
+if [ -z "${RPC_URL:-}" ] && [ -f "$(dirname "$0")/../web/.env.local" ]; then
+  RPC_URL=$(sed -n 's/^RPC_URL=\(.*\)$/\1/p' "$(dirname "$0")/../web/.env.local" | tail -1 | tr -d '"'"'"'\r')
+fi
 RPC="${1:-${RPC_URL:-http://127.0.0.1:28545}}"
 ANVIL_PK0=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 DEPLOYER_PK="${DEPLOYER_PK:-$ANVIL_PK0}"

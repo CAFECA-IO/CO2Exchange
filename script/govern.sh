@@ -36,6 +36,10 @@
 #   govern.sh safe national exec $T $D 0xOwner1:$S1 0xOwner2:$S2
 set -euo pipefail
 
+# 目標鏈：參數／shell 的 RPC_URL → web/.env.local 的 RPC_URL → 本機 anvil
+if [ -z "${RPC_URL:-}" ] && [ -f "$(dirname "$0")/../web/.env.local" ]; then
+  RPC_URL=$(sed -n 's/^RPC_URL=\(.*\)$/\1/p' "$(dirname "$0")/../web/.env.local" | tail -1 | tr -d '"'"'"'\r')
+fi
 RPC_URL=${RPC_URL:-http://127.0.0.1:28545}
 CHAIN_ID=$(cast chain-id --rpc-url "$RPC_URL")
 DEPLOYMENT=${DEPLOYMENT:-"$(dirname "$0")/../deployments/${CHAIN_ID}.json"}

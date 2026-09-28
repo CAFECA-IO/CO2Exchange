@@ -32,8 +32,14 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
-RPC_URL=${RPC_URL:-http://127.0.0.1:28545}
 ENV_FILE=${ENV_FILE:-$ROOT/web/.env.local}
+# 目標鏈：shell 的 RPC_URL → web/.env.local 的 RPC_URL → 本機 anvil。
+# 只看 shell 的話，已經設好外部鏈的機器直接跑 `bootstrap.sh deploy` 會跑去連本機，錯誤看起來像節點掛了。
+if [ -z "${RPC_URL:-}" ] && [ -f "$ENV_FILE" ]; then
+  RPC_URL=$(sed -n 's/^RPC_URL=\(.*\)$/\1/p' "$ENV_FILE" | tail -1 | tr -d '"'"'"'\r')
+  [ -n "$RPC_URL" ] && echo ">> RPC_URL 取自 $(basename "$ENV_FILE")：${RPC_URL}"
+fi
+RPC_URL=${RPC_URL:-http://127.0.0.1:28545}
 # 治理金鑰**不放在 web/.env.local**。那個檔案是網站執行期讀的——
 # 讓網站伺服器持有國家 Safe 的 owner 金鑰，等於把主權／營運分權整個抵銷掉：
 # 攻進網站的人就拿到了凍結任何人、撤換營運方、升級合約的能力。
