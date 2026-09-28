@@ -11,7 +11,7 @@
 #     「rebuild」這個動作不存在，只有「部署一次」與「從現在開始鋪資料」。
 #
 #   bash script/demo-box.sh rebuild   # 僅本機鏈：新鏈、部署、回填 DAYS 天
-#   bash script/demo-box.sh deploy    # 部署到設定的那條鏈（外部鏈要 DEPLOYER_PK）
+#   bash script/demo-box.sh deploy    # 部署到設定的那條鏈（外部鏈＝bootstrap.sh deploy）
 #   bash script/demo-box.sh seed      # 鋪市場資料（本機＝回填；外部＝縮時，從現在開始）
 #   bash script/demo-box.sh live      # 持續跑（前景，Ctrl-C 結束）
 #   bash script/demo-box.sh status    # 現在是什麼狀態
@@ -20,7 +20,8 @@
 #   RPC_URL=http://127.0.0.1:28545   目標鏈。與 web/.env.local 同名同義
 #   DAYS=365        回填幾天（只有本機鏈用得到）
 #   TICK=8h         每輪代表多久
-#   DEPLOYER_PK     外部鏈部署必填。本機鏈留空就用 anvil 預設帳戶
+#   SIM_USERS=30 EXT_DAYS=30 EXT_TICK=1d   外部鏈 seed 的規模（每筆交易都要等出塊）
+#   金鑰：外部鏈一律讀 web/.env.local（bootstrap.sh keys 產生）。shell 裡的同名變數會蓋過它
 #   WEB=http://localhost:10010
 #   STATE=          給 anvil --state 的檔案（只有本機鏈用得到）
 set -euo pipefail
@@ -37,6 +38,11 @@ TICK=${TICK:-8h}
 if [ -n "${RPC:-}" ] && [ -z "${RPC_URL:-}" ]; then
   echo "!! RPC 這個變數名已經換成 RPC_URL（與 web/.env.local 一致）。這次仍照舊處理。" >&2
   RPC_URL=$RPC
+fi
+# shell 沒給就讀 web/.env.local——bootstrap.sh 部署完會把 RPC_URL 寫在那裡，
+# 網站讀的也是它。兩邊都沒有才退回本機鏈。
+if [ -z "${RPC_URL:-}" ] && [ -f web/.env.local ]; then
+  RPC_URL=$(sed -n 's/^RPC_URL=//p' web/.env.local | tail -1)
 fi
 RPC_URL=${RPC_URL:-http://127.0.0.1:28545}
 WEB=${WEB:-http://localhost:10010}
@@ -111,7 +117,7 @@ refuse_external () {
      · 每天重新部署會讓前一次的部署變成孤兒，而上面可能有真的餘額。
 
    外部鏈上要做的是這三件事，分開執行：
-     bash script/demo-box.sh deploy    # 只做一次（要 DEPLOYER_PK）
+     bash script/bootstrap.sh          # 建金鑰 → 撥款 → 部署（只做一次）
      bash script/demo-box.sh seed      # 從現在開始鋪資料（縮時，不是回填）
      bash script/demo-box.sh live      # 持續跑
 MSG
@@ -164,18 +170,14 @@ do_deploy () {
   else
     # 外部鏈不跑 demo()：那支會用 anvil 的預設帳戶當企業與做市商，
     # 在別人的鏈上那些地址不是我們的，也沒有餘額。
-    [ -n "${DEPLOYER_PK:-}" ] || {
-      echo "!! 外部鏈部署要 DEPLOYER_PK（一把在這條鏈上有餘額的私鑰）。" >&2
-      echo "   先跑 ./script/preflight.sh $RPC_URL 確認這條鏈跑得動這套合約。" >&2
-      exit 1; }
-    echo ">> 部署（DeployV4，不含示範資料）"
-    echo "   這是一筆真的、不可逆的部署，會寫出 deployments/<chainId>.json。"
-    # --slow：一筆確認再送下一筆。forge 預設整批用連續 nonce 一次送出，
-    # 而那依賴節點會把未來 nonce 的交易排進佇列——不是所有節點都這樣做，
-    # 不這樣做的會回 `nonce too high` 把整批打掉。
-    forge script script/DeployV4.s.sol --rpc-url "$RPC_URL" --broadcast --slow \
-      > "$LOG/deploy.log" 2>&1 \
-      || { echo "!! 部署失敗，看 $LOG/deploy.log"; exit 1; }
+    #
+    # 外部鏈的部署**一律交給 bootstrap.sh**。這裡以前自己呼叫 forge，少了三件事：
+    # 角色地址（IDENTITY_VERIFIER / CARBON_VERIFIER / DOCUMENT_SIGNER 會變成 deployer，
+    # 網站的簽章全部被合約拒絕）、治理 owner、CREATE2 deployer 的檢查。
+    # 兩條路做同一件事，遲早有一條會落後——所以只留一條。
+    echo ">> 外部鏈部署交給 bootstrap.sh（驗餘額 → 部署 → 寫回 web/.env.local → 角色檢查）"
+    RPC_URL="$RPC_URL" bash script/bootstrap.sh deploy
+    return
   fi
   grep -q "ONCHAIN EXECUTION COMPLETE" "$LOG/deploy.log" \
     || { echo "!! 部署沒有完成，看 $LOG/deploy.log"; exit 1; }
@@ -195,12 +197,22 @@ do_seed () {
   else
     # 外部鏈沒有 anvil_setTime，所以劇本的一年會壓縮成「現在這一段時間」。
     # 模擬器自己會說這件事（見 simulate.mjs 的縮時模式提示）。
-    echo ">> 縮時鋪資料（外部鏈不能調整區塊時間，所以一年的劇本壓在現在）"
-    # 人物帳戶的 gas 由平台出：模擬器的 ensureFunded() 會在餘額不足時從
-    # DEPLOYER_PK（沒有就 RELAYER_PK）真的轉一筆過去。外部鏈沒有 anvil_setBalance，
-    # 只能這樣做。所以要備的是**營運金鑰**的餘額，不是一百個帳戶各自的。
-    echo "   人物帳戶的 gas 由平台金鑰代付（每個 ${SIM_GAS_TOPUP:-0.001} BOLT，最多一百個）。"
-    ( cd web && RPC_URL="$RPC_URL" node scripts/simulate.mjs --tick "$TICK" --quiet ) | tail -3
+    #
+    # 規模刻意縮小。外部鏈每筆交易都要等出塊（Boltchain 6 秒），而模擬器一筆等一筆：
+    # 本機預設的一百人 × 一年 × 每 8 小時一輪，在這裡要跑好幾天。
+    # 預設 30 人 × 30 天 × 每天一輪，大約一小時；要更多就自己調 SIM_USERS / EXT_DAYS / EXT_TICK。
+    #
+    # **不要**不帶 --from：那是持續模式，永遠不會結束——以前這裡就是那樣寫的，
+    # 再接一個 `| tail -3`，結果是一個永遠不回來、也什麼都不印的指令。
+    local users=${SIM_USERS:-30} days=${EXT_DAYS:-30} tick=${EXT_TICK:-1d}
+    echo ">> 縮時鋪資料：${users} 人、劇本 ${days} 天、每輪 ${tick}（外部鏈不能調整區塊時間，劇本壓在現在）"
+    # 人物帳戶的 gas 由平台出：模擬器的 ensureGas() 會在餘額不足時從 DEPLOYER_PK
+    # （沒有就 RELAYER_PK）真的轉一筆過去。所以要備的是**營運金鑰**的餘額。
+    # 金鑰從 web/.env.local 讀（shell 有設同名變數會蓋過它）。
+    echo "   人物帳戶的 gas 由平台金鑰代付（每個 ${SIM_GAS_TOPUP:-0.001} BOLT）。"
+    echo "   每筆交易等一次出塊，會跑一陣子；中斷後重跑會接手鏈上已有的帳戶。"
+    ( cd web && RPC_URL="$RPC_URL" node scripts/simulate.mjs \
+        --users "$users" --from "$(days_ago $(( days - 1 )))" --tick "$tick" )
   fi
 }
 

@@ -24,13 +24,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { createPublicClient, createWalletClient, defineChain, http, parseAbi } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { KeyError, keyring, setting } from "./lib/keys.mjs";
 
 const { totalsHashOf } = await import("../lib/bank/tree.ts");
 const { replay, checkExternalEvents } = await import("../lib/bank/replay.ts");
 const { toBalances } = await import("../lib/bank/engine.ts");
 
 const dry = process.argv.includes("--dry-run") || process.argv.includes("--plan");
-const RPC = process.env.RPC_URL ?? "http://127.0.0.1:28545";
+const RPC = setting("RPC_URL") ?? "http://127.0.0.1:28545";
 
 const bankAbi = parseAbi([
   "function head() view returns (bytes32)",
@@ -138,10 +139,15 @@ if (dry) {
   process.exit(0);
 }
 
-const pk = process.env.COMMITTER_PK ?? process.env.RELAYER_PK;
-if (!pk) {
-  console.error("\n需要 COMMITTER_PK（或 RELAYER_PK）才能送出。");
-  process.exit(1);
+// shell 優先，其次 web/.env.local（bootstrap.sh 寫在那裡）；格式不對會說是哪一個變數，不印值。
+let pk;
+try {
+  const ring = keyring({ chainId, isLocal: chainId === 31337 || chainId === 1337 });
+  for (const n of ring.notes) console.log(`  ${n}`);
+  pk = ring.require("COMMITTER_PK", "RELAYER_PK").pk;
+} catch (e) {
+  if (e instanceof KeyError) { console.error(`\n${e.message}`); process.exit(1); }
+  throw e;
 }
 const wallet = createWalletClient({ account: privateKeyToAccount(pk), chain, transport: http(RPC) });
 

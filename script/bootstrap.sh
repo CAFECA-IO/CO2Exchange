@@ -5,7 +5,8 @@
 #   bash script/bootstrap.sh keys     # 只建金鑰
 #   bash script/bootstrap.sh fund     # 印出各要多少，等到夠為止
 #   bash script/bootstrap.sh deploy   # 驗餘額 → 部署 → 更新 web/.env.local
-#   bash script/bootstrap.sh status   # 五把金鑰現在各有多少、部署了沒
+#   bash script/bootstrap.sh status   # 五把金鑰現在各有多少、部署了沒、角色對不對
+#   bash script/bootstrap.sh roles    # 只做角色檢查：鏈上 hasRole 對照 web/.env.local 的金鑰
 #
 # ## 金鑰在**你的機器上產生**，不會經過任何人
 #
@@ -109,7 +110,11 @@ env_set () {
 
 ANVIL_PK0=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 # 「這個值算不算已經設好了」。空的、註解掉的、或還是 anvil 的公開金鑰，都不算。
-usable () { [ -n "$1" ] && [ "$1" != "$ANVIL_PK0" ] && case "$1" in 0x*) return 0;; *) return 1;; esac; }
+# 0x + 64 個十六進位字元才算。只看「0x 開頭」的話，README 的佔位字「0x…」也會過關。
+usable () {
+  [ -n "$1" ] && [ "$1" != "$ANVIL_PK0" ] || return 1
+  printf '%s' "$1" | grep -Eq '^0x[0-9a-fA-F]{64}$'
+}
 
 addr_of () { cast wallet address --private-key "$1" 2>/dev/null; }
 
@@ -304,6 +309,24 @@ cmd_deploy () {
   # COMMITTER 指到 relayer 的地址。
   local relayer_addr; relayer_addr=$(addr_of "$(env_get RELAYER_PK)")
   export COMMITTER=${COMMITTER:-$relayer_addr}
+
+  # 角色地址。**這三個不傳，Deploy.s.sol 會預設成 deployer**——而網站簽身分、
+  # 簽核發、回寫文件雜湊用的是 web/.env.local 裡各自那一把。結果是部署看起來成功，
+  # 第一筆 KYC 註冊就 InvalidAttestation，而且 deployer 已經放棄 admin，
+  # 要補授角色得走 48 小時的 Timelock。所以在部署前就對齊。
+  local k
+  for k in IDENTITY_VERIFIER_PK CARBON_VERIFIER_PK DOCUMENT_SIGNER_PK; do
+    usable "$(env_get "$k")" || { echo "!! ${k} 還沒產生或格式不對，先跑 bash script/bootstrap.sh keys"; exit 1; }
+  done
+  export IDENTITY_VERIFIER=${IDENTITY_VERIFIER:-$(addr_of "$(env_get IDENTITY_VERIFIER_PK)")}
+  export CARBON_VERIFIER=${CARBON_VERIFIER:-$(addr_of "$(env_get CARBON_VERIFIER_PK)")}
+  export DOCUMENT_SIGNER=${DOCUMENT_SIGNER:-$(addr_of "$(env_get DOCUMENT_SIGNER_PK)")}
+
+  local dep_before="$ROOT/deployments/${CHAIN_ID}.json" redeploy=0
+  if [ -f "$dep_before" ]; then
+    redeploy=1
+    echo ">> deployments/${CHAIN_ID}.json 已存在，這次部署會取代它（舊合約留在鏈上，但網站不再指向它們）"
+  fi
   export DEPLOYER_PK=$pk
   export RPC_URL
 
@@ -345,6 +368,9 @@ cmd_deploy () {
   echo "   這會送出幾十筆交易。外部鏈上加了 --slow（一筆確認再送下一筆），"
   echo "   所以要等 筆數 × 出塊時間，可能十幾分鐘。**中途不要中斷。**"
   echo "   COMMITTER = ${COMMITTER}（relayer，這樣 bank:commit 才送得出去）"
+  echo "   IDENTITY_VERIFIER = ${IDENTITY_VERIFIER}（身分 attestation）"
+  echo "   CARBON_VERIFIER   = ${CARBON_VERIFIER}（核發 attestation、對帳查核）"
+  echo "   DOCUMENT_SIGNER   = ${DOCUMENT_SIGNER}（憑證文件雜湊、對帳報告、費率）"
   echo "   NATIONAL_OWNERS = ${NATIONAL_OWNERS}（${NATIONAL_THRESHOLD}-of-3）"
   echo "   OPERATOR_OWNERS = ${OPERATOR_OWNERS}（${OPERATOR_THRESHOLD}-of-2）"
   [ -n "${SETTLEMENT_TOKEN:-}" ] \
@@ -375,6 +401,12 @@ cmd_deploy () {
   [ -n "${SETTLEMENT_TOKEN:-}" ] && env_set SETTLEMENT_TOKEN "$SETTLEMENT_TOKEN"
   echo "   RPC_URL / CHAIN_ID 已寫入"
 
+  # 換了一次部署，web/data/ 裡的紀錄屬於舊合約（網站會回 503「紀錄屬於另一次部署」）。
+  if [ "$redeploy" = 1 ]; then
+    echo ">> 舊部署的 web/data/ 搬到 data.bak-<時間>"
+    ( cd "$ROOT/web" && node scripts/data-reset.mjs ) | sed 's/^/   /'
+  fi
+
   echo
   echo ">> 部署合約地址（deployments/${CHAIN_ID}.json）"
   if command -v python3 >/dev/null 2>&1; then
@@ -389,11 +421,41 @@ PY
     cat "$dep"
   fi
   echo
+  check_roles "$dep" || echo "!! 角色不對：網站的簽章會被合約拒絕。見上面標 ✗ 的那幾行。"
+  echo
   echo ">> 還要做的兩件事："
   echo "   1. web/.env.local 的 SITE_ORIGIN 要與瀏覽器網址列逐字相同（含 scheme 與 port）"
   echo "   2. 登入一次，把 /account 上的地址填進 ADMIN_ADDRESSES，然後重啟"
   echo "   3. ./script/govern.sh status —— 每一格都該是 true，admin 指向 Timelock、sov 指向國家 Safe"
   echo "      之後要動治理時：govern.sh 的簽章金鑰在 ${GOV_FILE}，送出 execTransaction 需要 SENDER_PK（任何有餘額的帳戶）"
+}
+
+# ── 角色檢查 ───────────────────────────────────────────────────────
+#
+# 對照 web/.env.local 的每一把服務金鑰，確認鏈上真的授給了它。
+# 部署「成功」不代表接得起來：角色授錯人，合約照樣部署完，錯誤要到第一筆使用者操作才出現。
+check_roles () {
+  local dep=$1 ok=0
+  command -v python3 >/dev/null 2>&1 || { echo "   （沒有 python3，略過角色檢查）"; return 0; }
+  addr_in () { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$dep" "$1"; }
+  role_of () { cast call --rpc-url "$RPC_URL" "$1" "$2()(bytes32)" 2>/dev/null; }
+  has () { cast call --rpc-url "$RPC_URL" "$1" "hasRole(bytes32,address)(bool)" "$2" "$3" 2>/dev/null; }
+  one () { # 標籤 合約鍵 角色函式 金鑰變數
+    local c r a got
+    c=$(addr_in "$2"); r=$(role_of "$c" "$3"); a=$(addr_of "$(env_get "$4")")
+    got=$(has "$c" "$r" "$a")
+    if [ "$got" = "true" ]; then printf '   ✓ %-34s %s\n' "$1" "$a"
+    else printf '   ✗ %-34s %s 沒有 %s\n' "$1" "$a" "$3"; ok=1; fi
+  }
+  echo ">> 角色檢查（鏈上 hasRole 對照 web/.env.local 的金鑰）"
+  one "KYC 身分簽章"            kycRegistry           IDENTITY_VERIFIER_ROLE IDENTITY_VERIFIER_PK
+  one "核發簽章"                carbonRegistry        VERIFIER_ROLE          CARBON_VERIFIER_PK
+  one "對帳查核"                reserveAttestation    AUDITOR_ROLE           CARBON_VERIFIER_PK
+  one "對帳報告"                reserveAttestation    REPORTER_ROLE          DOCUMENT_SIGNER_PK
+  one "憑證文件雜湊"            retirementCertificate DOCUMENT_ROLE          DOCUMENT_SIGNER_PK
+  one "費率設定"                feeSchedule           PRICING_ROLE           DOCUMENT_SIGNER_PK
+  one "承諾上鏈（bank:commit）" bank                  COMMITTER_ROLE         RELAYER_PK
+  return $ok
 }
 
 # ── status ─────────────────────────────────────────────────────────
@@ -404,6 +466,7 @@ cmd_status () {
   [ -f "$dep" ] && echo "部署檔   deployments/${CHAIN_ID}.json" || echo "部署檔   ⚠️ 還沒部署到這條鏈"
   echo
   cmd_fund || true
+  if [ -f "$dep" ]; then echo; check_roles "$dep" || true; fi
 }
 
 case "${1:-all}" in
@@ -411,6 +474,7 @@ case "${1:-all}" in
   fund)   cmd_fund;;
   deploy) cmd_deploy;;
   status) cmd_status;;
+  roles)  need_chain; check_roles "$ROOT/deployments/${CHAIN_ID}.json";;
   all)    cmd_keys; echo; cmd_fund && { echo; cmd_deploy; };;
   *)      sed -n '2,30p' "$0"; exit 1;;
 esac

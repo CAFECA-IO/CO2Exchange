@@ -572,9 +572,9 @@ cd web && npm run build && npm run e2e
 （讓使用者提領、或宣告作廢）再動手：
 
 ```bash
-export RPC_URL=http://211.22.118.149:8545 DEPLOYER_PK=0x…
+export RPC_URL=http://211.22.118.149:8545
 export SETTLEMENT_TOKEN=0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3
-bash script/demo-box.sh deploy      # 會寫出新的 deployments/8018.json 並 data:reset
+bash script/bootstrap.sh deploy     # 金鑰讀 web/.env.local；寫出新的 deployments/8018.json 並 data:reset
 ```
 
 `data:reset` 為什麼跳不過，見「[七、出問題怎麼修 › 重新部署之後](#重新部署之後webdata-的舊紀錄)」。備份裡有使用者上傳的身分文件，
@@ -704,9 +704,9 @@ Anvil 上我們用 `anvil_setTime` 把鏈的時間往前推，所以首頁那一
 ./script/preflight.sh https://sepolia.base.org
 
 # 2. 部署（含合約原始碼驗證，需要 BASESCAN_API_KEY）
-export DEPLOYER_PK=0x…  NATIONAL_OWNERS=0x…,0x…,0x…  OPERATOR_OWNERS=0x…,0x…
-export RECOVERY_DELAY=600
-forge script script/DeployV4.s.sol --rpc-url base_sepolia --broadcast --verify
+# 金鑰與角色地址由 bootstrap.sh 從 web/.env.local 帶入，不要手動 export 私鑰
+export RPC_URL=https://sepolia.base.org RECOVERY_DELAY=600
+FORGE_EXTRA_ARGS=--verify bash script/bootstrap.sh deploy
 
 # 3. 前端指向這條鏈
 cd web && cp .env.example .env.local   # 依上面那張表把每一把金鑰換掉
@@ -787,7 +787,7 @@ README 最後那一節「目標鏈沒有 Cancun 的話」只對 8017 主網與�
 | 一般使用者 | 買賣、註銷（走 CAFECA 簽章通道的 `sendCalls`） | **CAFECA 贊助**。使用者的帳戶不需要持有 BOLT |
 | 平台 | KYC 註冊、核發、`retireFor`、承諾上鏈 | `RELAYER_PK` |
 | 平台 | 憑證雜湊回寫、費率設定 | `DOCUMENT_SIGNER_PK` |
-| 模擬市場的一百個帳戶 | 下單、成交、註銷 | **平台代付**：`ensureFunded()` 從 `DEPLOYER_PK`／`RELAYER_PK` 轉過去 |
+| 模擬市場的人物帳戶 | 下單、成交、註銷 | **平台代付**：`ensureGas()` 從 `DEPLOYER_PK`（沒有就 `RELAYER_PK`）轉過去 |
 
 **沒有任何一般使用者需要自己準備 BOLT。** 這是刻意的——一個要求碳權買家先去
 取得原生代幣的平台，實際上等於把大多數人擋在門外。
@@ -804,44 +804,55 @@ README 最後那一節「目標鏈沒有 Cancun 的話」只對 8017 主網與�
    那是 geth 的行為，不是規範。Boltchain 直接回 `nonce too high` 把整批打掉，
    而那個訊息看起來像我們算錯 nonce（實測 `latest == pending`，一筆卡住的都沒有）。
    代價是慢：幾十筆 × 6 秒。`bootstrap.sh` 在外部鏈上會自動加。
-3. **瀏覽器碰不到它，而這是好事。** 站台走 HTTPS 時，瀏覽器不能呼叫 `http://` 的
+4. **瀏覽器碰不到它，而這是好事。** 站台走 HTTPS 時，瀏覽器不能呼叫 `http://` 的
    端點（mixed content）。本專案的「前端不直接跟區塊鏈說話」在這裡剛好付清了成本——
    所有鏈上讀寫都在伺服器端，瀏覽器連節點位址都不知道。
 
-#### 一、金鑰
-
-部署與四把服務金鑰**都要在 Boltchain 上有餘額**：
+#### 一、金鑰與部署：交給 `bootstrap.sh`
 
 ```bash
-cast wallet new        # 每一把都獨立產生，不要共用，也不要沿用其他鏈的
+export RPC_URL=http://211.22.118.149:8545
+export SETTLEMENT_TOKEN=0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3   # CAFECA 的 TWDC
+bash script/bootstrap.sh          # keys → fund（等你撥款）→ deploy → 角色檢查
 ```
 
-| 金鑰 | 用途 | 要不要餘額 |
+**私鑰不要 export 到 shell。** 金鑰由 `bootstrap.sh keys` 產生、寫在 `web/.env.local`
+（權限 600），網站、`simulate.mjs`、`commit-epoch.mjs` 都從那裡讀。shell 裡的同名變數
+會**蓋過**檔案——之前照舊版文件打過 `export DEPLOYER_PK=0x…` 的，那個佔位字會一直蓋著
+真的金鑰，症狀是 `invalid private key … got string`。先 `unset DEPLOYER_PK` 再跑。
+
+| 金鑰 | 鏈上角色 | 要不要餘額 |
 |---|---|---|
-| `DEPLOYER_PK` | 部署整套合約 | 要（整套約數千萬 gas，含 Safe 基礎設施） |
-| `RELAYER_PK` | 平台端交易：`retireFor`、承諾上鏈 | 要 |
-| `IDENTITY_VERIFIER_PK` | 簽發 KYC attestation | 要 |
-| `CARBON_VERIFIER_PK` | 查驗機構核發額度 | 要 |
-| `DOCUMENT_SIGNER_PK` | 憑證文件雜湊回寫 | 要 |
+| `DEPLOYER_PK` | 部署；模擬器撥 gas 給人物帳戶 | 要 |
+| `RELAYER_PK` | `COMMITTER_ROLE`：承諾上鏈、`retireFor` | 要 |
+| `DOCUMENT_SIGNER_PK` | `DOCUMENT_ROLE`、`REPORTER_ROLE`、`PRICING_ROLE` | 要 |
+| `IDENTITY_VERIFIER_PK` | `IDENTITY_VERIFIER_ROLE`（只簽 attestation） | 不要 |
+| `CARBON_VERIFIER_PK` | `VERIFIER_ROLE`、`AUDITOR_ROLE` | 不要（對帳查核的 `attest` 要一點，模擬器會從 DEPLOYER 代撥） |
 
 > **使用者的交易不用平台出 gas**：買賣與註銷走 CAFECA 簽章通道的 `sendCalls`，
 > 由使用者自己的帳戶送出、CAFECA 贊助 gas。平台金鑰付的是**平台自己**要做的事。
 
-程式會在啟動時擋下 Anvil 的公開金鑰（`requireOwnKey`）——那把印在 anvil 的啟動畫面上，
-在這裡同時能凍結錢包、簽發身分、核發額度。
-
-#### 二、部署
+**角色要授給上表那幾把金鑰，不是 deployer。** `Deploy.s.sol` 的
+`IDENTITY_VERIFIER` / `CARBON_VERIFIER` / `DOCUMENT_SIGNER` 沒給就預設成 deployer——
+部署照樣「成功」，但網站用自己那把金鑰簽的東西全部被合約拒絕（第一筆 KYC 就
+`InvalidAttestation`）；而 deployer 部署完已經放棄 admin，事後補授要走 48 小時的 Timelock。
+`bootstrap.sh deploy` 會從 `web/.env.local` 算出這三個地址傳進去，部署完再逐一 `hasRole`
+檢查。隨時可以重驗：
 
 ```bash
-export RPC_URL=http://211.22.118.149:8545
-export DEPLOYER_PK=0x…
-# 結算幣用 CAFECA 的 TWDC，不要自己發一個平行的
-export SETTLEMENT_TOKEN=0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3
-
-# Boltchain 沒有 CREATE2 deployer，所以 v4 的 hook 部署不了，用核心這一支。
-# --slow 不是可選的，理由見下。
-forge script script/Deploy.s.sol --rpc-url chain --broadcast --slow
+bash script/bootstrap.sh roles    # 每一行都該是 ✓
 ```
+
+程式會在啟動時擋下 Anvil 的公開金鑰（`requireOwnKey`；腳本端是 `scripts/lib/keys.mjs`）——
+那把印在 anvil 的啟動畫面上，在這裡同時能凍結錢包、簽發身分、核發額度。
+
+#### 二、部署細節（`bootstrap.sh` 替你做的事）
+
+- Boltchain 沒有 CREATE2 deployer，v4 的 hook 部署不了，自動改用 `Deploy.s.sol`。
+- 外部鏈自動加 `--slow`，理由見上面「四件關於這個端點的事」。
+- `COMMITTER` 預設是 relayer 的地址，`bank:commit` 才送得出去。
+- 國家 Safe 2-of-3、營運 Safe 1-of-2 的 owner 金鑰寫在 `.governance.env`，**不在** `web/.env.local`。
+- `deployments/8018.json` 已存在就是換一次部署：舊合約留在鏈上，`web/data/` 搬到 `data.bak-<時間>`。
 
 #### 結算幣：用 TWDC，不要自己發
 
@@ -867,13 +878,22 @@ MockTWD 從頭到尾只是一個站得住的替代品。
 沒有區塊瀏覽器的驗證 API，所以 `--verify` 不適用；要讓外部單位自己對照
 「鏈上跑的位元組碼」與 repo 裡的原始碼，得另外提供建置步驟與 `forge build` 的輸出。
 
-`demo-box.sh` 也認得這條鏈——它看 `RPC_URL`，不是寫死 anvil：
+`demo-box.sh` 也認得這條鏈——它看 `RPC_URL`（shell 沒設就讀 `web/.env.local`），不是寫死 anvil：
 
 ```bash
-export RPC_URL=http://211.22.118.149:8545
-bash script/demo-box.sh deploy    # 等同上面那道 forge script，外加 web/data 重置
+bash script/demo-box.sh deploy    # 外部鏈上 = bootstrap.sh deploy
+bash script/demo-box.sh seed      # 縮時鋪資料：預設 30 人 × 30 天、每天一輪，約一小時
 bash script/demo-box.sh status    # chainId、是不是本機鏈、部署檔在不在
 ```
+
+`seed` 在外部鏈上刻意縮小規模（`SIM_USERS` / `EXT_DAYS` / `EXT_TICK` 可調）：每筆交易
+都要等一次出塊，本機那種一百人 × 一年的劇本在這裡要跑好幾天。模擬器的人物帳戶用
+**這條鏈專用的助記詞**（第一次跑時產生、寫進 `web/.env.local` 的 `SIM_MNEMONIC`）——
+anvil 那組 `test … junk` 是公開的，用在這裡等於平台撥過去的 gas 誰都能拿走。
+
+TWDC 本站鑄不出來，所以人物帳戶的入金是從 `DEPLOYER` 的 TWDC 餘額**轉**過去的。
+`DEPLOYER` 沒有 TWDC 的話，模擬出來的市場只有核發與掛單、沒有成交；
+要有成交，先向 CAFECA 取得測試用 TWDC 轉到 `DEPLOYER` 的地址。
 
 **`rebuild` 在外部鏈上會直接拒絕**，而且應該拒絕：鏈不是我們的（停不掉、重開不了）、
 時間不是我們的（沒有 `anvil_setTime`，回填一年份做不到）、每天重新部署會讓前一次的
@@ -881,19 +901,6 @@ bash script/demo-box.sh status    # chainId、是不是本機鏈、部署檔在�
 
 部署檔會寫到 `deployments/8018.json`。按 chainId 分檔，所以本機那份 `31337.json`
 不受影響，兩邊可以並存。
-
-治理角色不設就全部指向部署者（展示可以，正式不行）：
-
-```bash
-export SOVEREIGN=0x…  OPERATOR=0x…  TREASURY=0x…  COMMITTER=0x…
-export NATIONAL_OWNERS=0x…,0x…  NATIONAL_THRESHOLD=2
-export OPERATOR_OWNERS=0x…      OPERATOR_THRESHOLD=1
-export TIMELOCK_DELAY=172800    # 48h
-```
-
-`COMMITTER` 預設 = `OPERATOR`，而且只有在 `DEPLOYER == OPERATOR` 時腳本才授得了
-`COMMITTER_ROLE`；不相等時它會印出要手動執行的 `cast send`。**沒授就沒授**——
-第一次 `npm run bank:commit` 會直接 AccessControl revert。
 
 #### 三、前端設定（`web/.env.local`）
 
@@ -921,10 +928,8 @@ CAFECA_FACTORY=0x075e377D1096089aE2D44fbD23156BF900b8bd24
 CAFECA_KEYRING=0x367a9E8a6E8bA108F4cC4B863d03dD618aD7893b
 
 # 服務金鑰（第一節那幾把）
-RELAYER_PK=0x…
-IDENTITY_VERIFIER_PK=0x…
-CARBON_VERIFIER_PK=0x…
-DOCUMENT_SIGNER_PK=0x…
+# RELAYER_PK / IDENTITY_VERIFIER_PK / CARBON_VERIFIER_PK / DOCUMENT_SIGNER_PK / DEPLOYER_PK
+# 由 bash script/bootstrap.sh keys 產生並寫在這裡。不要手寫、不要貼到任何地方。
 IDENTITY_SALT=<換掉>   # 鏈上存 keccak(身分證號 + salt)，用範例值等於沒有雜湊
 
 # 角色（地址，不是 email 了）
@@ -1051,6 +1056,9 @@ creation bytecode 直接 CREATE —— 官方版本是 solc 0.7.6 編的，本�
 | 部署被 `PublicKeyOnPublicChain` 擋下 | 有一個角色還用著 anvil 的預設帳戶（常見的是 `NATIONAL_OWNERS`）。`bash script/bootstrap.sh keys` 會一併產生治理 owner |
 | 部署到一半 `missing CREATE2 deployer` | 這條鏈沒有那個標準代理，v4 的 hook 位址挖不出來。`bootstrap.sh` 與 `preflight.sh` 現在會**事先**查並自動改用 `Deploy.s.sol` |
 | 部署一開始就 `nonce too high`，而 `latest == pending`（沒有卡住的交易） | 節點的 txpool 不收未來 nonce 的交易，而 forge 預設整批一次送。加 `--slow`；`bootstrap.sh` 在外部鏈上會自動加 |
+| `seed` / `simulate` 報 `invalid private key, expected hex or 32 bytes, got string` | shell 裡有一個不是私鑰的同名變數（常見是照舊文件 `export DEPLOYER_PK=0x…` 留下的佔位字），蓋過了 `web/.env.local`。`unset DEPLOYER_PK RELAYER_PK` 再跑；新版會直接說是哪一個變數 |
+| 登入後第一筆 KYC 註冊 `InvalidAttestation`；核發、憑證文件雜湊也失敗 | 角色授給了 deployer 而不是 `web/.env.local` 裡那幾把服務金鑰。`bash script/bootstrap.sh roles` 看哪一行 ✗。部署完 deployer 已放棄 admin，補授要走 Timelock；還沒有資料的話重跑 `bootstrap.sh deploy` 最快 |
+| 外部鏈 `seed` 跑完只有核發與掛單、沒有成交 | TWDC 本站鑄不出來，人物帳戶的入金是從 `DEPLOYER` 的 TWDC 餘額轉的。先把測試用 TWDC 轉到 `DEPLOYER` 地址 |
 | `govern.sh status` 印出 `does not have any code` | 這個部署沒有 v4（hook / poolManager / router 是 0），屬正常。已修成跳過並標示「v4=未部署」 |
 | 重新部署後畫面有資料但對不上鏈 | `web/data/` 的舊紀錄，見下 |
 | 磁碟莫名其妙滿了 | `~/.foundry/anvil/tmp/` 的歷史狀態，見[建立模擬資料](#建立模擬資料) |

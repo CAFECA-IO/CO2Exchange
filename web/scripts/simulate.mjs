@@ -50,8 +50,9 @@ import path from "node:path";
 import {
   createPublicClient, createWalletClient, defineChain, http, keccak256, parseAbi, toBytes, toHex,
 } from "viem";
-import { mnemonicToAccount, privateKeyToAccount } from "viem/accounts";
+import { english, generateMnemonic, mnemonicToAccount, privateKeyToAccount } from "viem/accounts";
 import { buildPersonas, mulberry32, rosterSummary, seasonality } from "./personas.mjs";
+import { ANVIL_MNEMONIC, KeyError, appendIfMissing, keyring, setting } from "./lib/keys.mjs";
 
 // ───────────────────────── 參數 ─────────────────────────
 
@@ -61,14 +62,14 @@ const arg = (n, d) => {
 };
 const flag = (n) => process.argv.includes(`--${n}`);
 
-const RPC = arg("rpc", process.env.RPC_URL ?? "http://127.0.0.1:28545");
+// shell 優先，其次 web/.env.local——跟網站讀的是同一條鏈。
+const RPC = arg("rpc", setting("RPC_URL") ?? "http://127.0.0.1:28545");
 const USERS = Number(arg("users", 100));
 const SEED = arg("seed", "co2x");
 const FROM = arg("from", null);
 const INTERVAL = Number(arg("interval", 60));
 const QUIET = flag("quiet");
 const DRY = flag("dry-run");
-const MNEMONIC = arg("mnemonic", process.env.SIM_MNEMONIC ?? "test test test test test test test test test test test junk");
 
 function parseDuration(s, dflt) {
   if (!s) return dflt;
@@ -84,10 +85,7 @@ const PACE = Number(arg("pace", 0));
 // ───────────────────────── 人物 ─────────────────────────
 
 const personas = buildPersonas(USERS, SEED);
-for (const p of personas) {
-  p.account = mnemonicToAccount(MNEMONIC, { addressIndex: p.walletIndex });
-  p.address = p.account.address;
-}
+// 帳戶（助記詞）要等連上鏈、知道是不是公開鏈之後才決定，見下面「人物帳戶」。
 
 if (DRY) {
   const s = rosterSummary(personas);
@@ -108,8 +106,6 @@ if (DRY) {
 
 // ───────────────────────── 鏈與合約 ─────────────────────────
 
-const ANVIL_PK0 = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-const OPERATOR_PK = process.env.DEPLOYER_PK ?? process.env.RELAYER_PK ?? ANVIL_PK0;
 
 const kycAbi = parseAbi([
   "struct IdentityAttestation { address account; uint8 tier; uint64 expiry; bytes2 jurisdiction; bytes32 identityHash; uint256 nonce; uint256 deadline; }",
@@ -163,6 +159,7 @@ const erc20Abi = parseAbi([
   "function balanceOf(address) view returns (uint256)",
   "function approve(address, uint256) returns (bool)",
   "function mint(address, uint256)",
+  "function transfer(address, uint256) returns (bool)",
   "function totalSupply() view returns (uint256)",
 ]);
 
@@ -191,24 +188,96 @@ if (!fs.existsSync(depFile)) {
 }
 const D = JSON.parse(fs.readFileSync(depFile, "utf8"));
 
-const operator = privateKeyToAccount(OPERATOR_PK);
+// ───────────────────────── 金鑰 ─────────────────────────
+//
+// 本機鏈上一把 anvil account0 身兼所有角色；公開鏈上各角色是**不同的金鑰**
+// （bootstrap.sh 產生、部署時把角色授給各自的地址），所以這裡也要分開拿：
+//
+//   營運（付 gas、平台上架、轉結算幣） DEPLOYER_PK ?? RELAYER_PK
+//   身分 attestation 簽章            IDENTITY_VERIFIER_PK   ← KYCRegistry.IDENTITY_VERIFIER_ROLE
+//   核發 attestation 簽章            CARBON_VERIFIER_PK     ← CarbonRegistry.VERIFIER_ROLE
+//   對帳報告 publish / 文件雜湊       DOCUMENT_SIGNER_PK     ← ReserveAttestation.REPORTER_ROLE
+//   對帳報告 attest（查核簽署）        CARBON_VERIFIER_PK     ← ReserveAttestation.AUDITOR_ROLE
+//
+// 沒設的角色退回營運金鑰——本機鏈上那本來就是同一把。
+let K;
+try {
+  const ring = keyring({ chainId, isLocal: LOCAL_CHAIN });
+  for (const n of ring.notes) console.log(`  ${n}`);
+  const op = ring.require("DEPLOYER_PK", "RELAYER_PK");
+  K = {
+    op,
+    identity: ring.optional(op, "IDENTITY_VERIFIER_PK"),
+    carbon: ring.optional(op, "CARBON_VERIFIER_PK"),
+    reporter: ring.optional(op, "DOCUMENT_SIGNER_PK"),
+    mnemonic: ring.secret("SIM_MNEMONIC"),
+  };
+} catch (e) {
+  if (e instanceof KeyError) { console.error(`\n${e.message}`); process.exit(1); }
+  throw e;
+}
+
+const operator = privateKeyToAccount(K.op.pk);
+const identitySigner = privateKeyToAccount(K.identity.pk);
+const carbonSigner = privateKeyToAccount(K.carbon.pk);
+const reporter = privateKeyToAccount(K.reporter.pk);
 const opClient = createWalletClient({ account: operator, chain, transport: http(RPC), pollingInterval: POLL });
 const opWallet = { account: operator, client: opClient, nonce: -1 };
+
+// ───────────────────────── 人物帳戶 ─────────────────────────
+//
+// anvil 的助記詞（test … junk）是公開的。在公開鏈上用它，一百個人物帳戶的私鑰
+// 全世界都有：平台撥過去的 gas 誰都能轉走，也誰都能冒用這些已通過 KYC 的身分。
+// 所以公開鏈上用**這條鏈專用**的助記詞；第一次跑時產生並寫進 web/.env.local。
+let MNEMONIC = arg("mnemonic", K.mnemonic?.value);
+if (!MNEMONIC) {
+  if (LOCAL_CHAIN) MNEMONIC = ANVIL_MNEMONIC;
+  else {
+    MNEMONIC = generateMnemonic(english);
+    appendIfMissing("SIM_MNEMONIC", MNEMONIC);
+    console.log("  已產生模擬人物用的助記詞，寫入 web/.env.local 的 SIM_MNEMONIC（不會印出來；下次會沿用同一批帳戶）");
+  }
+}
+if (!LOCAL_CHAIN && MNEMONIC.trim() === ANVIL_MNEMONIC) {
+  console.error(`\nSIM_MNEMONIC 是 anvil 的公開助記詞，chainId ${chainId} 不是本機鏈。刪掉它讓模擬器重新產生一組。`);
+  process.exit(1);
+}
+for (const p of personas) {
+  p.account = mnemonicToAccount(MNEMONIC, { addressIndex: p.walletIndex });
+  p.address = p.account.address;
+}
+
+// ───────────────────────── 結算幣 ─────────────────────────
+//
+// 本機鏈的 MockTWD 可以鑄；公開鏈上的結算幣（Boltchain 是 CAFECA 的 TWDC）
+// 不是我們發的，**鑄不出來**。人物帳戶的入金只能由營運金鑰從自己的餘額轉過去——
+// 營運金鑰沒有 TWDC，買方就沒有錢，市場只剩核發與掛單、不會有成交。
+const CASH_MINTABLE = D.settlementMintable !== false;
+let cashWarned = false;
 
 // ───────────────────────── 交易小工具 ─────────────────────────
 
 const wallets = new Map(); // address -> { account, client, nonce }
-function walletOf(p) {
-  let w = wallets.get(p.address);
+wallets.set(operator.address, opWallet);
+/// 同一個地址只能有一份 nonce 計數——角色金鑰跟營運金鑰相同時（本機鏈），
+/// 一定要拿到同一個 wallet 物件，否則兩邊各自遞增 nonce 會互撞。
+function walletFor(account) {
+  let w = wallets.get(account.address);
   if (!w) {
-    w = { account: p.account, client: createWalletClient({ account: p.account, chain, transport: http(RPC), pollingInterval: POLL }), nonce: -1 };
-    wallets.set(p.address, w);
+    w = { account, client: createWalletClient({ account, chain, transport: http(RPC), pollingInterval: POLL }), nonce: -1 };
+    wallets.set(account.address, w);
   }
   return w;
 }
+const walletOf = (p) => walletFor(p.account);
+const reporterWallet = walletFor(reporter);
+const auditorWallet = walletFor(carbonSigner);
 
 let sent = 0, failed = 0;
 async function send(w, params, needResult = false) {
+  // 每一筆都先看一次 gas 夠不夠。只在加入時撥一次的話，跑久了（或 gas 價格高的鏈上）
+  // 人物帳戶會默默燒光，接下來的每個動作都報 reverted，看不出是沒錢。
+  if (w !== opWallet) await ensureGas(w);
   if (w.nonce < 0) w.nonce = await pub.getTransactionCount({ address: w.account.address });
   let request = { ...params, account: w.account }, result;
   if (needResult) ({ request, result } = await pub.simulateContract({ ...params, account: w.account }));
@@ -392,23 +461,57 @@ const TIER = { individual: 1, corporate: 2 };
 /// 只能由營運金鑰真的轉一筆過去。金額刻意小：Base Sepolia 這種 L2 上
 /// 一筆交易大約是 1e-5 ETH 等級，GAS_TOPUP 夠跑幾百筆。
 /// 太大則是把 faucet 領來的測試幣鎖在一百個地址裡拿不回來。
-const GAS_TOPUP = BigInt(process.env.SIM_GAS_TOPUP ?? (LOCAL_CHAIN ? 10n ** 19n : 10n ** 15n));
-const GAS_FLOOR = GAS_TOPUP / 5n;
+///
+/// 下限跟著這條鏈的 gas 價格走：固定一個 ETH 數字的話，換到 gas 比較貴的鏈上，
+/// 撥過去的錢只夠三四筆，之後每個動作都以「reverted」失敗（其實是餘額不足）。
+const GAS_PRICE = await pub.getGasPrice().catch(() => 0n);
+const maxBig = (a, b) => (a > b ? a : b);
+const GAS_TOPUP = maxBig(BigInt(process.env.SIM_GAS_TOPUP ?? (LOCAL_CHAIN ? 10n ** 19n : 10n ** 15n)), GAS_PRICE * 3_000_000n);
+const GAS_FLOOR = maxBig(GAS_TOPUP / 5n, GAS_PRICE * 600_000n);
 
-async function ensureFunded(p) {
-  const w = walletOf(p);
-  const bal = await pub.getBalance({ address: p.address });
+/// 任何要自己送交易的地址（人物、對帳報告的 reporter／auditor）都由平台撥 gas。
+async function ensureGas(w) {
+  if (w === opWallet) return w;
+  const addr = w.account.address;
+  const bal = await pub.getBalance({ address: addr });
   if (bal >= GAS_FLOOR) return w;
   if (TIME_TRAVEL) {
-    await pub.request({ method: "anvil_setBalance", params: [p.address, toHex(GAS_TOPUP)] });
+    await pub.request({ method: "anvil_setBalance", params: [addr, toHex(GAS_TOPUP)] });
     return w;
   }
   // 營運金鑰的 nonce 走它自己那一份（opWallet），不要和人物帳戶搶。
   if (opWallet.nonce < 0) opWallet.nonce = await pub.getTransactionCount({ address: operator.address });
-  const hash = await opClient.sendTransaction({ to: p.address, value: GAS_TOPUP, nonce: opWallet.nonce });
+  const hash = await opClient.sendTransaction({ to: addr, value: GAS_TOPUP, nonce: opWallet.nonce });
   opWallet.nonce += 1;
   await pub.waitForTransactionReceipt({ hash });
   return w;
+}
+const ensureFunded = (p) => ensureGas(walletOf(p));
+
+/// 入金。可鑄就鑄；鑄不了就從營運金鑰的結算幣餘額轉，轉不了就少給或不給。
+/// 回傳實際入帳的金額。
+async function fundCash(addr, want) {
+  if (CASH_MINTABLE) {
+    await send(opWallet, { address: D.settlementToken, abi: erc20Abi, functionName: "mint", args: [addr, want] });
+    return want;
+  }
+  const have = cash.get(operator.address) ?? 0n;
+  // 平台手上的錢平均分給還沒入金的人，別讓前幾個人把全部拿走
+  const waiting = BigInt(Math.max(1, personas.filter((x) => !x.joined).length));
+  const give = want < have / waiting ? want : have / waiting;
+  if (give <= 0n) {
+    if (!cashWarned) {
+      cashWarned = true;
+      console.log(
+        `  ⚠ 結算幣（${D.settlementToken}）不能鑄造，而營運金鑰 ${operator.address} 沒有餘額。\n` +
+        `    人物帳戶拿不到錢：會有核發、掛單，但不會有成交。要有成交，先把結算幣轉到這個地址再重跑。`,
+      );
+    }
+    return 0n;
+  }
+  await send(opWallet, { address: D.settlementToken, abi: erc20Abi, functionName: "transfer", args: [addr, give] });
+  cash.set(operator.address, have - give);
+  return give;
 }
 
 async function registerKyc(p, now) {
@@ -423,7 +526,7 @@ async function registerKyc(p, now) {
     nonce,
     deadline: BigInt(now + 365 * 86400),
   };
-  const signature = await operator.signTypedData({
+  const signature = await identitySigner.signTypedData({
     domain: { name: "CO2Exchange KYCRegistry", version: "1", chainId, verifyingContract: D.kycRegistry },
     types: {
       IdentityAttestation: [
@@ -438,8 +541,7 @@ async function registerKyc(p, now) {
   await send(w, { address: D.kycRegistry, abi: kycAbi, functionName: "register", args: [a, signature] });
 
   // 入金（模擬：信託專戶入帳後平台鑄出等額結算幣）
-  const budget = BigInt(Math.max(20_000, p.annualNeedTonnes * 1200 + 50_000)) * 10n ** 6n;
-  await send(opWallet, { address: D.settlementToken, abi: erc20Abi, functionName: "mint", args: [p.address, budget] });
+  const budget = await fundCash(p.address, BigInt(Math.max(20_000, p.annualNeedTonnes * 1200 + 50_000)) * 10n ** 6n);
   cash.set(p.address, budget);
   // 一次把授權做完，之後的每一筆買賣就只剩一個動作
   await send(w, { address: D.settlementToken, abi: erc20Abi, functionName: "approve", args: [D.listing, 2n ** 255n] });
@@ -448,14 +550,22 @@ async function registerKyc(p, now) {
 }
 
 async function topUp(p) {
-  const amount = BigInt(Math.max(50_000, p.annualNeedTonnes * 600)) * 10n ** 6n;
-  await send(opWallet, { address: D.settlementToken, abi: erc20Abi, functionName: "mint", args: [p.address, amount] });
+  const amount = await fundCash(p.address, BigInt(Math.max(50_000, p.annualNeedTonnes * 600)) * 10n ** 6n);
+  if (amount === 0n) return false;
   cash.set(p.address, (cash.get(p.address) ?? 0n) + amount);
 }
 
 // ───────────────────────── 行為 ─────────────────────────
 
 const rndInt = (rng, lo, hi) => lo + Math.floor(rng() * (hi - lo + 1));
+
+/// 核發序號與 attestationId。以前用「鏈上時間 × 1000 + 人物編號」——縮時模式下
+/// 好幾輪落在同一個區塊時間（本機鏈沒有交易就不出塊；Boltchain 6 秒一塊），
+/// 同一個人第二次核發就撞 AttestationAlreadyUsed。改成「這次執行 + 流水號」，
+/// 跨輪、跨重跑都不會重複。
+const RUN_ID = `${Date.now()}-${process.pid}`;
+let serialSeq = 0;
+const uniqueSerial = (tag) => keccak256(toBytes(`${tag}-${RUN_ID}-${serialSeq++}`));
 
 /// 專案方：登錄專案 → 由查驗機構簽章核發 → 額度進到自己手上
 async function actIssue(p, now, rng) {
@@ -476,7 +586,7 @@ async function actIssue(p, now, rng) {
   if (p.costPerTonne && Number(refPrice) < p.costPerTonne * 1e6 * 0.95 && rng() < 0.85) return false;
   const lot = Math.min(remainTonnes, rndInt(rng, Math.round(p.projectScaleTonnes * 0.2), Math.round(p.projectScaleTonnes * 0.5)));
   const amountKg = BigInt(lot * 1000);
-  const serial = keccak256(toBytes(`SIM-${p.id}-${p.issueCount ?? 0}-${now}`));
+  const serial = uniqueSerial(`SIM-${p.id}`);
   const a = {
     projectId: BigInt(p.projectId),
     monitoringStart: BigInt(now - 365 * 86400),
@@ -484,10 +594,10 @@ async function actIssue(p, now, rng) {
     amountKg,
     serialHash: serial,
     reportHash: keccak256(toBytes(`ISO14064-3 report ${p.id}-${p.issueCount ?? 0}`)),
-    attestationId: BigInt(now * 1000 + p.id),
+    attestationId: BigInt(serial),
     deadline: BigInt(now + 365 * 86400),
   };
-  const signature = await operator.signTypedData({
+  const signature = await carbonSigner.signTypedData({
     domain: { name: "CO2Exchange CarbonRegistry", version: "1", chainId, verifyingContract: D.carbonRegistry },
     types: {
       IssuanceAttestation: [
@@ -797,17 +907,18 @@ async function actImportForeign(now, rng) {
   const meta = foreignMeta.get(pid);
   if (!meta || !CUSTODY[meta.country]) return false;
   const amountKg = BigInt(rndInt(rng, 400, 3000) * 1000);
+  const impSerial = uniqueSerial(`IMP-${meta.country}-${pid}`);
   const a = {
     projectId: BigInt(pid),
     monitoringStart: BigInt(now - 365 * 86400),
     monitoringEnd: BigInt(now - 86400),
     amountKg,
-    serialHash: keccak256(toBytes(`IMP-${meta.country}-${pid}-${now}`)),
+    serialHash: impSerial,
     reportHash: keccak256(toBytes(`${meta.methodology} verification ${pid}-${now}`)),
-    attestationId: BigInt(now * 1000 + 900000 + pid),
+    attestationId: BigInt(impSerial),
     deadline: BigInt(now + 365 * 86400),
   };
-  const signature = await operator.signTypedData({
+  const signature = await carbonSigner.signTypedData({
     domain: { name: "CO2Exchange CarbonRegistry", version: "1", chainId, verifyingContract: D.carbonRegistry },
     types: {
       IssuanceAttestation: [
@@ -871,15 +982,17 @@ async function actPublishReserve(now, simNow = now) {
     tokenSupply: supply,
     statementHash: keccak256(toBytes(`trust statement ${period}`)),
   };
-  const reportId = await send(opWallet, {
+  await ensureGas(reporterWallet);
+  await ensureGas(auditorWallet);
+  const reportId = await send(reporterWallet, {
     address: D.reserveAttestation, abi: reserveAbi, functionName: "publish",
     args: [period, BigInt(now), rows, cashRow],
   }, true);
-  await send(opWallet, {
+  await send(reporterWallet, {
     address: D.reserveAttestation, abi: reserveAbi, functionName: "setDocumentHash",
     args: [reportId, keccak256(toBytes(`reserve report ${period}.pdf`))],
   });
-  await send(opWallet, {
+  await send(auditorWallet, {
     address: D.reserveAttestation, abi: reserveAbi, functionName: "attest",
     args: [reportId, 1, "某某會計師事務所", "各國託管帳戶餘額與鏈上流通量相符；信託專戶餘額與結算幣發行量相符"],
   });
@@ -939,6 +1052,12 @@ async function runTick(now, rng, progress, simNow = now) {
       if (progress != null && progress < p.joinAt) continue;
       if (await attempt(`${p.name} 註冊`, () => registerKyc(p, now))) stats.join += 1;
       continue; // 加入的那一輪先不動作
+    }
+
+    // 結算幣鑄不出來的鏈上，先前入金落空的人（營運金鑰當時沒有餘額）這時補上。
+    // 沒有這一段，就算之後把 TWDC 轉進營運金鑰，接手回來的人物也一直是零元。
+    if (!CASH_MINTABLE && (cash.get(p.address) ?? 0n) === 0n && (cash.get(operator.address) ?? 0n) > 0n) {
+      await attempt(`${p.name} 入金`, () => topUp(p));
     }
 
     const season = seasonality(p, date);
@@ -1023,7 +1142,14 @@ const s = rosterSummary(personas);
 console.log(`模擬器啟動：${s.total} 個帳戶（seed=${SEED}，虛構人物）`);
 console.log(`  角色：${s.roles.map(([k, v]) => `${k}×${v}`).join("、")}`);
 console.log(`  申報地：${s.countries.map(([k, v]) => `${k}×${v}`).join("、")}`);
-console.log(`  既有賣單 ${orders.size} 筆、買單 ${bids.size} 筆、已知批次 ${batchMeta.size} 個\n`);
+console.log(`  既有賣單 ${orders.size} 筆、買單 ${bids.size} 筆、已知批次 ${batchMeta.size} 個`);
+console.log(`  鏈：${RPC}（chainId ${chainId}）`);
+const who = (label, k, acct) => console.log(`  ${label.padEnd(10)} ${acct.address}  ← ${k.name}（${k.source}）`);
+who("營運／gas", K.op, operator);
+who("身分簽章", K.identity, identitySigner);
+who("核發簽章", K.carbon, carbonSigner);
+who("對帳報告", K.reporter, reporter);
+console.log(`  結算幣    ${CASH_MINTABLE ? "可鑄（MockTWD）" : `不可鑄；營運金鑰持有 ${(Number(cash.get(operator.address) ?? 0n) / 1e6).toLocaleString()}`}\n`);
 
 // 人物名冊寫成檔案，介面上看到誰在買賣時可以對照
 const rosterPath = path.resolve(process.cwd(), "data", "sim-personas.json");
@@ -1074,7 +1200,7 @@ if (FROM) {
       `縮時模式：這條鏈（chainId ${chainId}）不能調整區塊時間，所以劇本的一年會壓縮成現在這一段時間。\n` +
       `  劇本 ${new Date(fromTs * 1000).toISOString().slice(0, 10)} → ${new Date(target * 1000).toISOString().slice(0, 10)}，共 ${ticks} 輪\n` +
       `  每輪之間實際等待 ${PACE} 秒${PACE ? `（整趟約 ${((ticks * PACE) / 3600).toFixed(1)} 小時）` : "（不等待）"}\n` +
-      `  gas 撥款：每個帳戶 ${Number(GAS_TOPUP) / 1e18} ETH，最多 ${personas.length} 個\n`,
+      `  gas 撥款：每個帳戶 ${Number(GAS_TOPUP) / 1e18}（原生幣），最多 ${personas.length} 個\n`,
     );
     for (let i = 0; i < ticks; i++) {
       const simNow = Math.min(target, fromTs + i * TICK);

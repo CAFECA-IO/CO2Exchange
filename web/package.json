@@ -21,6 +21,7 @@
     "bank:plan": "node --experimental-strip-types --no-warnings scripts/commit-epoch.mjs --plan",
     "bank:commit": "node --experimental-strip-types --no-warnings scripts/commit-epoch.mjs",
     "gen:tree-fixture": "node --experimental-strip-types --no-warnings scripts/gen-tree-fixture.mjs",
+    "test:keys": "node scripts/test-keys.mjs",
     "test:cafeca": "node --conditions=react-server --experimental-strip-types --no-warnings scripts/test-cafeca.mjs"
   },
   "dependencies": {
