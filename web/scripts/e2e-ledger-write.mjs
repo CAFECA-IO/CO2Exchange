@@ -221,6 +221,9 @@ const W = 1_000n * 1_000_000n;
   code = null;
   try { await buyer.post("/api/ledger", { op: "setPayoutAccount", payout: { bankCode: "81", accountNo: "123", holder: "x" } }); } catch (e) { code = e.code; }
   ok(code === "INVALID_PARAM", "收款帳戶格式不對被擋下");
+  code = null;
+  try { await buyer.post("/api/ledger", { op: "setPayoutAccount", payout: { bankCode: "812", accountNo: "00012345678901", holder: "別人的名字" } }); } catch (e) { code = e.code; }
+  ok(code === "INVALID_PARAM", "戶名和身分驗證的名稱不同就不收（收款帳戶必須是本人名義）");
   const pa = await buyer.post("/api/ledger", { op: "setPayoutAccount", payout: { bankCode: "812", accountNo: "0001-2345-678901", holder: buyer.label } });
   ok(pa.accountNo.endsWith("8901") && !pa.accountNo.includes("2345"), "收款帳戶存在營運方，回給使用者的帳號只露末四碼");
   const r = await buyer.act("withdraw", { amount: W.toString() });
@@ -271,6 +274,20 @@ ok(/已提交第 \d+ 期/.test(commit), "承諾上鏈");
   const e1 = await buyer.api(`/api/public/epochs/${list.epochs.at(-1).epoch}`);
   ok(e1.manifest.logRoot && e1.leaves.length > 0 && !e1.publicEvents.some((x) => x.kind === "place"), "公開檔：承諾、每一筆事件的雜湊、登錄簿層事件全文（委託單不公開）");
 }
+// ── 個人資料只以密文存放：伺服器的資料夾裡找不到任何一個證號、姓名或收款帳號 ──
+if (process.env.DATA_DIR) {
+  const fs = await import("node:fs"), path = await import("node:path");
+  const plain = ["12345678", "87654321", "A123456789", "00012345678901", buyer.label];
+  const hits = [];
+  for (const f of fs.readdirSync(process.env.DATA_DIR).filter((x) => x.endsWith(".json"))) {
+    const txt = fs.readFileSync(path.join(process.env.DATA_DIR, f), "utf8");
+    for (const p of plain) if (txt.includes(`"${p}"`) || (p.length > 8 && txt.includes(p))) hits.push(`${f}（第 ${plain.indexOf(p)} 項）`);
+  }
+  ok(hits.length === 0, `web/data 裡沒有明文的證號、姓名與收款帳號${hits.length ? `：${hits.join("、")}` : ""}`);
+  const kyc = JSON.parse(fs.readFileSync(path.join(process.env.DATA_DIR, "kyc-requests.json"), "utf8"));
+  ok(kyc.every((r) => r.status === "pending" || !r.idNumberSealed), "審核完的身分申請已經刪掉證號的密文（只留遮罩）");
+}
+
 const verify = sh("node --experimental-strip-types --no-warnings scripts/ledger-commit.mjs --verify");
 ok(/查核完成/.test(verify), "查核者重播：收單區塊驗簽、入出金逐筆、anchor 全部相符");
 

@@ -7,7 +7,7 @@ import {
 } from "@/lib/server/ledger/write";
 import { userTypedData } from "@/lib/ledger/typed";
 import {
-  depositCode, devCreditDeposit, maskAccountNo, payoutAccountOf, setPayoutAccount, trustAccount, withdrawStatus,
+  depositCode, devCreditDeposit, maskedPayout, payoutAccountOf, setPayoutAccount, trustAccount, withdrawStatus,
 } from "@/lib/server/ledger/fiat";
 import { deployment } from "@/lib/server/chain";
 
@@ -110,7 +110,7 @@ export async function GET() {
       cash: { available: state.cash.get(a) ?? 0n, locked: state.lockedCash.get(a) ?? 0n, pendingWithdraw: state.pendingWithdraw.get(a) ?? 0n },
       // 入金：匯到信託專戶、備註填入金識別碼。鏈上的 TWD 只是記帳（唯一持有人是帳本合約），使用者錢包裡不會有
       deposit: { code: depositCode(m.address), trust: trustAccount(), ledger: d.ledger, token: d.settlementToken },
-      payoutAccount: pa ? { bankCode: pa.bankCode, accountNo: maskAccountNo(pa.accountNo), holder: pa.holder } : null,
+      payoutAccount: pa ? (({ payoutRef: _r, ...x }) => (void _r, x))(maskedPayout(pa)) : null,
       credits,
       orders,
       fills,
@@ -138,7 +138,8 @@ export async function POST(req: Request) {
     if (b.op === "setPayoutAccount") {
       refuseIfRecovering(m);
       const r = setPayoutAccount(m.address, (b as { payout?: Record<string, string> }).payout ?? {});
-      return ok({ bankCode: r.bankCode, accountNo: maskAccountNo(r.accountNo), holder: r.holder });
+      const { payoutRef: _r, ...masked } = maskedPayout(r); void _r;
+      return ok(masked);
     }
 
     if (!b.kind || !KINDS.has(b.kind)) return fail("UNSUPPORTED_ACTION", { details: { kind: b.kind } });

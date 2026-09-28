@@ -11,6 +11,8 @@ import { all, insert, type WithId } from "../store";
 import { ledgerView } from "./view";
 import { latestSnapshot } from "./proofs";
 import { appendAuthorityOrPropose, syncCash } from "./write";
+import { openField, sealField } from "../sealed";
+import { nameOf, type KycRequest } from "../kyc";
 
 /// 新台幣入出金的網站這一側（規則第 4 版）。
 ///
@@ -44,14 +46,35 @@ export function accountOfDepositCode(code: string): Address | null {
 
 // ── 收款帳戶 ──
 
-export type PayoutAccount = WithId & { account: Address; bankCode: string; accountNo: string; holder: string; payoutRef: Hex };
+/// 收款帳戶的紀錄。**帳號與戶名只以密文保存**（lib/server/sealed.ts）；銀行代碼不是個人資料，留明文。
+/// 帳本裡的出金請求只記 payoutRef（加鹽雜湊），明文只有營運方匯款時才解開。
+export type PayoutAccount = WithId & {
+  account: Address; bankCode: string; payoutRef: Hex;
+  accountNoSealed?: string; accountNoMasked?: string; holderSealed?: string;
+  /// 遷移前的舊資料才有的明文。`npm run data:protect` 會改成密文；程式不再寫入
+  accountNo?: string; holder?: string;
+};
+const PC = "payout-accounts";
+
+/// 解開一筆收款帳戶（營運方匯款、使用者看自己的戶名時）。
+export function openPayout(pa: PayoutAccount): { bankCode: string; accountNo: string; holder: string; payoutRef: Hex } {
+  const accountNo = pa.accountNoSealed ? openField(PC, "accountNo", pa.account, pa.accountNoSealed) : pa.accountNo ?? "";
+  const holder = pa.holderSealed ? openField(PC, "holder", pa.account, pa.holderSealed) : pa.holder ?? "";
+  return { bankCode: pa.bankCode, accountNo, holder, payoutRef: pa.payoutRef };
+}
+
+/// 給使用者本人看的：帳號只露末四碼。不必解開帳號。
+export function maskedPayout(pa: PayoutAccount) {
+  const holder = pa.holderSealed ? openField(PC, "holder", pa.account, pa.holderSealed) : pa.holder ?? "";
+  return { bankCode: pa.bankCode, accountNo: pa.accountNoMasked ?? maskAccountNo(pa.accountNo ?? ""), holder, payoutRef: pa.payoutRef };
+}
 
 /// 雜湊的鹽。帳本公開的是 payoutRef，沒有鹽的話銀行帳號可以逐一試出來。
 const salt = () => process.env.PAYOUT_SALT || process.env.IDENTITY_SALT || "co2exchange-phase0";
 
 export function payoutAccountOf(account: Address): PayoutAccount | null {
   const a = account.toLowerCase();
-  return all<PayoutAccount>("payout-accounts").filter((r) => r.account.toLowerCase() === a).at(-1) ?? null;
+  return all<PayoutAccount>(PC).filter((r) => r.account.toLowerCase() === a).at(-1) ?? null;
 }
 
 export function setPayoutAccount(account: Address, p: { bankCode?: string; accountNo?: string; holder?: string }) {
@@ -61,10 +84,21 @@ export function setPayoutAccount(account: Address, p: { bankCode?: string; accou
   if (!/^\d{3}$/.test(bankCode)) throw new ApiError("INVALID_PARAM", "銀行代碼是三位數字", { param: "bankCode" });
   if (!/^\d{8,16}$/.test(accountNo)) throw new ApiError("INVALID_PARAM", "帳號是 8 到 16 位數字", { param: "accountNo" });
   if (!holder) throw new ApiError("MISSING_PARAM", "戶名必填（須與身分驗證的名稱相同）", { param: "holder" });
+  // 戶名要和身分驗證的名稱相同（約定書第五條之二第三項）。有核准過的申請才比得了；
+  // 沒有的（Phase 0 的開發帳戶）先放行，出金時營運方仍要人工核對
+  const kyc = all<KycRequest>("kyc-requests").filter((r) => r.account.toLowerCase() === account.toLowerCase() && r.status === "approved").at(-1);
+  const kycName = kyc ? nameOf(kyc).replace(/\s+/g, "") : "";
+  if (kycName && kycName !== holder.replace(/\s+/g, "")) {
+    throw new ApiError("INVALID_PARAM", "戶名要和身分驗證的名稱相同（收款帳戶必須是您本人名義）", { param: "holder" });
+  }
   const payoutRef = payoutRefOf({ bankCode, accountNo, holder }, salt());
   const cur = payoutAccountOf(account);
   if (cur && cur.payoutRef === payoutRef) return cur;
-  return insert<PayoutAccount>("payout-accounts", { account, bankCode, accountNo, holder, payoutRef });
+  return insert<PayoutAccount>(PC, {
+    account, bankCode, payoutRef,
+    accountNoSealed: sealField(PC, "accountNo", account, accountNo), accountNoMasked: maskAccountNo(accountNo),
+    holderSealed: sealField(PC, "holder", account, holder),
+  });
 }
 
 export const maskAccountNo = (n: string) => (n.length <= 4 ? n : `${"•".repeat(Math.max(0, n.length - 4))}${n.slice(-4)}`);
@@ -95,7 +129,7 @@ export async function withdrawStatus(account: Address) {
     settleable,
     /// 還沒進最新一期承諾的部分：要等下一期（最長一小時）
     waitingForCommit: pending > settleable ? pending - settleable : 0n,
-    payoutAccount: pa ? { bankCode: pa.bankCode, accountNo: maskAccountNo(pa.accountNo), holder: pa.holder, payoutRef: pa.payoutRef } : null,
+    payoutAccount: pa ? maskedPayout(pa) : null,
   };
 }
 
@@ -116,7 +150,8 @@ export async function withdrawQueue() {
     const pa = payoutAccountOf(account);
     rows.push({
       account, pending, settleable: st.settleable, waitingForCommit: st.waitingForCommit, requests: reqs,
-      payoutAccount: pa ? { bankCode: pa.bankCode, accountNo: pa.accountNo, holder: pa.holder, payoutRef: pa.payoutRef } : null,
+      // 管理員匯款要看明文：只在這裡解開
+      payoutAccount: pa ? openPayout(pa) : null,
       payoutMatches: !!pa && reqs.every((r) => r.payoutRef === pa.payoutRef),
     });
   }

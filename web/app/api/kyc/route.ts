@@ -1,7 +1,7 @@
 import { isAddress } from "@/lib/server/chain";
 import { TIER } from "@/lib/deployment";
 import { all, insert, patch } from "@/lib/server/store";
-import { attestAndRegister, validateId, type KycRequest } from "@/lib/server/kyc";
+import { attestAndRegister, purgeIdNumber, sealKyc, validateId, type KycRequest } from "@/lib/server/kyc";
 import { requireRole } from "@/lib/server/roles";
 import { ApiError, fail, handleError, ok } from "@/lib/server/api";
 import { ledgerIdentity } from "@/lib/server/ledger/registry";
@@ -31,11 +31,11 @@ export async function POST(req: Request) {
     if (tier !== TIER.Individual && tier !== TIER.Corporate) throw new ApiError("INVALID_PARAM", "身分等級只能是自然人或法人", { param: "tier" });
     const idn = validateId(tier, String(body.idNumber ?? ""));
     const row = insert<KycRequest>("kyc-requests", {
-      account, tier, idNumber: idn, name: String(body.name ?? "").slice(0, 100), submittedBy: m.address, status: "pending",
+      account, tier, submittedBy: m.address, status: "pending", ...sealKyc(account, idn, String(body.name ?? "").trim().slice(0, 100)),
     });
     if (process.env.KYC_AUTO_APPROVE === "1") {
       const r = await attestAndRegister(account, tier, idn);
-      patch<KycRequest>("kyc-requests", row.id, { status: "approved", txHash: r.txHash, identityHash: r.identityHash, decidedBy: "auto" });
+      patch<KycRequest>("kyc-requests", row.id, { status: "approved", txHash: r.txHash, identityHash: r.identityHash, decidedBy: "auto", ...purgeIdNumber });
       return ok({ id: row.id, status: "approved", txHash: r.txHash, identityHash: r.identityHash });
     }
     return ok({ id: row.id, status: "pending" });

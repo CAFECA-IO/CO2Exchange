@@ -167,6 +167,9 @@ cd web && npm install && npm run build && npm start
 | `CARBON_VERIFIER_PK` | 只簽帳本的核發事件、月度查核 | 不要 |
 | `DOCUMENT_SIGNER_PK` | 只簽憑證文件雜湊事件 | 不要 |
 
+`bootstrap.sh keys` 同時產生 `AUTH_SECRET` 與 **`DATA_KEY`**（個人資料的加密金鑰，見五「個人資料」）。
+`DATA_KEY` 已經存在就絕不覆寫；**另外備份**，而且不要和 `web/data` 的備份放在一起。
+
 **治理 Safe 的 owner 金鑰寫在 `.governance.env`，不是 `web/.env.local`**：網站伺服器持有國家 Safe 的 owner 金鑰，
 等於把主權／營運分權整個抵銷。腳本產生的五把治理金鑰全部落在同一台機器上——展示可以，正式不行。
 正式部署由各持有人自己產生，只把**地址**設成 `NATIONAL_OWNERS` / `OPERATOR_OWNERS`。
@@ -286,6 +289,25 @@ npm run fiat -- settle … --print                   # 不送出：印出 to / d
 不匯款就退回（金額回到可動用）：`/admin`「出入金」的「退回請求」，或
 `npm run ledger:authority -- propose withdrawReject '{"account":"0x…","amount":"…","reason":"收款帳戶有誤"}'`。
 
+### 個人資料（`npm run data:protect`）
+
+身分證號、統編、姓名／公司名稱、收款帳號與戶名在 `web/data/*.json` 裡**只以密文存放**（AES-256-GCM，
+`lib/crypto/sealed.ts`；每個密文綁定帳戶與欄位，貼到別人的紀錄上解不開）。證號在身分申請**審核完就刪掉密文**，
+只留遮罩與帳本裡的 `identityHash`。收款帳號只有 `/admin`「出入金」匯款時才解開給管理員看；使用者自己只看得到末四碼。
+
+- 金鑰 `DATA_KEY`（`web/.env.local`）。本機鏈沒設時用公開的展示金鑰；**外部鏈沒設，網站拒收這些資料**（`DATA_KEY_MISSING`）。
+- 舊版留下的明文（`web/data` 與每一份 `data.bak-*`）：
+
+```bash
+cd web
+npm run data:protect -- --dry-run      # 只數：幾個資料夾、幾筆明文
+npm run data:protect                   # 就地改成密文；審核完的證號直接刪掉。只印數量
+```
+
+- 換金鑰：新的放 `DATA_KEY`、舊的放 `DATA_KEY_PREVIOUS`（逗號分隔），重啟網站後 `npm run data:protect -- --rekey`，
+  全部改用新金鑰之後再拿掉 `DATA_KEY_PREVIOUS`。
+- **金鑰遺失＝讀不回來**：收款帳戶要請使用者重設，待審的身分申請要重送。
+
 **沒有鏈上提領、沒有逃生門。** 記帳 TWD 只存在帳本合約裡、不能轉出；它的發行量是營運方宣稱的信託專戶餘額，
 每月的對帳報告由查核機構比對它與銀行對帳單。停止營運時只留證據：最後一期的承諾與每位使用者的證明檔是債權憑證。
 
@@ -320,13 +342,14 @@ npm run check:api-envelope                   # 每支 API 都走制式信封與�
 npm run test:ledger                          # 24：引擎規則、重播、雜湊鏈、出金請求／退回／確認
 npm run test:cafeca                          # 23：登入 nonce、SignIn digest、委託單 EIP-712、設定檔解析
 npm run test:keys && npm run test:mm         # 金鑰來源、做市策略
+npm run test:sealed                          # 11：個人資料加密、AAD、換金鑰、data:protect 遷移
 npm run build
 
 # 需要 anvil 的端到端（各自一條鏈）
 anvil --port 38546 & npm run test:ledger-chain    # 帳本 × 合約：營運 Safe 入金、承諾、重播、出金確認
 anvil --port 38548 & npm run test:ledger-mm       # 11：做市與模擬器
 anvil --port 38549 & npm run test:ledger-proof    # 10：npm run fiat、證明檔、公開檔、監理鏡像、沒有逃生門
-# 65：網站 API → 帳本 → 收款帳戶、出金、/admin 出入金 → 承諾 → 查核。前置見 scripts/e2e-ledger-write.mjs 開頭
+# 68：網站 API → 帳本 → 收款帳戶、出金、/admin 出入金 → 承諾 → 查核；最後掃 web/data 沒有明文個資。前置見 scripts/e2e-ledger-write.mjs 開頭
 npm run test:ledger-write
 ```
 
@@ -358,6 +381,8 @@ npm run test:ledger-write
 | `/admin` 做市顯示「常駐程式沒有回應」 | `npm run mm` 沒在跑。`bash script/mm-service.sh status` / `logs` |
 | 做市撥款沒發生、狀態說沒有營運 Safe 金鑰 | 撥款是營運 Safe 的入金確認；跑 `npm run mm` 的機器要有 `.governance.env` 的持有人金鑰，或照警告印的 `npm run fiat` 指令請持有人確認 |
 | 開不了模擬交易（FORBIDDEN） | 這條鏈不在 `SIMULATION_CHAINS`。刻意的：正式市場不可以有平台自己的虛擬成交 |
+| 存身分申請或收款帳戶時 `DATA_KEY_MISSING` | 外部鏈上沒設 `DATA_KEY`。`bash script/bootstrap.sh keys` 產生後重啟網站 |
+| `DATA_KEY_MISMATCH`「加密的個人資料解不開」 | 換了 `DATA_KEY` 卻沒把舊的放進 `DATA_KEY_PREVIOUS`。放回去、重啟，再 `npm run data:protect -- --rekey` |
 | 前端報 `0x` 開頭的八位十六進位 | `web/lib/error-abi.ts` 沒跟上合約：`cd web && npm run gen:errors` |
 | 重新部署後畫面有資料但對不上 | `web/data/` 是舊部署的。`cd web && npm run data:reset`（搬到 `data.bak-<時間戳>`，不是刪除） |
 
@@ -435,7 +460,8 @@ Uniswap v4 hook／router）已經移除，保留在 git 歷史（`e86089d` 以�
   正式營運前要有法律意見與金融機構的合作（信託契約、虛擬帳號、對帳檔介接）。
 - **拒收請求的缺口**：營運方可以不給某一人的委託單或出金請求簽收收據。目前靠簽章與沒有收據這件事申訴；鏈上強制收單列為後續。
 - 入金識別碼是由地址算出的 10 位數字（填在匯款備註）；正式營運應換成信託銀行發的虛擬帳號，對帳改為自動。
-- 身分驗證是模擬的（管理員核准即通過），未介接憑證管理中心；證號目前明文存在伺服器端。
+- 身分驗證是模擬的（管理員核准即通過），未介接憑證管理中心。
+- 個人資料的加密金鑰（`DATA_KEY`）和網站放在同一台機器的設定檔；正式應移到 HSM／金鑰管理服務。
 - 查驗機構的簽章金鑰在本站（`CARBON_VERIFIER_PK`）；正式由查驗機構自己簽。
 - 治理金鑰由腳本在同一台機器產生；正式由三位持有人各自產生。
 - CAFECA 錢包的 `.well-known` 設定檔尚未對外（`issuer` 是 localhost），正式網域的站台還登不進去。

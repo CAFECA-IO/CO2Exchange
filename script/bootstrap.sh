@@ -149,6 +149,15 @@ cmd_keys () {
     ""|please-generate*) env_set AUTH_SECRET "$(openssl rand -base64 32)"; echo "   AUTH_SECRET     已產生";;
     *) echo "   AUTH_SECRET     已存在，保留";;
   esac
+  # DATA_KEY：個人資料（身分證號、統編、姓名、收款帳號與戶名）的加密金鑰。外部鏈上沒有它，網站拒收那些資料。
+  # 已經有就絕不覆寫——換掉等於讓既有的密文全部讀不回來（要換用 DATA_KEY_PREVIOUS ＋ npm run data:protect -- --rekey）。
+  cur=$(env_get DATA_KEY)
+  if [ -z "$cur" ]; then
+    env_set DATA_KEY "$(openssl rand -base64 32)"
+    echo "   DATA_KEY        已產生（另外備份，不要和 web/data 的備份放在一起；遺失就讀不回加密的個人資料）"
+  else
+    echo "   DATA_KEY        已存在，保留"
+  fi
 
   for k in $KEY_NAMES; do
     cur=$(env_get "$k")
