@@ -69,6 +69,8 @@ export async function buildScenario() {
   await push(place(X, "sell", 1n, "", 1_000n, 700n));                                                                         // 拒絕：凍結
   await push(auth(D, "reserveReport", { period: 202609, asOf: clock, credits: [{ country: "TW", custodian: "環境部", accountRef: "TW-1", heldKg: 48_000n, ledgerKg: 48_000n, statementHash: keccak256(toBytes("s")) }], cash: { trustee: "某銀行", accountRef: "T-1", balance: P(1_100_000n), tokenSupply: P(1_100_000n), statementHash: keccak256(toBytes("c")) }, documentHash: keccak256(toBytes("r")) }));
   await push(auth(A, "reserveAttest", { reportId: 1n, status: 1, auditorName: "某會計師事務所", note: "相符" }));
+  await push(user(Y, "withdraw", { amount: P(100_000n) }));                                                                   // Y 請求提領 10 萬（規則第 3 版）
+  await push(user(EVIL, "withdraw", { amount: 1n }));                                                                         // 拒絕：沒有現金
   block = 600n;
   await push(issue(1n, 1_000n, 4));                                                                                           // 拒絕：C 的授權到 500 為止
 

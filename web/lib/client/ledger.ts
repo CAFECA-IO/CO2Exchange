@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { encodeFunctionData, parseAbi, type Hex } from "viem";
+import { PROOF_ABI } from "@/lib/ledger/chain";
 import { useAccount } from "@/components/AccountProvider";
 import { isLedgerV2 } from "@/lib/deployment";
 import { fetchJson, postJson } from "./fetchJson";
@@ -21,7 +22,7 @@ export type LedgerMe = {
   nextNonce: string;
   devSigning: boolean;
   head: { seq: string; runningHash: string };
-  cash: { available: string; locked: string };
+  cash: { available: string; locked: string; pendingWithdraw: string };
   /// 錢包裡（還沒存進帳本合約）的結算幣。balance 是 null 代表讀不到。
   wallet: { settlementToken: `0x${string}`; ledger: `0x${string}`; balance: string | null };
   credits: { batchId: string; kg: string }[];
@@ -38,7 +39,18 @@ export type Submitted = {
   fills: { amountKg: string; pricePerTonne: string }[];
 };
 
-type Kind = "place" | "cancel" | "retire" | "project";
+type Kind = "place" | "cancel" | "retire" | "project" | "withdraw";
+
+/// 提領的狀態（伺服器依最新一期承諾算）：全部是最小單位的十進位字串
+export type WithdrawStatus = {
+  pending: string; requestedTotal: string; settledTotal: string; withdrawnOnChain: string;
+  latestEpoch: string | null; claimable: string; waitingForCommit: string;
+  withdrawalsEnabled: boolean; escapeActive: boolean;
+  proof: null | {
+    proofEpoch: string; assetsRoot: `0x${string}`; leafKg: string; leafCash: string; leafRequested: string; leafSettled: string;
+    siblings: { hash: `0x${string}`; kg: string; cash: string }[]; path: string;
+  };
+};
 
 const LEDGER_CASH_ABI = parseAbi([
   "function approve(address spender, uint256 amount) returns (bool)",
@@ -92,7 +104,48 @@ export function useLedger() {
     reload();
   }, [config, current?.devSigning, relay, reload]);
 
-  return { enabled, me: current, reload, submit, deposit, devSigning: current?.devSigning ?? false };
+  const withdrawStatus = useCallback(() => postJson<WithdrawStatus>("/api/ledger", { op: "withdrawStatus" }), []);
+
+  /// 領回：憑最新一期的證據呼叫帳本合約的 withdrawCash（使用者自己的鏈上交易），再把那筆提領鏡像進帳本。
+  const claim = useCallback(async (): Promise<{ amount: bigint }> => {
+    if (!config) throw new Error("設定還沒讀到");
+    const d = config.deployment as { ledger?: `0x${string}` };
+    if (!d.ledger) throw new Error("部署檔裡沒有帳本合約");
+    if (current?.devSigning) {
+      const r = await postJson<{ amount: string }>("/api/ledger", { op: "devWithdraw" });
+      reload();
+      return { amount: BigInt(r.amount) };
+    }
+    const st = await withdrawStatus();
+    if (!st.proof || BigInt(st.claimable) === 0n) throw new Error(BigInt(st.waitingForCommit) > 0n ? "提領請求還沒進承諾，下一期（最長一小時）之後才領得到" : "目前沒有可以領回的金額");
+    const p = st.proof;
+    const proof = {
+      proofEpoch: BigInt(p.proofEpoch), assetsRoot: p.assetsRoot, leafKg: BigInt(p.leafKg), leafCash: BigInt(p.leafCash),
+      leafRequested: BigInt(p.leafRequested), leafSettled: BigInt(p.leafSettled),
+      siblings: p.siblings.map((x) => ({ hash: x.hash, kg: BigInt(x.kg), cash: BigInt(x.cash) })), path: BigInt(p.path),
+    };
+    const amount = BigInt(st.claimable);
+    const r = await relay([
+      { target: d.ledger, value: 0n, data: encodeFunctionData({ abi: PROOF_ABI, functionName: "withdrawCash", args: [amount, proof] }) },
+    ], { title: `從帳本合約領回 ${(Number(amount) / 1e6).toLocaleString("zh-TW")} 元`, detail: `憑第 ${p.proofEpoch} 期承諾的餘額證據；gas 由平台贊助` });
+    if (!r.success) throw new Error("領回交易送出了但執行失敗");
+    await postJson("/api/ledger", { op: "sync" });
+    reload();
+    return { amount };
+  }, [config, current?.devSigning, relay, reload, withdrawStatus]);
+
+  /// 我的證明檔（Boltchain Issue #1 格式）：存成 JSON 檔下載
+  const downloadProof = useCallback(async () => {
+    const f = await fetchJson<Record<string, unknown>>("/api/ledger/proof");
+    const blob = new Blob([JSON.stringify(f, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `co2x-proof-${String(f.account).slice(0, 10)}-epoch${String(f.latestEpoch)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
+  return { enabled, me: current, reload, submit, deposit, withdrawStatus, claim, downloadProof, devSigning: current?.devSigning ?? false };
 }
 
 /// 被引擎規則拒絕時的文案。帳本記的是輸入，被拒絕的事件仍然在帳本裡，只是不改變任何狀態。

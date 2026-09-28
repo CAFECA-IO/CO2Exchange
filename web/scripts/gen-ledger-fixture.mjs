@@ -37,6 +37,7 @@ const out = {
   })),
   claim: {
     account: who, proofEpoch: "2", assetsRoot: bp.assetsRoot, leafKg: s(bp.leafKg), leafCash: s(bp.leafCash),
+    leafRequested: s(bp.leafRequested), leafSettled: s(bp.leafSettled),
     siblingHashes: bp.siblings.map((x) => x.hash), siblingKgs: bp.siblings.map((x) => s(x.kg)), siblingCashes: bp.siblings.map((x) => s(x.cash)),
     path: s(bp.path),
     batchKg: s(ap.kg), assetSiblings: ap.siblings, assetPath: s(ap.path),

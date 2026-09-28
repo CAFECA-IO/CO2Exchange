@@ -162,7 +162,7 @@ export async function openProposals() {
 
 // ── 使用者事件 ──
 
-type UserKind = "place" | "cancel" | "retire" | "project";
+type UserKind = "place" | "cancel" | "retire" | "project" | "withdraw";
 export type UserBody<K extends UserKind> = Omit<EventOf<K>, "seq" | "at" | "atBlock" | "kind" | "signature">;
 
 /// 這個帳戶下一個 nonce。四種使用者事件共用一條、嚴格遞增。

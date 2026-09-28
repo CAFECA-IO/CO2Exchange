@@ -35,7 +35,10 @@
     "mm": "node --experimental-strip-types --no-warnings scripts/mm/mm.mjs",
     "test:cafeca": "node --conditions=react-server --experimental-strip-types --no-warnings scripts/test-cafeca.mjs",
     "ledger:sim": "node --experimental-strip-types --no-warnings scripts/ledger-sim.mjs",
-    "test:ledger-mm": "node --experimental-strip-types --no-warnings scripts/e2e-ledger-mm.mjs"
+    "test:ledger-mm": "node --experimental-strip-types --no-warnings scripts/e2e-ledger-mm.mjs",
+    "ledger:publish": "node --experimental-strip-types --no-warnings scripts/ledger-publish.mjs",
+    "verify:proof": "node scripts/verify-proof.mjs",
+    "test:ledger-proof": "node --experimental-strip-types --no-warnings scripts/e2e-ledger-proof.mjs"
   },
   "dependencies": {
     "@noble/curves": "^1.9.1",

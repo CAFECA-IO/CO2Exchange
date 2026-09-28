@@ -212,11 +212,37 @@ let batchId;
   ok(g.ledger.thresholds.SOVEREIGN === 2, "治理頁顯示主權門檻 2");
 }
 
+// ── 提領（第 6 期）：申請 → 承諾上鏈 → 憑證據領回 ──
+const W = 1_000n * 1_000_000n;
+{
+  const r = await buyer.act("withdraw", { amount: W.toString() });
+  ok(r.accepted, "申請提領 1,000 元（帳本事件，移到待提領）");
+  const me = await buyer.api("/api/ledger");
+  ok(me.cash.pendingWithdraw === W.toString(), "待提領 1,000 元");
+  const st = await buyer.post("/api/ledger", { op: "withdrawStatus" });
+  ok(st.claimable === "0" && st.waitingForCommit === W.toString(), "還沒進承諾：現在可領回 0，等下一期");
+  const big = await buyer.act("withdraw", { amount: String(10n ** 15n) });
+  ok(!big.accepted && /現金不足/.test(big.rejectedReason), `超過可動用的提領請求被拒絕（${big.rejectedReason}）`);
+}
+
 // ── 承諾上鏈 → 查核者重播 ──
 const env = { ...process.env };
 const sh = (cmd) => execSync(cmd, { env, stdio: "pipe", encoding: "utf8" });
 const commit = sh("node --experimental-strip-types --no-warnings scripts/ledger-commit.mjs");
 ok(/已提交第 \d+ 期/.test(commit), "承諾上鏈");
+{
+  const st = await buyer.post("/api/ledger", { op: "withdrawStatus" });
+  ok(st.claimable === W.toString() && st.proof, "承諾上鏈之後可領回 1,000 元，伺服器給出最新一期的證據");
+  const r = await buyer.post("/api/ledger", { op: "devWithdraw" });
+  ok(r.amount === W.toString() && r.mirrored === 1, "憑證據從帳本合約領回，鏈上的提領鏡像進帳本");
+  const me = await buyer.api("/api/ledger");
+  ok(me.cash.pendingWithdraw === "0", "待提領銷帳");
+  const f = await buyer.api("/api/ledger/proof");
+  ok(f.version === 1 && f.proofs.some((p) => p.type === "custody") && f.proofs.some((p) => p.type === "event"), "我的證明檔：託管持有、事件包含證據（Boltchain Issue #1 格式）");
+  const list = await buyer.api("/api/public/epochs");
+  const e1 = await buyer.api(`/api/public/epochs/${list.epochs.at(-1).epoch}`);
+  ok(e1.manifest.logRoot && e1.leaves.length > 0 && !e1.publicEvents.some((x) => x.kind === "place"), "公開檔：承諾、每一筆事件的雜湊、登錄簿層事件全文（委託單不公開）");
+}
 const verify = sh("node --experimental-strip-types --no-warnings scripts/ledger-commit.mjs --verify");
 ok(/查核完成/.test(verify), "查核者重播：收單區塊驗簽、存提逐筆、anchor 全部相符");
 

@@ -26,6 +26,9 @@ export type AccountBalance = {
   /// 排序規則是樹的一部分，交給呼叫端決定的話兩邊會算出不同的 root。
   assets: AssetBalance[];
   cash: bigint;
+  /// 帳本 v2（規則第 3 版）的提領累計。給了 `withdrawals: true` 的樹才用得到，見 `leafHashV2`
+  withdrawRequested?: bigint;
+  withdrawSettled?: bigint;
 };
 
 export type Node = { hash: Hex; kg: bigint; cash: bigint };
@@ -35,6 +38,16 @@ const leafHash = (account: Address, epoch: bigint, assetsRoot: Hex, kg: bigint, 
     encodePacked(
       ["bytes1", "address", "uint64", "bytes32", "uint256", "uint256"],
       [LEAF, account, epoch, assetsRoot, kg, cash],
+    ),
+  );
+
+/// 帳本 v2 的葉子：多帶兩個只增不減的提領累計（請求、已領）。對應 MerkleSumTree.leafWithdrawals。
+/// 兩種葉子的前綴相同、長度不同（packed 之後 125 vs 189 bytes），不會互相冒充。
+const leafHashV2 = (account: Address, epoch: bigint, assetsRoot: Hex, kg: bigint, cash: bigint, requested: bigint, settled: bigint): Hex =>
+  keccak256(
+    encodePacked(
+      ["bytes1", "address", "uint64", "bytes32", "uint256", "uint256", "uint256", "uint256"],
+      [LEAF, account, epoch, assetsRoot, kg, cash, requested, settled],
     ),
   );
 
@@ -126,6 +139,9 @@ export type BalanceProof = {
   assetsRoot: Hex;
   leafKg: bigint;
   leafCash: bigint;
+  /// 只有帳本 v2 的樹（withdrawals: true）有
+  leafRequested?: bigint;
+  leafSettled?: bigint;
   siblings: Node[];
   path: bigint;
 };
@@ -139,7 +155,7 @@ export type BalanceTree = {
   assetProofOf: (account: Address, batchId: bigint) => { kg: bigint; siblings: Hex[]; path: bigint };
 };
 
-export function buildBalanceTree(balances: AccountBalance[], epoch: bigint): BalanceTree {
+export function buildBalanceTree(balances: AccountBalance[], epoch: bigint, opts: { withdrawals?: boolean } = {}): BalanceTree {
   // 依帳戶地址排序。和資產樹同樣的理由：排序規則是樹的一部分。
   const sorted = [...balances].sort((a, b) => (a.account.toLowerCase() < b.account.toLowerCase() ? -1 : 1));
   if (sorted.some((b) => b.cash < 0n || b.assets.some((a) => a.kg < 0n))) {
@@ -152,7 +168,10 @@ export function buildBalanceTree(balances: AccountBalance[], epoch: bigint): Bal
   const leaves: Node[] = sorted.map((b) => {
     const t = buildAssetTree(b.assets);
     assetTrees.set(b.account.toLowerCase(), t);
-    return { hash: leafHash(b.account, epoch, t.root, t.totalKg, b.cash), kg: t.totalKg, cash: b.cash };
+    const hash = opts.withdrawals
+      ? leafHashV2(b.account, epoch, t.root, t.totalKg, b.cash, b.withdrawRequested ?? 0n, b.withdrawSettled ?? 0n)
+      : leafHash(b.account, epoch, t.root, t.totalKg, b.cash);
+    return { hash, kg: t.totalKg, cash: b.cash };
   });
 
   const totals = new Map<bigint, bigint>();
@@ -178,7 +197,9 @@ export function buildBalanceTree(balances: AccountBalance[], epoch: bigint): Bal
       const t = assetTrees.get(sorted[i].account.toLowerCase())!;
       return {
         epoch, account: sorted[i].account, assetsRoot: t.root,
-        leafKg: t.totalKg, leafCash: sorted[i].cash, ...proofOf(layers, i),
+        leafKg: t.totalKg, leafCash: sorted[i].cash,
+        ...(opts.withdrawals ? { leafRequested: sorted[i].withdrawRequested ?? 0n, leafSettled: sorted[i].withdrawSettled ?? 0n } : {}),
+        ...proofOf(layers, i),
       };
     },
     assetProofOf: (account, batchId) => {

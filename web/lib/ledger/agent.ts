@@ -20,7 +20,7 @@ import { authTypedData, userMessageOf, userTypedData, type Domains } from "./typ
 ///
 /// 不依賴 Next。
 
-type UserKind = "place" | "cancel" | "retire" | "project";
+type UserKind = import("./typed.ts").UserKind;
 export type UserBody<K extends UserKind> = Omit<EventOf<K>, "seq" | "at" | "atBlock" | "kind" | "signature" | "account" | "nonce">;
 type AuthBody<K extends Event["kind"]> = Omit<EventOf<K>, "seq" | "at" | "atBlock" | "kind" | "signer" | "signature">;
 

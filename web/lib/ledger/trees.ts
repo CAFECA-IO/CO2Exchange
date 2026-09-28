@@ -66,6 +66,8 @@ export function registryTree(s: State) {
   return {
     root: t.root,
     size: t.size,
+    /// 依樹的順序列出每一片葉子的（標籤, 編號, 內容雜湊）。公開檔用：任何人拿它就能重算 registryRoot
+    entries: entries.map((x) => ({ tag: x.key.tag, id: x.key.id, content: x.content })),
     proofOf: (tag: number, id: string | bigint): Proof & { content: Hex } => {
       const i = entries.findIndex((x) => x.key.tag === tag && x.key.id === String(id));
       if (i < 0) throw new Error(`登錄簿裡沒有 (${tag}, ${id})`);
@@ -99,7 +101,7 @@ export type Roots = {
 /// 一個狀態的全部承諾值。`epoch` 進餘額樹的葉子（防止拿舊一期的證據重放）。
 export function rootsOf(s: State, epoch: bigint): Roots {
   const balances = balancesOf(s);
-  const balanceTree = balances.length ? buildBalanceTree(balances, epoch) : null;
+  const balanceTree = balances.length ? buildBalanceTree(balances, epoch, { withdrawals: true }) : null;
   const totals = balanceTree?.totalsByBatch ?? [];
   const totalCash = balanceTree?.root.cash ?? 0n;
   const registry = registryTree(s);

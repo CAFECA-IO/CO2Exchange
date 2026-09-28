@@ -76,9 +76,23 @@ export async function readAuthorities(client: PublicClient, ledger: Address, ran
   return { grants, thresholds };
 }
 
+/// 憑證據的兩個動作（提領結算幣、登記碳權請求權）與它們要的結構。規則第 3 版：葉子帶兩個提領累計。
+export const PROOF_ABI = parseAbi([
+  "struct Node { bytes32 hash; uint256 kg; uint256 cash; }",
+  "struct BalanceProof { uint64 proofEpoch; bytes32 assetsRoot; uint256 leafKg; uint256 leafCash; uint256 leafRequested; uint256 leafSettled; Node[] siblings; uint256 path; }",
+  "struct BatchLeaf { uint256 id; uint256 projectId; uint64 monitoringStart; uint64 monitoringEnd; uint16 vintageYear; bytes32 serialHash; bytes32 reportHash; address verifier; uint64 issuedAt; uint256 issuedKg; uint256 retiredKg; bool frozen; }",
+  "struct CreditProof { uint256 batchKg; bytes32[] assetSiblings; uint256 assetPath; BatchLeaf batch; bytes32[] registrySiblings; uint256 registryPath; }",
+  "function withdrawCash(uint256 amount, BalanceProof p)",
+  "function claimCredits(uint256 amountKg, BalanceProof p, CreditProof cp)",
+  "function withdrawnTotal(address) view returns (uint256)",
+  "function withdrawalsEnabled() view returns (bool)",
+  "function escapeActive() view returns (bool)",
+  "function epoch() view returns (uint64)",
+]);
+
 export type OnchainCommitment = EpochBoundary & {
   anchor: Hex; prev: Hex; logRoot: Hex; balanceRoot: Hex; registryRoot: Hex; identityRoot: Hex;
-  totalKg: bigint; totalCash: bigint; totalsHash: Hex; rulesVersion: number; block: bigint; txHash: Hex;
+  totalKg: bigint; totalCash: bigint; totalsHash: Hex; rulesVersion: number; block: bigint; txHash: Hex; logIndex: number;
 };
 
 export async function readCommitments(client: PublicClient, ledger: Address, range: Range): Promise<OnchainCommitment[]> {
@@ -86,13 +100,13 @@ export async function readCommitments(client: PublicClient, ledger: Address, ran
     address: ledger, event: LEDGER_ABI.find((x) => x.type === "event" && x.name === "Committed") as never,
     fromBlock, toBlock,
   }));
-  return (logs as unknown as { args: { anchor: Hex; commitment: Record<string, unknown> }; blockNumber: bigint; transactionHash: Hex }[]).map((l) => {
+  return (logs as unknown as { args: { anchor: Hex; commitment: Record<string, unknown> }; blockNumber: bigint; transactionHash: Hex; logIndex: number }[]).map((l) => {
     const a = l.args;
     const c = a.commitment as {
       prev: Hex; epoch: bigint; logRoot: Hex; balanceRoot: Hex; registryRoot: Hex; identityRoot: Hex;
       totalKg: bigint; totalCash: bigint; totalsHash: Hex; upToBlock: bigint; lastSeq: bigint; rulesVersion: number;
     };
-    return { ...c, anchor: a.anchor, block: l.blockNumber, txHash: l.transactionHash };
+    return { ...c, anchor: a.anchor, block: l.blockNumber, txHash: l.transactionHash, logIndex: l.logIndex };
   }).sort((x, y) => (x.epoch < y.epoch ? -1 : 1));
 }
 

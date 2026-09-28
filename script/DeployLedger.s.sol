@@ -89,6 +89,9 @@ contract DeployLedger is Script {
         ledger = new Ledger(address(settlement), cfg.deployer, cfg.deployer, cfg.deployer);
         _authorities();
         ledger.grantRole(ledger.COMMITTER_ROLE(), cfg.committer);
+        // 一般提領（憑提領請求＋證據）預設開啟：規則第 3 版之後沒有重複花用的問題。
+        // 營運 Safe 之後仍可以暫停（setWithdrawalsEnabled），逃生提領不受這個開關影響。
+        if (vm.envOr("WITHDRAWALS_ENABLED", true)) ledger.setWithdrawalsEnabled(true);
         _handover();
         vm.stopBroadcast();
 

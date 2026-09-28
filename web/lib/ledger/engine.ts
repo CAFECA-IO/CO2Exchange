@@ -18,7 +18,8 @@ import { payloadHash, type Event, type EventOf } from "./events.ts";
 /// 驗簽要查鏈（授權清單、ERC-1271 帳戶在當時的金鑰），不是純計算。重播先做一輪驗簽，
 /// 把結果交給引擎（`ctx.sigOk`）；引擎只負責「驗不過就以同一個理由拒絕」。
 
-export const RULES_VERSION = 2;
+/// 第 3 版（2026-09-29）：加上提領請求（`withdraw` 事件）與待提領現金；餘額樹的葉子多兩個累計欄位。
+export const RULES_VERSION = 3;
 const KG_PER_TONNE = 1000n;
 const ZERO: Address = "0x0000000000000000000000000000000000000000";
 export const DOMESTIC = "TW";
@@ -73,6 +74,12 @@ export type State = {
   cash: Map<string, bigint>;
   lockedCredits: Map<string, Map<string, bigint>>;
   lockedCash: Map<string, bigint>;
+  /// 待提領：使用者簽了提領請求、還沒從帳本合約領回的現金（不能再拿來交易，但仍然是帳本欠他的）
+  pendingWithdraw: Map<string, bigint>;
+  /// 累計：請求提領的總額／已在鏈上領回（鏡像進帳本）的總額。兩者都只增不減，進餘額樹的葉子——
+  /// 合約用它們判斷還能放款多少（一般提領看「請求累計」，逃生提領看「欠款＋已領累計」），不必逐期記帳。
+  withdrawRequested: Map<string, bigint>;
+  withdrawSettled: Map<string, bigint>;
   book: Map<string, Order>;
   fills: Fill[];
   /// 手續費收入。餘額樹把它算在 policy.treasury 名下。
@@ -123,6 +130,7 @@ export function genesis(): State {
     batches: new Map(), nextBatchId: 1n, serialUsed: new Set(), attestationUsed: new Set(),
     certificates: new Map(), nextCertId: 1n, reports: new Map(), nextReportId: 1n,
     credits: new Map(), cash: new Map(), lockedCredits: new Map(), lockedCash: new Map(),
+    pendingWithdraw: new Map(), withdrawRequested: new Map(), withdrawSettled: new Map(),
     book: new Map(), fills: [], treasuryCash: 0n, nonces: new Map(), rejected: [], lastSeq: 0n, lastAt: 0n,
   };
 }
@@ -192,10 +200,21 @@ function step(s: State, e: Event, ctx: Context): void {
       add1(s.cash, lower(e.account), e.amount);
       return;
     case "cashWithdraw": {
-      // 提領已經在鏈上發生了（合約憑證據放款）。帳本對不上就記下來——這是要查的事，不是可以默默吞掉的事。
+      // 提領已經在鏈上發生了（合約憑證據放款）。先從待提領銷帳；超出的部分只可能是逃生提領
+      // （逃生模式下合約放的是全部欠款），從可動用現金扣，並補進請求累計——兩個累計才會一直是「請求 ≥ 已領」。
+      // 帳本對不上就記下來——這是要查的事，不是可以默默吞掉的事。
       const a = lower(e.account);
-      if ((s.cash.get(a) ?? 0n) < e.amount) return reject(s, e, "帳本餘額少於鏈上提領金額");
-      add1(s.cash, a, -e.amount);
+      const pending = s.pendingWithdraw.get(a) ?? 0n;
+      const fromPending = pending < e.amount ? pending : e.amount;
+      const rest = e.amount - fromPending;
+      // 逃生提領放的是全部欠款，包括掛著的買單鎖住的錢——錢已經在鏈上領走了，那些買單不能再成交：撤掉、放回可動用再扣
+      if (rest > 0n && (s.cash.get(a) ?? 0n) < rest) {
+        for (const o of sortedBook(s)) if (o.side === "buy" && lower(o.account) === a) { release(s, o); s.book.delete(String(o.seq)); }
+      }
+      if (rest > 0n && (s.cash.get(a) ?? 0n) < rest) return reject(s, e, "帳本餘額少於鏈上提領金額");
+      if (fromPending > 0n) add1(s.pendingWithdraw, a, -fromPending);
+      if (rest > 0n) { add1(s.cash, a, -rest); add1(s.withdrawRequested, a, rest); }
+      add1(s.withdrawSettled, a, e.amount);
       return;
     }
     case "jurisdiction":
@@ -240,6 +259,8 @@ function step(s: State, e: Event, ctx: Context): void {
       return doCancel(s, e);
     case "retire":
       return doRetire(s, e);
+    case "withdraw":
+      return doWithdraw(s, e);
     case "certDocument": {
       const c = s.certificates.get(String(e.certId));
       if (!c) return reject(s, e, "找不到這張憑證");
@@ -526,9 +547,24 @@ function doRetire(s: State, e: EventOf<"retire">) {
   });
 }
 
-/// 狀態 → 餘額樹的輸入。鎖住的東西也算使用者的；手續費算在國庫名下。
-export function balancesOf(s: State): { account: Address; assets: { batchId: bigint; kg: bigint }[]; cash: bigint }[] {
-  const accounts = new Set<string>([...s.credits.keys(), ...s.cash.keys(), ...s.lockedCredits.keys(), ...s.lockedCash.keys()]);
+/// 提領請求。凍結的帳戶不能提領（主管機關的扣留）；身分過期不擋——那是他自己的錢。
+function doWithdraw(s: State, e: EventOf<"withdraw">) {
+  if (!takeNonce(s, e.account, e.nonce)) return reject(s, e, "nonce 不遞增");
+  if (e.amount <= 0n) return reject(s, e, "提領金額要大於零");
+  const a = lower(e.account);
+  if (s.identities.get(a)?.frozen) return reject(s, e, "帳戶已凍結");
+  if ((s.cash.get(a) ?? 0n) < e.amount) return reject(s, e, "可動用現金不足");
+  add1(s.cash, a, -e.amount);
+  add1(s.pendingWithdraw, a, e.amount);
+  add1(s.withdrawRequested, a, e.amount);
+}
+
+/// 狀態 → 餘額樹的輸入。鎖住的東西與待提領的現金也算使用者的；手續費算在國庫名下。
+export function balancesOf(s: State): { account: Address; assets: { batchId: bigint; kg: bigint }[]; cash: bigint; withdrawRequested: bigint; withdrawSettled: bigint }[] {
+  const accounts = new Set<string>([
+    ...s.credits.keys(), ...s.cash.keys(), ...s.lockedCredits.keys(), ...s.lockedCash.keys(),
+    ...s.pendingWithdraw.keys(), ...s.withdrawRequested.keys(),
+  ]);
   const treasury = lower(s.policy.treasury);
   if (s.treasuryCash > 0n) accounts.add(treasury);
   const out = [];
@@ -536,13 +572,16 @@ export function balancesOf(s: State): { account: Address; assets: { batchId: big
     const assets = new Map<string, bigint>();
     for (const [batch, kg] of s.credits.get(a) ?? []) if (kg > 0n) assets.set(batch, (assets.get(batch) ?? 0n) + kg);
     for (const [batch, kg] of s.lockedCredits.get(a) ?? []) if (kg > 0n) assets.set(batch, (assets.get(batch) ?? 0n) + kg);
-    let cash = (s.cash.get(a) ?? 0n) + (s.lockedCash.get(a) ?? 0n);
+    let cash = (s.cash.get(a) ?? 0n) + (s.lockedCash.get(a) ?? 0n) + (s.pendingWithdraw.get(a) ?? 0n);
     if (a === treasury) cash += s.treasuryCash;
+    const withdrawRequested = s.withdrawRequested.get(a) ?? 0n;
+    const withdrawSettled = s.withdrawSettled.get(a) ?? 0n;
+    // 全部領完、什麼都不剩的帳戶可以不在樹裡：合約那邊兩種放款上限都會算出 0
     if (assets.size === 0 && cash === 0n) continue;
     out.push({
       account: a as Address,
       assets: [...assets.entries()].map(([batchId, kg]) => ({ batchId: BigInt(batchId), kg })).sort((x, y) => (x.batchId < y.batchId ? -1 : 1)),
-      cash,
+      cash, withdrawRequested, withdrawSettled,
     });
   }
   return out;

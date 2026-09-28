@@ -175,13 +175,13 @@ const rp = roots.registry.proofOf(TAG.batch, 1n);
 const b = again.state.batches.get("1");
 const claimAbi = parseAbi([
   "struct Node { bytes32 hash; uint256 kg; uint256 cash; }",
-  "struct BalanceProof { uint64 proofEpoch; bytes32 assetsRoot; uint256 leafKg; uint256 leafCash; Node[] siblings; uint256 path; }",
+  "struct BalanceProof { uint64 proofEpoch; bytes32 assetsRoot; uint256 leafKg; uint256 leafCash; uint256 leafRequested; uint256 leafSettled; Node[] siblings; uint256 path; }",
   "struct BatchLeaf { uint256 id; uint256 projectId; uint64 monitoringStart; uint64 monitoringEnd; uint16 vintageYear; bytes32 serialHash; bytes32 reportHash; address verifier; uint64 issuedAt; uint256 issuedKg; uint256 retiredKg; bool frozen; }",
   "struct CreditProof { uint256 batchKg; bytes32[] assetSiblings; uint256 assetPath; BatchLeaf batch; bytes32[] registrySiblings; uint256 registryPath; }",
   "function claimCredits(uint256 amountKg, BalanceProof p, CreditProof cp)",
   "function claimedKg(address, uint64, uint256) view returns (uint256)",
 ]);
-const balanceProof = { proofEpoch: 1n, assetsRoot: bp.assetsRoot, leafKg: bp.leafKg, leafCash: bp.leafCash, siblings: bp.siblings, path: bp.path };
+const balanceProof = { proofEpoch: 1n, assetsRoot: bp.assetsRoot, leafKg: bp.leafKg, leafCash: bp.leafCash, leafRequested: bp.leafRequested, leafSettled: bp.leafSettled, siblings: bp.siblings, path: bp.path };
 const creditProof = {
   batchKg: ap.kg, assetSiblings: ap.siblings, assetPath: ap.path,
   batch: { id: b.id, projectId: b.projectId, monitoringStart: b.monitoringStart, monitoringEnd: b.monitoringEnd, vintageYear: b.vintageYear, serialHash: b.serialHash, reportHash: b.reportHash, verifier: b.verifier, issuedAt: b.issuedAt, issuedKg: b.issuedKg, retiredKg: b.retiredKg, frozen: b.frozen },

@@ -65,6 +65,8 @@ contract LedgerTest is Test {
         p.assetsRoot = fx.readBytes32(".claim.assetsRoot");
         p.leafKg = fx.readUint(".claim.leafKg");
         p.leafCash = fx.readUint(".claim.leafCash");
+        p.leafRequested = fx.readUint(".claim.leafRequested");
+        p.leafSettled = fx.readUint(".claim.leafSettled");
         bytes32[] memory h = fx.readBytes32Array(".claim.siblingHashes");
         uint256[] memory kg = fx.readUintArray(".claim.siblingKgs");
         uint256[] memory cash = fx.readUintArray(".claim.siblingCashes");
@@ -152,13 +154,34 @@ contract LedgerTest is Test {
         _commitBoth();
         vm.prank(operator);
         ledger.setWithdrawalsEnabled(true);
-        uint256 owed = fx.readUint(".claim.leafCash");
+        uint256 requested = fx.readUint(".claim.leafRequested");
+        uint256 cashOwed = fx.readUint(".claim.leafCash");
+        assertGt(requested, 0);
+        assertGt(cashOwed, requested);
+        // 一般提領只能領**已請求**的部分：帳本裡還能交易的錢不能同時被領走
         vm.prank(account);
-        ledger.withdrawCash(owed, _balanceProof());
-        assertEq(twd.balanceOf(account), owed);
+        vm.expectRevert(abi.encodeWithSelector(Ledger.SumMismatch.selector, requested, cashOwed));
+        ledger.withdrawCash(cashOwed, _balanceProof());
         vm.prank(account);
-        vm.expectRevert();
+        ledger.withdrawCash(requested, _balanceProof());
+        assertEq(twd.balanceOf(account), requested);
+        assertEq(ledger.withdrawnTotal(account), requested);
+        // 累計：同一份證據（或下一期還沒銷帳的證據）不能再領第二次
+        vm.prank(account);
+        vm.expectRevert(abi.encodeWithSelector(Ledger.NothingLeft.selector, account, uint64(2)));
         ledger.withdrawCash(1, _balanceProof());
+    }
+
+    function test_withdrawInParts() public {
+        _commitBoth();
+        vm.prank(operator);
+        ledger.setWithdrawalsEnabled(true);
+        uint256 requested = fx.readUint(".claim.leafRequested");
+        vm.startPrank(account);
+        ledger.withdrawCash(requested / 3, _balanceProof());
+        ledger.withdrawCash(requested - requested / 3, _balanceProof());
+        vm.stopPrank();
+        assertEq(twd.balanceOf(account), requested);
     }
 
     // ── 逃生門 ──
@@ -172,8 +195,11 @@ contract LedgerTest is Test {
 
         vm.warp(block.timestamp + 72 hours + 1);
         assertTrue(ledger.escapeActive());
+        // 逃生：帳本凍結了，可以領全部欠款（葉子的現金＋已領累計，減掉已經領走的）
+        owed += fx.readUint(".claim.leafSettled");
         vm.prank(account);
         ledger.withdrawCash(owed, _balanceProof());
+        assertEq(twd.balanceOf(account), owed);
         vm.prank(account);
         ledger.claimCredits(1, _balanceProof(), _creditProof());
     }

@@ -129,14 +129,26 @@ const takerMm = s.fills.filter((f) => {
 assert.equal(takerMm.length, 0, "做市帳戶不能是吃單方");
 ok(`做市帳戶參與的 ${s.fills.filter((f) => low(f.buyer) === MM || low(f.seller) === MM).length} 筆成交，吃單方全部是別人`);
 
-// ── 收回資金 ──
+// ── 收回資金：撤單 → 提領請求 → 承諾上鏈 → 憑證據領回 → 轉回營運金鑰 ──
 mmConfig({ ...cfg, commands: { recall: 1, resume: 0 } });
 node("scripts/mm/mm.mjs", ["--once"]);
 st = status();
 s = agent.state();
 assert.ok(st.halted, "收回之後停止報價");
 assert.equal([...s.book.values()].filter((o) => low(o.account) === MM).length, 0, "做市帳戶的單全部撤掉");
-ok("收回資金：撤掉全部報價並停止（帳本裡的現金留在帳本合約，要憑證據提領）");
+const pendingMm = s.pendingWithdraw.get(MM) ?? 0n;
+assert.ok(pendingMm > 0n && (s.cash.get(MM) ?? 0n) === 0n, "帳本裡的現金全部移到待提領");
+ok(`收回資金：撤掉全部報價、申請提領 ${Number(pendingMm) / 1e6} 元（移到待提領，不能再交易）`);
+
+const erc20 = [{ type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }] }];
+const opBefore = await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "balanceOf", args: [A0] });
+node("scripts/ledger-commit.mjs");
+node("scripts/mm/mm.mjs", ["--once"]);
+s = agent.state();
+const opAfter = await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "balanceOf", args: [A0] });
+assert.equal(s.pendingWithdraw.get(MM) ?? 0n, 0n, "待提領已全部領回");
+assert.equal(opAfter - opBefore, pendingMm, "領回的錢轉回營運金鑰");
+ok(`下一期承諾上鏈後憑證據從帳本合約領回 ${Number(pendingMm) / 1e6} 元，轉回營運金鑰（帳本以鏈上 CashWithdrawn 鏡像銷帳）`);
 
 // ── 承諾與查核 ──
 node("scripts/ledger-commit.mjs");

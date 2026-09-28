@@ -8,7 +8,7 @@ import { ParticipantBadge } from "@/components/ParticipantBadge";
 import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/components/ui";
 import { flagOf } from "@/lib/deployment";
 import { fetchJson } from "@/lib/client/fetchJson";
-import { outcomeText, useLedger } from "@/lib/client/ledger";
+import { outcomeText, useLedger, type WithdrawStatus } from "@/lib/client/ledger";
 
 /// 交易頁的帳本版本（設計 v4 第 3 期）。
 ///
@@ -41,6 +41,8 @@ export function LedgerTrade() {
   const [buy, setBuy] = useState({ country: "TW", batchId: 0, tonnes: "1", price: "" });
   const [sell, setSell] = useState({ batchId: 0, tonnes: "1", price: "" });
   const [depositTwd, setDepositTwd] = useState("100000");
+  const [withdrawTwd, setWithdrawTwd] = useState("");
+  const [ws, setWs] = useState<WithdrawStatus | null>(null);
   const buyGate = useAgreementGate(wallet?.address, ["platform-terms", "trade-agreement"]);
   const sellGate = useAgreementGate(wallet?.address, ["platform-terms", "service-fee", "trade-agreement"]);
 
@@ -52,6 +54,15 @@ export function LedgerTrade() {
       .catch(() => null);
     return () => { ignore = true; };
   }, [wallet, meSeq]);
+
+  // 提領狀態跟著帳本的 head 更新（申請、承諾上鏈、領回之後都會變）
+  const wsFetch = lg.withdrawStatus;
+  useEffect(() => {
+    if (!lg.me) return;
+    let ignore = false;
+    wsFetch().then((x) => { if (!ignore) setWs(x); }).catch(() => null);
+    return () => { ignore = true; };
+  }, [lg.me, meSeq, wsFetch]);
 
   if (!userId || !wallet || !config) return <AccountGate />;
   // 開發用登入沒有 CAFECA 通道，由伺服器代簽；正式登入要開通道才簽得出委託單
@@ -123,6 +134,27 @@ export function LedgerTrade() {
     return { kind: "ok", text: `已存入 ${fmtTwd(amt)} ${CASH}，帳本已記下這筆鏈上存入` };
   });
 
+  const requestWithdraw = () => run("申請提領", async () => {
+    const amt = BigInt(Math.round(Number(withdrawTwd) * 1e6));
+    if (amt <= 0n) throw new Error("金額要大於零");
+    const r = await lg.submit("withdraw", { amount: amt.toString() }, {
+      title: `申請提領 ${fmtTwd(amt)} ${CASH}`,
+      detail: "這筆錢會從可動用移到「待提領」，不能再拿來交易；下一期承諾上鏈之後（最長一小時）就能從帳本合約領回。",
+    });
+    setWithdrawTwd("");
+    return outcomeText(r, "提領請求");
+  });
+
+  const claim = () => run("領回", async () => {
+    const { amount } = await lg.claim();
+    return { kind: "ok", text: `已從帳本合約領回 ${fmtTwd(amount)} ${CASH} 到你的錢包` };
+  });
+
+  const downloadProof = () => run("證明檔", async () => {
+    await lg.downloadProof();
+    return { kind: "ok", text: "已下載證明檔。可以拿到 Boltchain Explorer 驗證，或執行 node scripts/verify-proof.mjs <檔案>" };
+  });
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -180,6 +212,30 @@ export function LedgerTrade() {
             結算幣是鏈上資產：存入是一筆鏈上轉帳，轉進帳本合約託管；之後的買賣只是帳本更新，不必等出塊、不付 gas。
             帳本欠您多少，每小時隨承諾上鏈，可與合約實際持有對照（見<Link className="underline" href="/custody">託管揭露</Link>）。
           </p>
+
+          <div className="mt-5 border-t border-ink-700 pt-4" data-testid="withdraw">
+            <h3 className="text-sm font-semibold text-ink-50">提領</h3>
+            <dl className="mt-2 grid grid-cols-2 gap-3 text-sm">
+              <div><dt className="text-xs text-ink-300">待提領</dt><dd className="tnum text-ink-50">{fmtTwd(BigInt(lg.me?.cash.pendingWithdraw ?? "0"))} <span className="text-xs text-ink-300">{CASH}</span></dd></div>
+              <div><dt className="text-xs text-ink-300">現在可領回</dt><dd className="tnum text-ink-50" data-testid="claimable">{ws ? fmtTwd(BigInt(ws.claimable)) : "—"} <span className="text-xs text-ink-300">{CASH}</span></dd></div>
+            </dl>
+            {ws && BigInt(ws.waitingForCommit) > 0n && (
+              <p className="mt-1 text-xs text-ink-300">其中 {fmtTwd(BigInt(ws.waitingForCommit))} {CASH} 等下一期承諾上鏈（最長一小時）才領得到。</p>
+            )}
+            {ws && !ws.withdrawalsEnabled && !ws.escapeActive && <p className="mt-1 text-xs text-warn">營運方暫停了一般提領（逃生門不受影響）。</p>}
+            <div className="mt-3 flex items-end gap-2">
+              <Field label={`申請提領（${CASH}）`}>
+                <input className={inputCls} inputMode="decimal" value={withdrawTwd} onChange={(e) => setWithdrawTwd(e.target.value)} placeholder="金額" />
+              </Field>
+              <Button variant="secondary" onClick={requestWithdraw} disabled={!!busy || !withdrawTwd}>{busy === "申請提領" ? "簽署中…" : "申請"}</Button>
+              <Button onClick={claim} disabled={!!busy || !ws || BigInt(ws.claimable) === 0n}>{busy === "領回" ? "領回中…" : "領回"}</Button>
+            </div>
+            <p className="mt-3 text-xs leading-6 text-ink-300">
+              提領分兩步：先在帳本裡簽一筆提領請求（錢移到待提領，不能再交易），下一期承諾上鏈後憑證據從帳本合約領回。
+              合約只放已請求的部分，所以帳本裡還在用的錢不會同時被領走。
+            </p>
+            <Button variant="secondary" onClick={downloadProof} disabled={!!busy}>{busy === "證明檔" ? "產生中…" : "下載我的證明檔"}</Button>
+          </div>
         </Card>
 
         <Card title="下單">

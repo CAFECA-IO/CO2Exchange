@@ -65,6 +65,21 @@ library MerkleSumTree {
         });
     }
 
+    /// @notice 帳本 v2（規則第 3 版）的葉子：多帶兩個只增不減的提領累計。
+    /// @param requested 累計請求提領的總額（使用者在帳本裡簽的提領請求加總）
+    /// @param settled   累計已在鏈上領回、鏡像進帳本的總額
+    /// @dev 和 `leaf` 同一個前綴、不同長度（packed 189 vs 125 bytes），兩種葉子不會互相冒充。
+    ///      對應 web/lib/bank/tree.ts 的 leafHashV2。
+    function leafWithdrawals(
+        address account, uint64 epoch, bytes32 assetsRoot, uint256 kg, uint256 cash, uint256 requested, uint256 settled
+    ) internal pure returns (Node memory) {
+        return Node({
+            hash: keccak256(abi.encodePacked(LEAF_PREFIX, account, epoch, assetsRoot, kg, cash, requested, settled)),
+            kg: kg,
+            cash: cash
+        });
+    }
+
     /// @notice 把兩個節點合成父節點。總額相加，雜湊把**兩邊的總額也一起蓋進去**——
     ///         不蓋的話，總額就不是被雜湊保護的，可以隨便宣稱。
     function parent(Node memory l, Node memory r) internal pure returns (Node memory) {

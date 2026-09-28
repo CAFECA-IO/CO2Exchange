@@ -5,7 +5,7 @@
       "prev": "0x0000000000000000000000000000000000000000000000000000000000000000",
       "epoch": "1",
       "logRoot": "0xba379d369acfbbd743048edf588fde955bc111d0440c2e9e71a23e6fed69c870",
-      "balanceRoot": "0xaa595f237ca7fc1da2434e31f74fe6aa10f1ce31e953fc7cb850ec59f96faba5",
+      "balanceRoot": "0x25eaef1a0eba93f4687fd62a448474dab670a5a10095f1982aa0a9ef72dfc632",
       "registryRoot": "0x3766a58fc0a1a956e17cfa121c574e2dc8065a088ae73ded87083b6311962fb4",
       "identityRoot": "0xea0eee5e68c7eb16521e7cf981d7c53b78c270dab26fa6bcb5adf1843baab59a",
       "totalKg": "70000",
@@ -13,23 +13,23 @@
       "totalsHash": "0x5ec886e614b3a618e1c47f61b3c6cbaa74e01f68e481cddf645206e2ecdf9b96",
       "upToBlock": "112",
       "lastSeq": "12",
-      "rulesVersion": 2,
-      "anchor": "0x3c08c3c101fac73e6311cb636d99f312a7a68a9e304d133c7a7d9333bde6cbe5"
+      "rulesVersion": 3,
+      "anchor": "0x155ba861611bb4dda89ed0d1e83e616dfefe5558add0cedaf67fb68aa0ebea53"
     },
     {
-      "prev": "0x3c08c3c101fac73e6311cb636d99f312a7a68a9e304d133c7a7d9333bde6cbe5",
+      "prev": "0x155ba861611bb4dda89ed0d1e83e616dfefe5558add0cedaf67fb68aa0ebea53",
       "epoch": "2",
-      "logRoot": "0xbb726c20aa61c67b6b896839966a6ca8c93425db86dae39b882c22f212fa4071",
-      "balanceRoot": "0x92a4d8b08bf2553aa9b5290bd0bbb753b43138a5d4a74faec4fad40be9396bc9",
+      "logRoot": "0xfff09b18ee9263b8955a3d905a0b14b2f98146d6066ab11896204a83557d2b5c",
+      "balanceRoot": "0xac23ef8bea583dabef1a88f61fb13e981bfac21683dbf0f5c9efd3c730d0a59e",
       "registryRoot": "0x516c0d95b1779e932c484f26aa23950d7706c0f34c339d0dbdb6241f966d5a60",
       "identityRoot": "0x22fba6803772515d698fd5a05ac2215bf5424043cdbe035cebe6dd193fafb06e",
       "totalKg": "68000",
       "totalCash": "1100000000000",
       "totalsHash": "0x79f76cfbedfc8840dfa3ab23ad96b9250a86824fc5d0275cfc5cec5769ce70fd",
       "upToBlock": "700",
-      "lastSeq": "27",
-      "rulesVersion": 2,
-      "anchor": "0xa3f810957aac41b2d018673f4622ff6a8302ffe8b208e038b8353d0491720362"
+      "lastSeq": "29",
+      "rulesVersion": 3,
+      "anchor": "0x368e19a1df2468ddd52c212f4e9a6d518146602cd5d67fa12060630fcd3ee39c"
     }
   ],
   "claim": {
@@ -38,10 +38,12 @@
     "assetsRoot": "0x371667cf1c71dffbbac22b4fb7ba4a2927bf998fe4562fb335a30f508f020cfb",
     "leafKg": "3000",
     "leafCash": "995980000000",
+    "leafRequested": "100000000000",
+    "leafSettled": "0",
     "siblingHashes": [
-      "0x9115499b7383b36bcd233898564b15ec9dba9a928d40f052adefaf9d1af8f30f",
-      "0xd2430bf71c60b25034eab4f1a6fa199710fbb74c301e6a7a334806ed6b352ae2",
-      "0x19b1eeb3fefaf252f0a3c47b37ede5b72ebe4c04001141446ec0579f3cdb761e"
+      "0x7cdf553bdae5d97f7606ddd3ee1271693de4bea7c7bd52d00d1040943c7d7cf9",
+      "0xfa02b1fd0d9fbc08243dbf072bf9129a2b7feb450a20b27a4460cb466a0244f2",
+      "0xf34634afa9b3fdf9d9c2550c126101dbe5c742864306cf9db52dd52845a6e902"
     ],
     "siblingKgs": [
       "44000",

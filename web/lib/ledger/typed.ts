@@ -52,6 +52,11 @@ export const USER_TYPES = {
     { name: "memo", type: "string" },
     { name: "nonce", type: "uint256" },
   ],
+  RequestWithdrawal: [
+    { name: "account", type: "address" },
+    { name: "amount", type: "uint256" },
+    { name: "nonce", type: "uint256" },
+  ],
   RegisterProject: [
     { name: "account", type: "address" },
     { name: "name", type: "string" },
@@ -70,9 +75,9 @@ export const AUTH_TYPES = {
   ],
 } as const;
 
-type UserKind = "place" | "cancel" | "retire" | "project";
+export type UserKind = "place" | "cancel" | "retire" | "project" | "withdraw";
 const PRIMARY: Record<UserKind, keyof typeof USER_TYPES> = {
-  place: "PlaceOrder", cancel: "CancelOrder", retire: "RetireCredits", project: "RegisterProject",
+  place: "PlaceOrder", cancel: "CancelOrder", retire: "RetireCredits", project: "RegisterProject", withdraw: "RequestWithdrawal",
 };
 
 /// 使用者事件 → 當初被簽的那則訊息（十進位字串版，交給錢包用）。
@@ -90,10 +95,12 @@ export function userMessageOf(e: EventOf<UserKind>): Record<string, string | num
         beneficiaryHash: e.beneficiaryHash, purpose: e.purpose, memo: e.memo, nonce: s(e.nonce) };
     case "project":
       return { account: e.account, name: e.name, methodology: e.methodology, location: e.location, metadataURI: e.metadataURI, nonce: s(e.nonce) };
+    case "withdraw":
+      return { account: e.account, amount: s(e.amount), nonce: s(e.nonce) };
   }
 }
 
-const NUMERIC = new Set(["batchId", "amountKg", "pricePerTonne", "minFillKg", "expiry", "nonce", "orderSeq"]);
+const NUMERIC = new Set(["batchId", "amountKg", "pricePerTonne", "minFillKg", "expiry", "nonce", "orderSeq", "amount"]);
 
 /// 交給錢包簽的那一包。前端與後端必須用同一個函式產生——兩邊各組一份是這類協定最常見的壞法。
 export function userTypedData(d: Domains, kind: UserKind, message: Record<string, string | number>) {
@@ -119,7 +126,7 @@ export function authTypedData(d: Domains, e: Event) {
 /// 這一筆事件要驗的 digest。鏈上鏡像事件（存入／提領／金鑰）回 null：它們由 ChainRef 背書，不是簽章。
 export function digestOf(d: Domains, e: Event): Hex | null {
   if (e.kind === "cashDeposit" || e.kind === "cashWithdraw" || e.kind === "userKey") return null;
-  if (e.kind === "place" || e.kind === "cancel" || e.kind === "retire" || e.kind === "project") {
+  if (e.kind === "place" || e.kind === "cancel" || e.kind === "retire" || e.kind === "project" || e.kind === "withdraw") {
     return userDigest(d, e.kind, userMessageOf(e));
   }
   return hashTypedData(authTypedData(d, e));

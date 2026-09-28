@@ -85,8 +85,9 @@ contract Ledger is AccessControl {
     mapping(bytes32 => uint8) public thresholdOf;
 
     bool public withdrawalsEnabled;
-    /// @dev 對某一期證據已經領走／登記了多少。累計制：上限是「最新 root 說你有的，減掉對同一個 root 已經用掉的」。
-    mapping(address => mapping(uint64 => uint256)) public withdrawnCash;
+    /// @dev 這個帳戶從合約領走的**累計**總額（一般提領＋逃生提領）。只增不減，不分期別——
+    ///      和葉子裡的兩個累計（請求、已領）比，怎麼換期、鏡像晚了幾塊，都不會領到第二次。
+    mapping(address => uint256) public withdrawnTotal;
     mapping(address => mapping(uint64 => mapping(uint256 => uint256))) public claimedKg;
 
     event AuthorityGranted(bytes32 indexed role, address indexed account);
@@ -239,24 +240,36 @@ contract Ledger is AccessControl {
     }
 
     /// @notice 帳戶在最新一期餘額樹裡的那片葉子與路徑。
+    /// @dev `leafRequested`／`leafSettled` 是葉子裡的提領累計（規則第 3 版，見 MerkleSumTree.leafWithdrawals）。
     struct BalanceProof {
         uint64 proofEpoch;
         bytes32 assetsRoot;
         uint256 leafKg;
         uint256 leafCash;
+        uint256 leafRequested;
+        uint256 leafSettled;
         MerkleSumTree.Node[] siblings;
         uint256 path;
     }
 
+    /// @notice 憑最新一期的證據領回結算幣。
+    ///
+    /// 兩種上限，都用累計比，不用「這一期還剩多少」：
+    ///   · **一般提領**：只能領**已經請求提領**的部分——`leafRequested − withdrawnTotal`。
+    ///     使用者先在帳本裡簽提領請求，帳本把那筆錢移到「待提領」（不能再拿去交易），
+    ///     下一期承諾上鏈之後才領得到。這樣帳本裡還在用的錢，永遠不會同時被領走（沒有重複花用）。
+    ///   · **逃生提領**（72 小時沒有新承諾）：帳本已經凍結，可以領全部欠款——
+    ///     `leafCash + leafSettled − withdrawnTotal`（葉子之後才領走的，只可能是當時的待提領，已含在 leafCash 裡）。
     function withdrawCash(uint256 amount, BalanceProof calldata p) external {
         bool escape = escapeActive();
         if (!withdrawalsEnabled && !escape) revert WithdrawalsDisabled();
         if (amount == 0) revert ZeroAmount();
         _checkBalance(msg.sender, p);
 
-        uint256 already = withdrawnCash[msg.sender][p.proofEpoch];
-        if (already >= p.leafCash) revert NothingLeft(msg.sender, p.proofEpoch);
-        uint256 owed = p.leafCash - already;
+        uint256 cap = escape ? p.leafCash + p.leafSettled : p.leafRequested;
+        uint256 already = withdrawnTotal[msg.sender];
+        if (already >= cap) revert NothingLeft(msg.sender, p.proofEpoch);
+        uint256 owed = cap - already;
         if (amount > owed) revert SumMismatch(owed, amount);
 
         uint256 pay = amount;
@@ -269,7 +282,7 @@ contract Ledger is AccessControl {
             }
         }
         if (pay == 0) revert NothingLeft(msg.sender, p.proofEpoch);
-        withdrawnCash[msg.sender][p.proofEpoch] = already + pay;
+        withdrawnTotal[msg.sender] = already + pay;
         cash.safeTransfer(msg.sender, pay);
         emit CashWithdrawn(msg.sender, pay, p.proofEpoch);
     }
@@ -328,7 +341,8 @@ contract Ledger is AccessControl {
         if (p.proofEpoch != epoch) revert NotLatestEpoch(epoch, p.proofEpoch);
         Commitment storage c = _commitments[p.proofEpoch];
         if (c.committedAt == 0) revert UnknownEpoch(p.proofEpoch);
-        MerkleSumTree.Node memory leaf = MerkleSumTree.leaf(account, p.proofEpoch, p.assetsRoot, p.leafKg, p.leafCash);
+        MerkleSumTree.Node memory leaf =
+            MerkleSumTree.leafWithdrawals(account, p.proofEpoch, p.assetsRoot, p.leafKg, p.leafCash, p.leafRequested, p.leafSettled);
         MerkleSumTree.Node memory root = MerkleSumTree.computeRoot(leaf, p.siblings, p.path);
         if (root.hash != c.balanceRoot) revert BadProof();
         if (root.kg != c.totalKg) revert SumMismatch(c.totalKg, root.kg);

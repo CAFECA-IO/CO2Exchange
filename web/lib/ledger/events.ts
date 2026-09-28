@@ -47,6 +47,8 @@ export const KIND = {
   reserveAttest: 18,
   /// CAFECA 帳戶的 passkey 公鑰（鏈上 KeyAdded 的鏡像，帶座標）。查核驗 WebAuthn 簽章時用，不改變任何狀態
   userKey: 19,
+  /// 使用者簽的提領請求（2026-09-29 新增，規則第 3 版）：把帳本裡的現金移到「待提領」，之後憑證據從帳本合約領回
+  withdraw: 20,
 } as const;
 export type Kind = keyof typeof KIND;
 
@@ -81,6 +83,8 @@ export type Event = Base &
     /// 賣單指定 batchId；買單 batchId = 0（不挑批次）、country 可空（不限核發國）
     | ({ kind: "place"; side: "buy" | "sell"; batchId: bigint; country: string; amountKg: bigint; pricePerTonne: bigint; minFillKg: bigint; expiry: bigint } & User)
     | ({ kind: "cancel"; orderSeq: bigint } & User)
+    /// 提領請求：amount 從可動用現金移到待提領。鏈上領回時（CashWithdrawn）再由鏡像事件銷帳
+    | ({ kind: "withdraw"; amount: bigint } & User)
     /// purpose：0 碳費扣除、1 自願性碳中和、2 增量抵換、3 環評承諾（對齊環境部註銷申請書四類）
     | ({ kind: "retire"; batchId: bigint; amountKg: bigint; beneficiary: string; beneficiaryHash: Hex; purpose: number; memo: string } & User)
     | ({ kind: "certDocument"; certId: bigint; documentHash: Hex } & Auth)
@@ -99,7 +103,7 @@ export function signerOf(e: Event): Address | null {
   return e.account;
 }
 
-export const USER_KINDS = new Set<Kind>(["project", "place", "cancel", "retire"]);
+export const USER_KINDS = new Set<Kind>(["project", "place", "cancel", "retire", "withdraw"]);
 export const isUserEvent = (e: Event): e is Extract<Event, User> => USER_KINDS.has(e.kind);
 
 export const countryToBytes2 = (c: string): Hex => {
@@ -149,6 +153,8 @@ export function payloadOf(e: Event): Hex {
         [e.account, e.side === "buy" ? 0 : 1, e.batchId, countryToBytes2(e.country), e.amountKg, e.pricePerTonne, e.minFillKg, e.expiry, e.nonce]);
     case "cancel":
       return T(["address", "uint64", "uint256"], [e.account, e.orderSeq, e.nonce]);
+    case "withdraw":
+      return T(["address", "uint256", "uint256"], [e.account, e.amount, e.nonce]);
     case "retire":
       return T(["address", "uint256", "uint256", "string", "bytes32", "uint8", "string", "uint256"],
         [e.account, e.batchId, e.amountKg, e.beneficiary, e.beneficiaryHash, e.purpose, e.memo, e.nonce]);

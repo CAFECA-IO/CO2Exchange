@@ -29,7 +29,8 @@ import {
 
 const { openStore } = await import("../../lib/ledger/store.ts");
 const { createAgent, wouldMatch } = await import("../../lib/ledger/agent.ts");
-const { readAuthorities, LEDGER_ABI } = await import("../../lib/ledger/chain.ts");
+const { readAuthorities, readCommitments, LEDGER_ABI, PROOF_ABI } = await import("../../lib/ledger/chain.ts");
+const { snapshotAt, balanceProofArgs } = await import("../../lib/ledger/proofs.ts");
 const { isActive, tradeBpsOf } = await import("../../lib/ledger/engine.ts");
 
 const ONCE = process.argv.includes("--once");
@@ -316,6 +317,38 @@ function manageSimulation(cfg) {
   });
 }
 
+// ───────────────────────── 收回資金：領回 ─────────────────────────
+
+/// 提領請求進了承諾之後，憑最新一期的證據從帳本合約領回，再把錢包裡的結算幣轉回營運金鑰。
+/// 待提領全部領完才算收回完成。
+async function settleRecall(state) {
+  if (!state.recall) return;
+  const commits = await readCommitments(pub, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0) });
+  const last = commits.at(-1);
+  if (last) {
+    const snap = snapshotAt(store.read(), last);
+    const proof = balanceProofArgs(snap, mm.address);
+    const withdrawn = await pub.readContract({ address: D.ledger, abi: PROOF_ABI, functionName: "withdrawnTotal", args: [mm.address] });
+    const claimable = proof && proof.leafRequested > withdrawn ? proof.leafRequested - withdrawn : 0n;
+    if (claimable > 0n) {
+      await ensureGas();
+      await send(mmClient, mm, { address: D.ledger, abi: PROOF_ABI, functionName: "withdrawCash", args: [claimable, proof] }, "領回");
+      await agent.mirror(D.ledger);
+      note(`從帳本合約領回 ${twd(claimable)} 元（第 ${last.epoch} 期的證據）`);
+    }
+  }
+  const inWallet = await wallet(mm.address);
+  if (inWallet > 0n) {
+    await ensureGas();
+    await send(mmClient, mm, { address: D.settlementToken, abi: erc20Abi, functionName: "transfer", args: [op.address, inWallet] }, "轉回營運金鑰");
+    const funded = BigInt(state.fundedTotal);
+    state.fundedTotal = (funded > inWallet ? funded - inWallet : 0n).toString();
+    note(`${twd(inWallet)} 元轉回營運金鑰`);
+  }
+  const pending = agent.state().pendingWithdraw.get(low(mm.address)) ?? 0n;
+  if (pending === 0n) { state.recall = null; note("收回資金完成"); }
+}
+
 // ───────────────────────── 一輪 ─────────────────────────
 
 async function tick() {
@@ -340,20 +373,21 @@ async function tick() {
   if (cfg.commands.recall > (state.cmd?.recall ?? 0)) {
     state.cmd = { ...state.cmd, recall: cfg.commands.recall };
     await cancelAll(book.mineAll, "收回資金");
-    // 錢包裡還沒存進去的直接轉回營運金鑰；已經存進帳本合約的要憑證據提領（第 6 期的提領工具）
-    const inWallet = await wallet(mm.address);
-    if (inWallet > 0n) {
-      await ensureGas();
-      await send(mmClient, mm, { address: D.settlementToken, abi: erc20Abi, functionName: "transfer", args: [op.address, inWallet] }, "收回資金");
-    }
+    // 帳本裡的現金：簽一筆提領請求（移到待提領），下一期承諾上鏈之後憑證據領回、轉回營運金鑰（見 settleRecall）
     const inLedger = cashOf(agent.state(), mm.address);
+    if (inLedger > 0n) {
+      const r = await put("withdraw", { amount: inLedger }, "提領請求");
+      if (r && !r.rejectedReason) note(`收回資金：撤單，申請提領 ${twd(inLedger)} 元（下一期承諾上鏈後自動領回、轉回營運金鑰）`);
+    }
+    state.recall = { at: new Date().toISOString() };
     state.halted = {
-      reason: `已撤回全部報價${inWallet > 0n ? `，錢包裡的 ${twd(inWallet)} 元轉回營運金鑰` : ""}。帳本裡的 ${twd(inLedger)} 元留在帳本合約，要憑餘額證據提領。按「恢復」重新報價`,
+      reason: `已撤回全部報價，帳本裡的 ${twd(inLedger)} 元申請提領中：下一期承諾上鏈後自動從帳本合約領回、轉回營運金鑰。按「恢復」重新報價`,
       at: new Date().toISOString(),
     };
-    note(`收回資金：撤單，錢包 ${twd(inWallet)} 元轉回`);
     s = agent.state(); book = readBook(s);
   }
+
+  if (state.recall) await settleRecall(state).catch((e) => note(`領回失敗（下一輪再試）：${String(e.shortMessage ?? e.message).slice(0, 120)}`));
 
   // ── 部位與參考價 ──
   const mineLive = book.mineAll.filter((o) => o.expiry > nowSec());

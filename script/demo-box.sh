@@ -235,6 +235,9 @@ commit_loop () {
   while true; do
     if do_commit >> "$LOG/commit.log" 2>&1; then
       fails=0; echo "   $(date -u +'%F %T') ✓ $(tail -1 "$LOG/commit.log")"
+      # 每一期的公開檔（web/data/public/epochs/<期別>.json）。已上鏈的期別不會再變，已存在的不重寫
+      ( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/ledger-publish.mjs >> "$LOG/publish.log" 2>&1 ) \
+        || echo "   ⚠️ 公開檔沒有寫出來，看 $LOG/publish.log"
     else
       fails=$((fails + 1)); echo "   $(date -u +'%F %T') ✗ 第 ${fails} 次失敗：$(grep '✗' "$LOG/commit.log" | tail -1)"
       [ "$fails" -ge 3 ] && echo "   ⚠️ 連續 ${fails} 期沒有提交。太久沒有承諾，合約的逃生艙會開啟（見 status）。"
