@@ -1,6 +1,6 @@
 import "server-only";
 import { PURPOSE_LABEL, flagOf, purposeAllowed } from "@/lib/deployment";
-import { deployment } from "../chain";
+import { IS_LOCAL_CHAIN } from "../chain";
 import { ApiError } from "../api";
 import { ledgerView } from "../ledger/view";
 import { notional, retireFeeOf, tradeBpsOf } from "@/lib/ledger/engine";
@@ -57,11 +57,11 @@ export type Preview = {
   /// 要使用者簽的那一筆帳本事件（交給 /api/ledger 的 prepare → CAFECA 簽 → submit）。
   /// 只有純量欄位；nonce 與要簽的 typed data 由 /api/ledger 在 prepare 時才組，前端不自己組。
   ledger?: { kind: "place" | "cancel" | "retire"; fields: Record<string, string | number> };
-  /// 領水：領到之後直接存進帳本合約
+  /// 模擬入金（本機展示鏈）
   deposit?: string;
 };
 
-const twd = (raw: bigint) => `${(Number(raw) / 1e6).toLocaleString("zh-TW", { maximumFractionDigits: 2 })} mTWD`;
+const twd = (raw: bigint) => `${(Number(raw) / 1e6).toLocaleString("zh-TW", { maximumFractionDigits: 2 })} 元`;
 const tonnes = (kg: number | bigint) => `${(Number(kg) / 1000).toLocaleString("zh-TW", { maximumFractionDigits: 3 })} 公噸`;
 
 function need(v: unknown, name: string): number {
@@ -132,12 +132,13 @@ function buildLedgerAction(kind: ActionKind, p: Record<string, unknown>, ctx: Ct
     case "manage_identity":
       break; // buildAction 已處理
     case "claim_faucet": {
-      if (deployment().settlementMintable !== true) throw new ApiError("FORBIDDEN", "這條鏈上的結算幣不是本站發行的，沒有鑄幣權。請改由發行方入金。");
+      // 新台幣入金是匯款到信託專戶，網站代辦不了；只有本機展示鏈可以「模擬入金」
+      if (!IS_LOCAL_CHAIN) throw new ApiError("FORBIDDEN", "入金請匯款到信託專戶，備註填您的入金識別碼（交易頁「入金」）。營運方對帳後入帳。");
       const amount = 100_000n * 10n ** 6n;
       return {
-        kind, title: "領取測試用 mTWD 並存進帳本",
-        rows: [{ label: "帳戶", value: me }, { label: "數量", value: twd(amount) }, { label: "存入後帳本餘額", value: twd(cash + amount), emphasis: true }],
-        warnings: ["mTWD 是模擬的結算幣，沒有任何實際價值。", "存入是一筆鏈上交易（轉進帳本合約託管），gas 由平台贊助。"],
+        kind, title: "模擬入金 100,000 元（本機展示）",
+        rows: [{ label: "帳戶", value: me }, { label: "金額", value: twd(amount) }, { label: "入帳後可動用", value: twd(cash + amount), emphasis: true }],
+        warnings: ["這是本機展示鏈的模擬入金，等於營運方立刻確認了一筆匯款；不涉及真實資金。"],
         deposit: amount.toString(),
       };
     }
@@ -164,7 +165,7 @@ function buildLedgerAction(kind: ActionKind, p: Record<string, unknown>, ctx: Ct
           { label: "帳本餘額", value: `${twd(cash)} → ${twd(cash - cost)}` },
         ],
         warnings: [
-          ...(cash < cost ? [`帳本裡的結算幣不夠：你有 ${twd(cash)}，這筆要 ${twd(cost)}。先存入結算幣。`] : []),
+          ...(cash < cost ? [`帳本裡的新台幣不夠：你有 ${twd(cash)}，這筆要 ${twd(cost)}。先入金（交易頁「新台幣」）。`] : []),
           "你簽的是一張同批次、同價格的買單，由帳本撮合；手續費由賣方負擔。",
           "那張賣單若在你簽署之前被別人買走，沒成交的部分會以同價掛著一小時（期間你可以撤單），之後自動失效。",
         ],
@@ -193,7 +194,7 @@ function buildLedgerAction(kind: ActionKind, p: Record<string, unknown>, ctx: Ct
           { label: "有效期限", value: "30 日" },
         ],
         warnings: [
-          ...(cash < lock ? [`帳本裡的結算幣不夠：你有 ${twd(cash)}，這筆要鎖 ${twd(lock)}。`] : []),
+          ...(cash < lock ? [`帳本裡的新台幣不夠：你有 ${twd(cash)}，這筆要鎖 ${twd(lock)}。`] : []),
           "錢會**當場**在帳本裡鎖住，直到成交、撤單或到期為止。撤單會全額退回。",
         ],
         ledger: { kind: "place", fields: { side: "buy", batchId: "0", country, amountKg: kg.toString(), pricePerTonne: pricePerTonne.toString(), minFillKg: "0", expiry: nowSec() + 30 * DAY } },
@@ -268,7 +269,7 @@ function buildLedgerAction(kind: ActionKind, p: Record<string, unknown>, ctx: Ct
         ],
         warnings: [
           ...(allowed ? [] : [`${country} 核發的額度不允許用於「${PURPOSE_LABEL[purpose]}」。換一個用途，或換一批額度。`]),
-          ...(cash < fee ? [`帳本裡的結算幣不夠付註銷手續費（${twd(fee)}）。`] : []),
+          ...(cash < fee ? [`帳本裡的新台幣不夠付註銷手續費（${twd(fee)}）。`] : []),
           "**註銷不可逆。** 這些額度會永久退出流通，不能再轉讓、也不能再被任何人主張。",
           "受益人與用途會寫進憑證，之後改不了。憑證要等下一期承諾上鏈才定稿（最長一小時）。",
         ],
@@ -283,7 +284,7 @@ function buildLedgerAction(kind: ActionKind, p: Record<string, unknown>, ctx: Ct
 export const ACTION_CATALOG = `
 可提議的動作（propose_action 的 kind 與參數）：
 - navigate {path}                     帶使用者去某一頁。不需要簽章。
-- claim_faucet {}                     領測試用 mTWD 並存進帳本（只有本站發行結算幣的展示鏈可以）。
+- claim_faucet {}                     模擬入金 100,000 元（只有本機展示鏈可以；正式入金是匯款到信託專戶）。
 - buy_listing {orderId, tonnes}       買一張現有掛單。先用 order_book 取得 orderId。
 - place_bid {country?, tonnes, pricePerTonne}  掛買單（錢會鎖住）。country 省略 = 國內（TW）。
 - cancel_bid {bidId}                  取消自己的委託，退回鎖住的錢或額度。買單賣單共用序號，撤賣單也用這個（bidId 給 order_book 的 orderId）。
@@ -291,7 +292,7 @@ export const ACTION_CATALOG = `
 - retire {batchId, tonnes, purpose, beneficiary, memo?}  註銷。purpose 是 0–3 的整數。**不可逆**。
 - manage_identity {}                  帶使用者去管理自己的 CAFECA 身分（掛失、裝置、恢復）。
 
-pricePerTonne 的單位是 mTWD／公噸（給數字即可，例如 850）。tonnes 是公噸，可以有小數。
+pricePerTonne 的單位是元／公噸（給數字即可，例如 850）。tonnes 是公噸，可以有小數。
 沒有「轉帳給某個地址」這種動作。金鑰管理（加／刪裝置、掛失、恢復）也不在這裡——
 那些屬於使用者的 CAFECA 身分，本站碰不到，只能用 manage_identity 把人帶過去。
 `.trim();

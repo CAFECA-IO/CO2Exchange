@@ -6,7 +6,7 @@
 //   … --avoid 0xMM,0x…     # 不和這些帳戶成交（後台做市會帶自己的地址）
 //
 // 每一筆都是人物自己簽的 EIP-712（和網站使用者同一種），寫進鏈下帳本、由引擎撮合。
-// 只有**入金**是鏈上交易：人物把結算幣存進帳本合約（本站發行的 MockTWD 就鑄造；外部結算幣由營運金鑰轉給他）。
+// 只有**入金**是鏈上交易：營運 Safe 確認一筆（虛構的）新台幣入金、記在人物名下（bankRef 以 sim: 開頭，查核時分得出來）。
 //
 // 模擬人物只在 SIMULATION_CHAINS 列出的鏈上跑。名冊寫在 web/data/sim-personas.json：
 // 網站靠它在掛單簿上標「模擬」，做市程式靠它避開平台自己的帳戶。
@@ -19,14 +19,15 @@
 // 到寫進去的那一刻可能已經被做市程式改過了。
 import fs from "node:fs";
 import path from "node:path";
-import { createPublicClient, createWalletClient, defineChain, http, keccak256, parseAbi, toBytes, toHex } from "viem";
+import { createPublicClient, createWalletClient, defineChain, http, keccak256, toBytes } from "viem";
 import { english, generateMnemonic, mnemonicToAccount, privateKeyToAccount } from "viem/accounts";
 import { buildPersonas, mulberry32 } from "./personas.mjs";
-import { ANVIL_MNEMONIC, KeyError, appendIfMissing, keyring, setting } from "./lib/keys.mjs";
+import { ANVIL_MNEMONIC, KeyError, appendIfMissing, keyring, operatorOwnerAccounts, setting } from "./lib/keys.mjs";
 
 const { openStore } = await import("../lib/ledger/store.ts");
 const { createAgent, wouldMatch } = await import("../lib/ledger/agent.ts");
-const { readAuthorities, LEDGER_ABI } = await import("../lib/ledger/chain.ts");
+const { readAuthorities } = await import("../lib/ledger/chain.ts");
+const { bankRefOf, creditDepositCall, execOperatorSafe } = await import("../lib/ledger/fiat.ts");
 const { isActive } = await import("../lib/ledger/engine.ts");
 
 const arg = (n, d) => { const i = process.argv.indexOf(`--${n}`); return i > -1 ? process.argv[i + 1] : d; };
@@ -105,37 +106,19 @@ function avoidSet() {
   return s;
 }
 
-// ── 入金（鏈上真的轉帳）──
-const erc20 = parseAbi(["function mint(address,uint256)", "function approve(address,uint256) returns (bool)", "function transfer(address,uint256) returns (bool)", "function balanceOf(address) view returns (uint256)", "function allowance(address,address) view returns (uint256)"]);
+// ── 入金（營運 Safe 確認；模擬人物的錢是虛構的，bankRef 一律以 sim: 開頭）──
 const opW = createWalletClient({ account: op, chain, transport: http(RPC) });
-const GAS = LOCAL ? 10n ** 19n : BigInt(setting("SIM_GAS_TOPUP") ?? 10n ** 15n);
-async function tx(w, params) {
-  const nonce = await pub.getTransactionCount({ address: w.account.address, blockTag: "pending" });
-  const hash = await w.writeContract({ ...params, nonce });
-  const rc = await pub.waitForTransactionReceipt({ hash, retryCount: 5 });
-  if (rc.status !== "success") throw new Error(`交易失敗 ${hash}`);
-}
-async function gasFor(addr) {
-  if ((await pub.getBalance({ address: addr })) >= GAS / 4n) return;
-  if (LOCAL) { await pub.request({ method: "anvil_setBalance", params: [addr, toHex(GAS)] }); return; }
-  const nonce = await pub.getTransactionCount({ address: op.address, blockTag: "pending" });
-  await pub.waitForTransactionReceipt({ hash: await opW.sendTransaction({ to: addr, value: GAS, nonce }) });
-}
-/// 每位人物的入金上限。本站發行的結算幣（本機）照人物設定；外部結算幣（TWDC）不能鑄，
-/// 營運金鑰有多少就只能分多少——預設把它的 80% 平均分給買方，留一點給做市與手續費。
-/// `SIM_BUDGET_TWD` 可以直接指定每人多少元。
+const owners = await operatorOwnerAccounts({ isLocal: LOCAL });
+if (owners.length === 0) log("  ⚠️ 這台機器上沒有營運 Safe 持有人的金鑰（.governance.env），模擬人物不會入金");
+/// 每位人物的入金上限：預設依人物設定；`SIM_BUDGET_TWD` 可以直接指定每人多少元。
 let perPersonaCap = null;
-async function planBudget(buyers) {
+async function planBudget() {
   const fixed = setting("SIM_BUDGET_TWD");
-  if (fixed) perPersonaCap = BigInt(fixed) * 1_000_000n;
-  else if (D.settlementMintable !== true) {
-    const opHas = await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "balanceOf", args: [op.address] });
-    perPersonaCap = (opHas * 8n) / 10n / BigInt(Math.max(1, buyers.length));
-  }
-  if (perPersonaCap !== null) console.log(`  每位買方入金上限 ${Number(perPersonaCap) / 1e6} 元（${fixed ? "SIM_BUDGET_TWD" : "營運金鑰結算幣的 80% 平均分配"}）`);
+  if (fixed) { perPersonaCap = BigInt(fixed) * 1_000_000n; console.log(`  每位買方入金上限 ${fixed} 元（SIM_BUDGET_TWD）`); }
 }
-/// 帳本裡的現金低於預算的四分之一就補到預算。回傳存了多少。
+/// 帳本裡的現金低於預算的四分之一就補到預算。回傳入金多少。
 async function topUp(p) {
+  if (owners.length === 0) return 0n;
   const s = agent.state();
   let budget = BigInt(Math.max(30_000, (p.annualNeedTonnes || 50) * 1_500)) * 1_000_000n;
   if (perPersonaCap !== null && budget > perPersonaCap) budget = perPersonaCap;
@@ -143,17 +126,9 @@ async function topUp(p) {
   const have = (s.cash.get(low(p.address)) ?? 0n) + (s.lockedCash.get(low(p.address)) ?? 0n);
   if (have >= budget / 4n) return 0n;
   const want = budget - have;
-  if (D.settlementMintable === true) await tx(opW, { address: D.settlementToken, abi: erc20, functionName: "mint", args: [p.address, want] });
-  else {
-    const opHas = await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "balanceOf", args: [op.address] });
-    if (opHas < want) { log(`  ⚠️ 營運金鑰的結算幣不夠，${p.name} 這次沒有入金`); return 0n; }
-    await tx(opW, { address: D.settlementToken, abi: erc20, functionName: "transfer", args: [p.address, want] });
-  }
-  await gasFor(p.address);
-  const w = createWalletClient({ account: p.account, chain, transport: http(RPC) });
-  const allowance = await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "allowance", args: [p.address, D.ledger] });
-  if (allowance < want) await tx(w, { address: D.settlementToken, abi: erc20, functionName: "approve", args: [D.ledger, 2n ** 255n] });
-  await tx(w, { address: D.ledger, abi: LEDGER_ABI, functionName: "depositCash", args: [want] });
+  const ref = `sim:${p.address.slice(2, 10)}:${Date.now()}:${Math.random().toString(36).slice(2, 6)}`;
+  const call = creditDepositCall(D.ledger, p.address, want, bankRefOf("in", ref));
+  await execOperatorSafe({ pub, sender: opW, safe: D.operatorSafe, to: call.to, data: call.data, owners });
   return want;
 }
 
@@ -259,7 +234,7 @@ async function tickOnce() {
     let price = P(ref * (0.95 + rng() * 0.15) * p.priceTolerance);
     if (mm.ask !== null && price >= mm.ask) price = mm.ask - TICK * BigInt(1 + Math.floor(rng() * 5));
     if (price <= 0n) continue;
-    // 買得起多少就下多少：入金有上限時（外部結算幣），預算常常只夠一兩噸，超過的單只會被引擎以「餘額不足」拒絕
+    // 買得起多少就下多少：入金有上限時（沒有營運 Safe 金鑰、只能用帳本裡已有的錢），預算常常只夠一兩噸，超過的單只會被引擎以「餘額不足」拒絕
     const cash = agent.state().cash.get(low(p.address)) ?? 0n;
     let kg = BigInt(tonnes * 1000);
     const affordable = (cash * 1000n) / price;
@@ -313,7 +288,7 @@ process.on("SIGINT", () => { stop = true; });
 process.on("SIGTERM", () => { stop = true; });
 console.log(`模擬市場（帳本）：chainId ${chainId}，${USERS} 人，每 ${INTERVAL} 秒一輪${TICKS ? `，共 ${TICKS} 輪` : ""}；迴避 ${[...avoidSet()].join(", ") || "（無）"}`);
 await setup();
-await planBudget(personas.filter((p) => p.role !== "developer"));
+await planBudget();
 while (!stop) {
   try { await tickOnce(); } catch (e) { console.error(`本輪失敗：${String(e.shortMessage ?? e.message).slice(0, 300)}`); }
   if (TICKS && round >= TICKS) break;

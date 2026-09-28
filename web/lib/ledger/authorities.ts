@@ -9,7 +9,7 @@ import type { Event } from "./events.ts";
 
 export const ROLES = [
   "SOVEREIGN",          // 國家 Safe：轄區、政策、凍結、國外專案、專案狀態
-  "OPERATOR",           // 營運方：費率、官方註銷回填
+  "OPERATOR",           // 營運方：費率、官方註銷回填、退回出金請求
   "IDENTITY_VERIFIER",  // 身分驗證服務
   "CARBON_VERIFIER",    // 查驗機構
   "DOCUMENT_SIGNER",    // 憑證文件雜湊、對帳報告
@@ -51,7 +51,7 @@ export function roleFor(e: Event): Role | null {
   switch (e.kind) {
     case "jurisdiction": case "policy": case "freeze": case "importProject": case "projectStatus":
       return "SOVEREIGN";
-    case "fees": case "certOfficial":
+    case "fees": case "certOfficial": case "withdrawReject":
       return "OPERATOR";
     case "identity":
       return "IDENTITY_VERIFIER";

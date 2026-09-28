@@ -6,7 +6,8 @@ import { fetchJson } from "@/lib/client/fetchJson";
 
 /// 審計（技術揭露與審計資訊）：這一頁把「鏈上有什麼、鏈下有什麼、哪些保證變弱了、要怎麼自己驗」講完。
 ///
-/// 設計 v4 把登錄簿、身分與市場搬到鏈下帳本，鏈上只留每小時的承諾、授權金鑰清單與結算幣託管。
+/// 設計 v4 把登錄簿、身分與市場搬到鏈下帳本，鏈上只留每小時的承諾、授權金鑰清單與記帳用的 TWD。
+/// 規則第 4 版起使用者的錢是信託專戶裡的真新台幣，鏈上沒有提領、沒有逃生門——這也是一種降級，一樣寫在這一頁。
 /// 這換來了不必等出塊、不付 gas 的交易，代價是**有些規則從「合約拒絕」降級成「重播抓得到」**。
 /// 那個降級要寫在使用者看得到的地方，不能只寫在設計文件裡——所以有這一頁。
 ///
@@ -65,13 +66,16 @@ export default function AuditPage() {
           <ul className="space-y-2 text-sm leading-6 text-ink-200">
             <li><b className="text-ink-50">每小時一期承諾。</b>事件 log root、帶總額的餘額樹 root、登錄簿 root、身分 root、逐批次總量表的雜湊、算到哪一筆事件與哪一個區塊，並與前一期串連。事後改不掉。</li>
             <li><b className="text-ink-50">授權金鑰清單與門檻。</b>誰能簽核發、身分、凍結、費率、對帳報告。由國家單位的多簽（Safe）管理；帳本裡每一筆授權事件都要由收單當時有效的金鑰簽署。</li>
-            <li><b className="text-ink-50">結算幣託管。</b>存入轉進帳本合約；合約拒絕任何一期宣稱欠使用者的結算幣多於它實際持有的承諾。</li>
-            <li><b className="text-ink-50">提領與逃生門。</b>憑最新一期的證據領回結算幣；超過 72 小時沒有新承諾，任何人都能憑最後一期的證據領回全部欠款，沒有任何角色關得掉。</li>
+            <li><b className="text-ink-50">記帳用的新台幣（TWD）。</b>您的錢是信託專戶裡的新台幣，不在鏈上。帳本合約部署時建立一個記帳用的 TWD：
+              營運 Safe 確認一筆入金時鑄出、確認一筆出金時銷毀，只存在帳本合約裡、不能轉出。它的總量是<b className="text-ink-50">營運方宣稱的</b>信託專戶餘額；
+              合約拒絕任何一期宣稱欠使用者的新台幣多於這個總量。</li>
+            <li><b className="text-ink-50">入出金確認。</b>每一筆入金與出金都是營運 Safe 的鏈上交易，帶銀行交易參考號的雜湊（同一個參考號不能用兩次）。
+              出金要附最新一期的證據，金額不能超過您簽過、而且已經進了承諾的出金請求。</li>
           </ul>
         </Card>
         <Card title="鏈下有什麼">
           <ul className="space-y-2 text-sm leading-6 text-ink-200">
-            <li><b className="text-ink-50">帳本本身。</b>每一筆事件（委託單、撤單、註銷、核發、身分、費率、存提）照順序接成雜湊鏈，每一筆都帶簽章。</li>
+            <li><b className="text-ink-50">帳本本身。</b>每一筆事件（委託單、撤單、註銷、核發、身分、費率、入出金）照順序接成雜湊鏈，每一筆都帶簽章。</li>
             <li><b className="text-ink-50">碳權。</b>額度託管在核發國官方登錄簿（國內額度在專案方的額度帳戶，國外額度在本站的託管帳戶）。帳本記的是對那些額度的請求權。</li>
             <li><b className="text-ink-50">撮合。</b>成交、持有與憑證是重播帳本的結果，不另外記錄——記了結果就有兩份真相。</li>
           </ul>
@@ -91,14 +95,18 @@ export default function AuditPage() {
           <ul className="list-disc space-y-1 pl-5">
             <li>收下一筆違反規則的事件——重播時會被引擎拒絕，但事件仍在帳本裡、且每小時上鏈。</li>
             <li>決定同一時間到達的委託單的先後——序號由營運方給，但序號與內容都進雜湊鏈，事後改不了。</li>
-            <li>拒收您的委託單或提領請求（不給簽收收據）——您手上沒有收據就代表那筆沒有進帳本。
-              <b className="text-ink-50">這是目前設計的缺口：</b>營運方若持續提交承諾、卻只拒收您一人的提領請求，逃生門不會開啟
-              （它只在全站停擺 72 小時後開啟）。您簽過的請求與沒有收據這件事，是向主管機關申訴的依據；
-              鏈上強制收單的機制列在後續工作。</li>
+            <li>拒收您的委託單或出金請求（不給簽收收據）——您手上沒有收據就代表那筆沒有進帳本。
+              您簽過的請求與沒有收據這件事，是向主管機關申訴的依據；鏈上強制收單的機制列在後續工作。</li>
+            <li>收下出金請求、卻不匯款也不在鏈上確認——請求與每一期的證據都在，帳本合約也不讓記帳 TWD 移給任何人，
+              但錢在銀行裡，<b className="text-ink-50">鏈上沒有任何機制能替您把錢領出來</b>。能強制的是信託契約、信託銀行與主管機關。</li>
+            <li>記帳 TWD 的總量與信託專戶的真實餘額不符——鏈上看不出來。這一項靠信託銀行的對帳與查核機構的月度報告，不靠密碼學。</li>
             <li>不公布帳本——所以帳本鏡像同時交付查核機構與主管機關，您也可以隨時下載自己的證據檔。</li>
           </ul>
           <p>營運方<b className="text-ink-50">做不到</b>的事：替您簽委託單（沒有您的 EIP-712 簽章，帳本不收）、竄改已上鏈的任何一期、
-            宣稱欠的結算幣多於合約持有的、阻止逃生提領、自己核發額度（核發要查驗機構的金鑰）。</p>
+            宣稱欠的新台幣多於記帳 TWD 的總量、把記帳 TWD 轉給任何人、用同一筆銀行交易入帳兩次、確認超過您請求的出金、自己核發額度（核發要查驗機構的金鑰）。</p>
+          <p><b className="text-ink-50">沒有逃生門。</b>早期版本的結算幣是鏈上代幣，全站停擺 72 小時後任何人都能憑證據直接從合約領回。
+            改成真的新台幣之後，錢在信託專戶、不在合約裡，這個機制就不存在了：本站停止營運時，您最後一期的證據檔是對本站與信託財產的債權憑證，
+            返還依信託契約與主管機關的程序辦理。</p>
         </div>
       </Card>
 
@@ -111,7 +119,7 @@ export default function AuditPage() {
             <tbody className="divide-y divide-ink-600 text-ink-200">
               <tr><td className="py-2 pr-3 align-top text-ink-50">鏈上</td><td className="pr-3">每一期的承諾（只有雜湊與總額）</td><td className="align-top">任何人</td></tr>
               <tr><td className="py-2 pr-3 align-top text-ink-50">公開檔</td><td className="pr-3">每一筆事件的雜湊；轄區、政策、費率、專案、核發、註銷、憑證、對帳報告、批次凍結的全文；登錄簿葉子與逐批次總量表</td><td className="align-top">任何人（本頁下方）</td></tr>
-              <tr><td className="py-2 pr-3 align-top text-ink-50">只公開雜湊</td><td className="pr-3">委託單、身分、存提、提領請求、金鑰鏡像、帳戶凍結</td><td className="align-top">全文只在監理鏡像與當事人自己的證據檔</td></tr>
+              <tr><td className="py-2 pr-3 align-top text-ink-50">只公開雜湊</td><td className="pr-3">委託單、身分、入出金、出金請求、金鑰鏡像、帳戶凍結</td><td className="align-top">全文只在監理鏡像與當事人自己的證據檔</td></tr>
               <tr><td className="py-2 pr-3 align-top text-ink-50">監理鏡像</td><td className="pr-3">完整帳本（全部事件全文）、部署檔、SHA-256 清單</td><td className="align-top">查核機構、主管機關</td></tr>
             </tbody>
           </table>
@@ -138,7 +146,7 @@ export default function AuditPage() {
           <li>
             <b className="text-ink-50">③ 重播整份帳本（查核機構、主管機關）。</b>用監理鏡像：
             <pre className="mt-1 overflow-x-auto rounded bg-ink-800 p-2 text-xs text-ink-100">LEDGER_DIR=&lt;鏡像&gt;/ledger DEPLOYMENT_FILE=&lt;鏡像&gt;/deployment.json RPC_URL=&lt;任一節點&gt; npm run ledger:verify</pre>
-            在收單當時的區塊高度重驗每一筆簽章、逐筆對照鏈上的存提，算出的每一期 anchor 必須等於鏈上那一個，否則 exit 1。
+            在收單當時的區塊高度重驗每一筆簽章、逐筆對照鏈上的入出金確認，算出的每一期 anchor 必須等於鏈上那一個，否則 exit 1。
           </li>
         </ol>
       </Card>
@@ -148,9 +156,9 @@ export default function AuditPage() {
           <dl className="divide-y divide-ink-600 text-sm">
             <Row k="鏈" v={String(d.chainId)} />
             <Row k="帳本合約" v={d.ledger} />
-            <Row k="結算幣" v={d.settlementToken} />
+            <Row k="記帳 TWD（只在帳本合約裡）" v={d.settlementToken} />
             <Row k="國家單位 Safe（授權清單）" v={d.nationalSafe} />
-            <Row k="營運 Safe（提領開關、承諾提交者）" v={d.operatorSafe} />
+            <Row k="營運 Safe（入出金確認、承諾提交者）" v={d.operatorSafe} />
             <Row k="Timelock（角色更換，48 小時）" v={d.timelock} />
             {d.deployedAtBlock !== undefined && <Row k="部署區塊" v={String(d.deployedAtBlock)} />}
           </dl>
@@ -166,7 +174,7 @@ export default function AuditPage() {
               <thead className="text-left text-xs text-ink-300">
                 <tr>
                   <th className="py-1.5 pr-3">期</th><th className="pr-3">事件</th><th className="pr-3 text-right">碳權（噸）</th>
-                  <th className="pr-3 text-right">結算幣（元）</th><th className="pr-3">anchor</th><th className="pr-3">交易</th><th>公開檔</th>
+                  <th className="pr-3 text-right">新台幣（元）</th><th className="pr-3">anchor</th><th className="pr-3">交易</th><th>公開檔</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-600">

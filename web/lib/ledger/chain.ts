@@ -15,17 +15,16 @@ export const LEDGER_ABI = parseAbi([
   "function thresholdOf(bytes32 role) view returns (uint8)",
   "struct CommitInput { bytes32 prev; uint64 epoch; bytes32 logRoot; bytes32 balanceRoot; bytes32 registryRoot; bytes32 identityRoot; uint256 totalKg; uint256 totalCash; bytes32 totalsHash; uint64 upToBlock; uint64 lastSeq; uint16 rulesVersion; }",
   "event Committed(uint64 indexed epoch, bytes32 anchor, CommitInput commitment)",
-  "event CashDeposited(address indexed account, uint256 amount)",
-  "event CashWithdrawn(address indexed account, uint256 amount, uint64 epoch)",
-  "event CreditClaimed(address indexed account, uint256 indexed batchId, uint256 amountKg, uint64 epoch, uint256 projectId, uint16 vintageYear, bytes32 serialHash)",
+  "event CashDeposited(address indexed account, uint256 amount, bytes32 indexed bankRef)",
+  "event CashWithdrawn(address indexed account, uint256 amount, uint64 epoch, bytes32 indexed bankRef)",
   "function head() view returns (bytes32)",
   "function epoch() view returns (uint64)",
   "function commit(CommitInput c) returns (bytes32)",
   "function anchorOf(CommitInput c) pure returns (bytes32)",
-  "function depositCash(uint256 amount)",
+  "function cash() view returns (address)",
+  "function creditDeposit(address account, uint256 amount, bytes32 bankRef)",
+  "function bankRefUsed(bytes32) view returns (bool)",
   "function solvency() view returns (uint256 owedCash, uint256 heldCash, uint64 latestEpoch, uint64 committedAt)",
-  "function escapeIn() view returns (uint256)",
-  "function withdrawalsEnabled() view returns (bool)",
 ]);
 
 const ROLE_BY_HASH = new Map<string, Role>(ROLES.map((r) => [keccak256(toBytes(r)).toLowerCase(), r]));
@@ -76,17 +75,12 @@ export async function readAuthorities(client: PublicClient, ledger: Address, ran
   return { grants, thresholds };
 }
 
-/// 憑證據的兩個動作（提領結算幣、登記碳權請求權）與它們要的結構。規則第 3 版：葉子帶兩個提領累計。
+/// 出金確認（營運 Safe 呼叫）與它要的證據結構。葉子帶兩個出金累計（請求、已出金）。
 export const PROOF_ABI = parseAbi([
   "struct Node { bytes32 hash; uint256 kg; uint256 cash; }",
   "struct BalanceProof { uint64 proofEpoch; bytes32 assetsRoot; uint256 leafKg; uint256 leafCash; uint256 leafRequested; uint256 leafSettled; Node[] siblings; uint256 path; }",
-  "struct BatchLeaf { uint256 id; uint256 projectId; uint64 monitoringStart; uint64 monitoringEnd; uint16 vintageYear; bytes32 serialHash; bytes32 reportHash; address verifier; uint64 issuedAt; uint256 issuedKg; uint256 retiredKg; bool frozen; }",
-  "struct CreditProof { uint256 batchKg; bytes32[] assetSiblings; uint256 assetPath; BatchLeaf batch; bytes32[] registrySiblings; uint256 registryPath; }",
-  "function withdrawCash(uint256 amount, BalanceProof p)",
-  "function claimCredits(uint256 amountKg, BalanceProof p, CreditProof cp)",
+  "function settleWithdrawal(address account, uint256 amount, bytes32 bankRef, BalanceProof p)",
   "function withdrawnTotal(address) view returns (uint256)",
-  "function withdrawalsEnabled() view returns (bool)",
-  "function escapeActive() view returns (bool)",
   "function epoch() view returns (uint64)",
 ]);
 
@@ -110,7 +104,7 @@ export async function readCommitments(client: PublicClient, ledger: Address, ran
   }).sort((x, y) => (x.epoch < y.epoch ? -1 : 1));
 }
 
-/// 鏈上的結算幣存入／提領——帳本裡的 cashDeposit / cashWithdraw 要一筆一筆對得上它們。
+/// 鏈上的新台幣入金／出金確認——帳本裡的 cashDeposit / cashWithdraw 要一筆一筆對得上它們。
 export async function readCashEvents(client: PublicClient, ledger: Address, range: Range) {
   const logs = await getLogsPaged(client, range, (fromBlock, toBlock) => client.getLogs({
     address: ledger,
@@ -121,6 +115,7 @@ export async function readCashEvents(client: PublicClient, ledger: Address, rang
     kind: l.eventName === "CashDeposited" ? ("cashDeposit" as const) : ("cashWithdraw" as const),
     account: (l.args as { account: Address }).account,
     amount: (l.args as { amount: bigint }).amount,
+    bankRef: (l.args as { bankRef: Hex }).bankRef,
     ref: { txHash: l.transactionHash!, block: l.blockNumber!, logIndex: l.logIndex! },
   }));
 }

@@ -69,10 +69,12 @@ node.kg = l.kg + r.kg;  node.cash = l.cash + r.cash
 - 形狀規則（落單往上帶、`path` 位元圖）與上一種相同。
 - 算回的 root 要同時滿足三件事：`hash == balanceRoot`、`kg == totalKg`、`cash == totalCash`。
 - 葉子欄位的意義：
-  - `cash`：帳本在這一期欠這個帳戶的結算幣，含可動用、掛單鎖定與待提領。
-  - `requested`：提領請求的累計總額，只增不減。
-  - `settled`：已在鏈上領回的累計總額，只增不減。
-- 託管對照：root 的 `cash` 不得大於 `ERC20(settlementToken).balanceOf(帳本合約)`。
+  - `cash`：帳本在這一期欠這個帳戶的新台幣（最小單位，1e6 = 1 元），含可動用、掛單鎖定與待出金。
+  - `requested`：出金請求的累計總額（扣掉營運方退回的），只增不減。
+  - `settled`：營運 Safe 已在鏈上確認出金的累計總額，只增不減。
+- 託管對照：root 的 `cash` 不得大於 `LedgerTWD(settlementToken).balanceOf(帳本合約)`（合約在提交時就擋）。
+  - 規則第 4 版：記帳 TWD 只能鑄給帳本合約、不能轉出，所以 `balanceOf(帳本合約) == totalSupply()`；
+    它是**營運方宣稱的信託專戶餘額**，與銀行裡的真實餘額是否相符不在這份規格能驗的範圍內（靠信託銀行對帳與查核報告）。
   - Boltchain 只保留最近 128 個區塊的狀態，所以只能讀現在的持有，不能讀承諾那一塊的。
 
 ### `co2x-asset-packed-v1`：帳戶的逐批次小樹
@@ -89,21 +91,20 @@ node = keccak256(abi.encodePacked(bytes1 0x01, bytes32 left, bytes32 right))
 
 ```json
 {
-  "version": 1, "chainId": 8018, "generator": "CO2Exchange ledger v2 (rules 3)",
+  "version": 1, "chainId": 8018, "generator": "CO2Exchange ledger v2 (rules 4)",
   "account": "0x…", "latestEpoch": "12", "schemes": { … },
   "proofs": [
     { "type": "custody",  "scheme": "co2x-merkle-sum-v2", "anchor": { …balanceRoot }, "leaf": { … }, "siblings": [{ "hash", "kg", "cash" }], "path": "5", "custody": { "token", "holder" } },
     { "type": "credit",   "batchId": "3", "holding": { "scheme": "co2x-asset-packed-v1", … }, "registry": { "scheme": "co2x-keccak-abi-prefixed-v1", "anchor": { …registryRoot }, "content": { "types", "values" }, … } },
     { "type": "identity", "scheme": "co2x-keccak-abi-prefixed-v1", "anchor": { …identityRoot }, "content": { "types", "values" }, … },
     { "type": "event",    "scheme": "co2x-keccak-abi-prefixed-v1", "anchor": { …logRoot（該事件所屬那一期） }, "encoded": "0x…", "contentHash": "0x…", "event": { … }, … }
-  ],
-  "contractArgs": { "withdrawCash": { "proof": { … } }, "claimCredits": { "<batchId>": { … } } }
+  ]
 }
 ```
 
 - 整數一律是十進位字串。
 - 兄弟節點只是雜湊，總額樹另帶兩個加總，**不含其他帳戶的任何資料**。
-- `contractArgs` 是帳本合約 `withdrawCash`／`claimCredits` 要的參數，錢包可以直接送。
+- 規則第 4 版起證明檔**不再附合約參數**：沒有使用者能自己送的鏈上提領或請求權登記。它是審計數據與債權憑證。
 
 ## 四、公開檔（每一期）
 
@@ -118,7 +119,7 @@ node = keccak256(abi.encodePacked(bytes1 0x01, bytes32 left, bytes32 right))
 | `totals` | 逐批次總量表 | `totalsHash` 的原文 |
 
 - 公開全文的事件：轄區、政策、費率、專案、核發、註銷、憑證、對帳報告、批次凍結。
-- 只公開雜湊的事件：委託單、身分、存提、提領請求、金鑰鏡像、帳戶凍結。這些的全文在監理鏡像裡。
+- 只公開雜湊的事件：委託單、身分、入出金、出金請求（與退回）、金鑰鏡像、帳戶凍結。這些的全文在監理鏡像裡。
 
 ## 五、監理鏡像
 
@@ -135,12 +136,31 @@ npm run ledger:publish -- --mirror <目錄>
 LEDGER_DIR=<目錄>/ledger DEPLOYMENT_FILE=<目錄>/deployment.json RPC_URL=<任一節點> npm run ledger:verify
 ```
 
-## 六、提領（規則第 3 版）
+## 六、新台幣入出金（規則第 4 版）
 
-1. 使用者在帳本裡簽 `RequestWithdrawal(account, amount, nonce)`。帳本把那筆錢從可動用移到待提領，之後不能再交易。
-2. 下一期承諾上鏈之後，他憑最新一期的託管證據呼叫 `withdrawCash`。
-   - 一般模式的上限是 `leaf.requested − withdrawnTotal[account]`。
-   - 逃生模式（72 小時沒有新承諾）的上限是 `leaf.cash + leaf.settled − withdrawnTotal[account]`。
-3. 鏈上的 `CashWithdrawn` 鏡像進帳本，先從待提領銷帳，超出的部分（只可能是逃生提領）從可動用扣。
+使用者的錢是信託專戶裡的真新台幣。鏈上只有記帳 TWD（`LedgerTWD`，6 位小數），唯一持有人是帳本合約。
 
-`withdrawnTotal` 是合約記的累計總額，不分期別。所以換了幾期、鏡像晚了幾個區塊都一樣，同一筆錢不會領到第二次。
+**入金**
+
+1. 使用者匯款到信託專戶，備註填入金識別碼（`keccak256("co2x:deposit:" ‖ 小寫地址) mod 10¹⁰`，補零到 10 位）。
+2. 營運方對帳後，營運 Safe 呼叫 `creditDeposit(account, amount, bankRef)`：鑄出 `amount` 給帳本合約，
+   發 `CashDeposited(account, amount, bankRef)`。`bankRef = keccak256("co2x:bank:in:" ‖ 銀行交易參考號)`，同一個值合約只收一次。
+3. 帳本把 `CashDeposited` 鏡像成 `cashDeposit` 事件（kind 1），可動用現金增加。
+
+**出金**
+
+1. 使用者設定收款帳戶，在帳本裡簽 `RequestWithdrawal(account, amount, payoutRef, nonce)`。
+   `payoutRef = keccak256("co2x:payout:" ‖ 銀行代碼 ‖ "|" ‖ 帳號 ‖ "|" ‖ 戶名 ‖ ":" ‖ 鹽)`；鹽只在營運方，所以帳本公開的雜湊試不出帳號。
+   帳本把那筆錢從可動用移到待出金，之後不能再交易；`requested` 累計增加。
+2. 營運方不匯款時簽 `withdrawReject(account, amount, reason)`（kind 21，營運角色）：待出金放回可動用，`requested` 扣回。
+3. 下一期承諾上鏈之後，營運方匯款到收款帳戶，營運 Safe 以最新一期的託管證據呼叫
+   `settleWithdrawal(account, amount, bankRef, proof)`：
+   - 上限是 `leaf.requested − withdrawnTotal[account]`，證據必須是最新一期的；
+   - 銷毀帳本合約裡的 `amount`，發 `CashWithdrawn(account, amount, epoch, bankRef)`；
+     `bankRef = keccak256("co2x:bank:out:" ‖ 匯款交易參考號)`，同一個值不收第二次。
+4. 帳本把 `CashWithdrawn` 鏡像成 `cashWithdraw` 事件（kind 2），**只能銷待出金**；超過待出金的鏡像會被引擎拒絕。
+
+`withdrawnTotal` 是合約記的累計總額，不分期別。所以換了幾期、鏡像晚了幾個區塊都一樣，同一筆錢不會確認兩次。
+
+**沒有逃生門。** 規則第 3 版以前，使用者可以憑證據直接從合約領回鏈上的結算幣，72 小時沒有新承諾還能領回全部。
+第 4 版的錢不在合約裡，這兩個機制都移除了：營運方停擺時，最後一期的承諾與證明檔只作為審計數據與債權憑證。

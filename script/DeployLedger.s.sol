@@ -2,19 +2,16 @@
 pragma solidity 0.8.26;
 
 import {Script, console2} from "forge-std/Script.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 import {Safe} from "safe-smart-account/Safe.sol";
 import {Ledger} from "../src/ledger/Ledger.sol";
 import {GovernanceLib} from "../src/governance/GovernanceLib.sol";
-import {MockTWD} from "../src/mocks/MockTWD.sol";
 
 /// @title DeployLedger — 設計 v4 的部署：鏈上只剩帳本合約與治理
 ///
 /// 部署的東西只有：
 ///   · 治理：國家 Safe（2-of-3）、營運 Safe（1-of-2）、Timelock（國家 Safe 提案與執行）
-///   · `Ledger`：承諾鏈、授權金鑰清單、結算幣託管、碳權請求權登記
-///   · MockTWD（只在沒有指定 SETTLEMENT_TOKEN 時）
+///   · `Ledger`：承諾鏈、授權金鑰清單、新台幣入出金的審計紀錄（它自己部署 `LedgerTWD`）
 ///
 /// 登錄簿、身分、市場、憑證、對帳報告**都不再有合約**——它們是鏈下帳本裡的事件，
 /// 每小時以四個 root 承諾上鏈（見 web/lib/ledger/）。
@@ -23,7 +20,6 @@ import {MockTWD} from "../src/mocks/MockTWD.sol";
 /// Safe 與 Timelock → 部署者放棄全部角色。部署完成之後，部署者對這份合約沒有任何權限。
 ///
 /// 環境變數（皆為地址，私鑰只有 DEPLOYER_PK）：
-///   SETTLEMENT_TOKEN   外部結算幣（Boltchain：CAFECA 的 TWDC）。沒給就部署 MockTWD
 ///   NATIONAL_OWNERS / NATIONAL_THRESHOLD / OPERATOR_OWNERS / OPERATOR_THRESHOLD / TIMELOCK_DELAY
 ///   COMMITTER          每小時提交承諾的服務金鑰（預設 = relayer）
 ///   IDENTITY_VERIFIER / CARBON_VERIFIER / DOCUMENT_SIGNER / RECEIPT_SIGNER   高頻角色，各一把
@@ -41,7 +37,6 @@ contract DeployLedger is Script {
     struct Config {
         uint256 pk;
         address deployer;
-        address settlementToken;
         address[] nationalOwners;
         uint256 nationalThreshold;
         address[] operatorOwners;
@@ -65,8 +60,6 @@ contract DeployLedger is Script {
     Safe public operatorSafe;
     TimelockController public timelock;
     Ledger public ledger;
-    IERC20 public settlement;
-    bool public mintable;
 
     function run() external {
         _load();
@@ -76,22 +69,11 @@ contract DeployLedger is Script {
         operatorSafe = GovernanceLib.createSafe(infra, cfg.operatorOwners, cfg.operatorThreshold, 2);
         timelock = GovernanceLib.deployTimelock(cfg.timelockDelay, address(nationalSafe));
 
-        if (cfg.settlementToken == address(0)) {
-            MockTWD twd = new MockTWD(cfg.deployer);
-            settlement = IERC20(address(twd));
-            mintable = true;
-        } else {
-            require(cfg.settlementToken.code.length > 0, "SETTLEMENT_TOKEN has no code");
-            settlement = IERC20(cfg.settlementToken);
-        }
-
-        // 部署者暫時持有三個治理角色，佈線完就放掉
-        ledger = new Ledger(address(settlement), cfg.deployer, cfg.deployer, cfg.deployer);
+        // 部署者暫時持有三個治理角色，佈線完就放掉。入出金（creditDeposit／settleWithdrawal）
+        // 是 OPERATOR_ROLE：移轉之後只有營運 Safe 做得到。
+        ledger = new Ledger(cfg.deployer, cfg.deployer, cfg.deployer);
         _authorities();
         ledger.grantRole(ledger.COMMITTER_ROLE(), cfg.committer);
-        // 一般提領（憑提領請求＋證據）預設開啟：規則第 3 版之後沒有重複花用的問題。
-        // 營運 Safe 之後仍可以暫停（setWithdrawalsEnabled），逃生提領不受這個開關影響。
-        if (vm.envOr("WITHDRAWALS_ENABLED", true)) ledger.setWithdrawalsEnabled(true);
         _handover();
         vm.stopBroadcast();
 
@@ -133,17 +115,11 @@ contract DeployLedger is Script {
         ledger.renounceRole(OP, cfg.deployer);
         ledger.renounceRole(SOV, cfg.deployer);
         ledger.renounceRole(ADMIN, cfg.deployer);
-        if (mintable) {
-            // MockTWD 的管理權給營運 Safe；鑄幣權留給部署者（本機展示的入金）
-            MockTWD(address(settlement)).grantRole(ADMIN, address(operatorSafe));
-            MockTWD(address(settlement)).renounceRole(ADMIN, cfg.deployer);
-        }
     }
 
     function _load() internal {
         cfg.pk = vm.envOr("DEPLOYER_PK", ANVIL_PK0);
         cfg.deployer = vm.addr(cfg.pk);
-        cfg.settlementToken = vm.envOr("SETTLEMENT_TOKEN", address(0));
         address[] memory nat = new address[](3);
         nat[0] = 0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc;
         nat[1] = 0x976EA74026E726554dB657fA54763abd0C3a0aa9;
@@ -200,23 +176,22 @@ contract DeployLedger is Script {
 
     function _print() internal view {
         console2.log("Ledger            ", address(ledger));
-        console2.log("Settlement token  ", address(settlement));
+        console2.log("TWD (ledger cash) ", address(ledger.cash()));
         console2.log("NationalSafe      ", address(nationalSafe));
         console2.log("OperatorSafe      ", address(operatorSafe));
         console2.log("Timelock          ", address(timelock));
         console2.log("Committer         ", cfg.committer);
     }
 
-    /// @dev deployments/<chainId>.json。`ledgerVersion` 讓網站與腳本分辨這是 v4 部署。
+    /// @dev deployments/<chainId>.json。`ledgerVersion` 3 ＝ 新台幣入出金版（沒有鏈上提領與逃生門）。
     function _write() internal {
         string memory j = "d";
         vm.serializeUint(j, "chainId", block.chainid);
-        vm.serializeUint(j, "ledgerVersion", 2);
+        vm.serializeUint(j, "ledgerVersion", 3);
         vm.serializeUint(j, "deployedAt", vm.unixTime());
         vm.serializeUint(j, "deployedAtBlock", block.number);
         vm.serializeAddress(j, "ledger", address(ledger));
-        vm.serializeAddress(j, "settlementToken", address(settlement));
-        vm.serializeBool(j, "settlementMintable", mintable);
+        vm.serializeAddress(j, "settlementToken", address(ledger.cash()));
         vm.serializeAddress(j, "committer", cfg.committer);
         vm.serializeAddress(j, "nationalSafe", address(nationalSafe));
         vm.serializeAddress(j, "operatorSafe", address(operatorSafe));

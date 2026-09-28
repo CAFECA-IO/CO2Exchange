@@ -162,7 +162,7 @@ start_anvil () {
 
 do_deploy () {
   if ! is_local; then
-    # 外部鏈的部署**一律交給 bootstrap.sh**：角色地址、治理持有人、結算幣、CAFECA keyring、--slow 都在那裡。
+    # 外部鏈的部署**一律交給 bootstrap.sh**：角色地址、治理持有人、CAFECA keyring、--slow 都在那裡。
     # 兩條路做同一件事，遲早有一條會落後——所以只留一條。
     echo ">> 外部鏈部署交給 bootstrap.sh（驗餘額 → 部署 → 寫回 web/.env.local → 角色檢查）"
     RPC_URL="$RPC_URL" bash script/bootstrap.sh deploy
@@ -188,7 +188,7 @@ do_commit () {
 
 # 每 COMMIT_EVERY 秒一期。某一期失敗（查核不過、RPC 斷線）不中止迴圈：下一輪會重算，
 # 而沒有送出的那一期不會留下任何半套狀態——承諾是一筆交易，送成或沒送。
-# 但**連續失敗要出聲**：超過逃生艙期限沒有新承諾，使用者就能直接從合約提領。
+# 但**連續失敗要出聲**：沒有新承諾，出金請求就進不了證據，營運方不能確認出金。
 commit_loop () {
   local fails=0
   echo ">> 每 ${COMMIT_EVERY} 秒提交一期承諾（log：$LOG/commit.log）。Ctrl-C 結束。"
@@ -200,7 +200,7 @@ commit_loop () {
         || echo "   ⚠️ 公開檔沒有寫出來，看 $LOG/publish.log"
     else
       fails=$((fails + 1)); echo "   $(date -u +'%F %T') ✗ 第 ${fails} 次失敗：$(grep '✗' "$LOG/commit.log" | tail -1)"
-      [ "$fails" -ge 3 ] && echo "   ⚠️ 連續 ${fails} 期沒有提交。太久沒有承諾，合約的逃生艙會開啟（見 status）。"
+      [ "$fails" -ge 3 ] && echo "   ⚠️ 連續 ${fails} 期沒有提交。沒有新承諾，營運方就不能確認新的出金（見 status）。"
     fi
     sleep "$COMMIT_EVERY"
   done
@@ -209,10 +209,11 @@ commit_loop () {
 do_seed () {
   if ! is_local; then
     # 外部鏈不能回填（沒有 anvil_setBalance、時間不是我們的）：模擬人物從現在開始交易幾輪。
-    # 人物的入金是鏈上真的轉帳——結算幣不是本站發行的話，營運金鑰要先持有足夠的結算幣（TWDC）。
+    # 人物的入金是營運 Safe 的鏈上入金確認（creditDeposit）：這台機器要有營運 Safe 持有人的金鑰
+    # （repo 根目錄 .governance.env 的 OPERATOR_OWNER_<n>_PK），沒有的話模擬器只會用帳本裡已有的錢。
     local users=${SIM_USERS:-30} ticks=${EXT_TICKS:-10} interval=${EXT_INTERVAL:-30}
     echo ">> 外部鏈：模擬人物 ${users} 人從現在開始交易 ${ticks} 輪（每 ${interval} 秒一輪）"
-    echo "   入金由營運金鑰轉結算幣給人物、人物自己存進帳本合約；gas 由營運金鑰代付"
+    echo "   入金由營運 Safe 在鏈上確認（模擬的匯款，bankRef sim:…）；gas 由營運金鑰代付"
     ( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/ledger-sim.mjs \
         --users "$users" --ticks "$ticks" --interval "$interval" )
     echo ">> 提交一期承諾"
@@ -293,19 +294,17 @@ status)
   # 健康檢查要問的是「這個行程活著嗎」，不是「資料是不是新的」。
   curl -fs --max-time 5 "${WEB}/api/config" >/dev/null 2>&1 \
     && echo "前端       在跑（${WEB}）" || echo "前端       沒在跑"
-  # 最新一期、距今多久、逃生門是否開啟
+  # 最新一期、距今多久、帳本欠的新台幣與記帳 TWD
   DEP="deployments/$((${ID:-0})).json"
   if [ -n "$ID" ] && [ -f "$DEP" ] && command -v python3 >/dev/null 2>&1 \
-     && [ "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('ledgerVersion',0))" "$DEP")" = 2 ]; then
+     && [ "$(python3 -c "import json,sys;print(int(json.load(open(sys.argv[1])).get('ledgerVersion',0)) >= 3)" "$DEP")" = True ]; then
     L=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['ledger'])" "$DEP")
     SOLV=$(cast call --rpc-url "$RPC_URL" "$L" "solvency()(uint256,uint256,uint64,uint64)" 2>/dev/null | tr '\n' ' ' | sed 's/\[[^]]*\]//g')
     if [ -n "$SOLV" ]; then
       set -- $SOLV
       AGE=$(( $(date +%s) - ${4:-0} ))
       [ "${3:-0}" = 0 ] && echo "帳本承諾   還沒有提交過任何一期" \
-        || echo "帳本承諾   第 ${3} 期，$(( AGE / 60 )) 分鐘前（帳本欠 ${1}、合約持有 ${2}）"
-      ESC=$(cast call --rpc-url "$RPC_URL" "$L" "escapeActive()(bool)" 2>/dev/null)
-      [ "$ESC" = "true" ] && echo "逃生艙     ⚠️ 已開啟：太久沒有新承諾，使用者可以直接從合約提領"
+        || echo "帳本承諾   第 ${3} 期，$(( AGE / 60 )) 分鐘前（帳本欠 ${1}、記帳 TWD ${2}，最小單位）"
     fi
   fi
   pgrep -f "ledger-sim.mjs" >/dev/null && echo "模擬器     在跑" || echo "模擬器     沒在跑"

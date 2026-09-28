@@ -15,13 +15,13 @@
 #
 # 帳本合約的治理（設計 v4）：
 #   國家 Safe（SOVEREIGN_ROLE）：授權金鑰清單與門檻——即時生效，重播以事件所在的區塊為起點
-#   營運 Safe（OPERATOR_ROLE）：一般提領的開關、承諾提交者（COMMITTER_ROLE）
+#   營運 Safe（OPERATOR_ROLE）：新台幣入金確認（creditDeposit）與出金確認（settleWithdrawal）、承諾提交者（COMMITTER_ROLE）
 #   Timelock（DEFAULT_ADMIN_ROLE，國家 Safe 提案與執行）：主權與營運角色本身的更換
 #
 #   govern.sh build grant-authority <角色> <地址>   角色：SOVEREIGN OPERATOR IDENTITY_VERIFIER CARBON_VERIFIER DOCUMENT_SIGNER AUDITOR RECEIPT_SIGNER
 #   govern.sh build revoke-authority <角色> <地址>
 #   govern.sh build threshold <角色> <k>
-#   govern.sh build withdrawals <true|false>
+#   govern.sh build deposit <帳戶> <金額，最小單位> <銀行交易參考號>   （出金確認要帶證據：cd web && npm run fiat -- settle … --print）
 #   govern.sh build committer-grant|committer-revoke <地址>
 #   govern.sh build grant-role|revoke-role <sovereign|operator|admin> <地址>   → 交給 timelock schedule/execute
 #   govern.sh build safe-add-owner|safe-remove-owner|safe-swap-owner|safe-threshold|safe-owners …
@@ -44,7 +44,7 @@ addr() { jq -r ".$1" "$DEPLOYMENT"; }
 
 LEDGER=$(addr ledger)
 NATIONAL=$(addr nationalSafe); OPERATOR=$(addr operatorSafe); TIMELOCK=$(addr timelock)
-[ "$(jq -r '.ledgerVersion' "$DEPLOYMENT")" = "2" ] || { echo "$DEPLOYMENT 不是帳本部署（script/DeployLedger.s.sol）" >&2; exit 1; }
+[ "$(jq -r '.ledgerVersion' "$DEPLOYMENT")" = "3" ] || { echo "$DEPLOYMENT 不是目前版本的帳本部署（需要 ledgerVersion 3，script/DeployLedger.s.sol）" >&2; exit 1; }
 ROLE_ADMIN=0x0000000000000000000000000000000000000000000000000000000000000000
 ROLE_SOV=$(cast keccak "SOVEREIGN_ROLE"); ROLE_OP=$(cast keccak "OPERATOR_ROLE"); ROLE_COMMITTER=$(cast keccak "COMMITTER_ROLE")
 ROLE_PROPOSER=$(cast keccak "PROPOSER_ROLE"); ROLE_EXECUTOR=$(cast keccak "EXECUTOR_ROLE"); ROLE_CANCELLER=$(cast keccak "CANCELLER_ROLE")
@@ -65,7 +65,7 @@ cmd_build() {
     revoke-authority)  echo "$LEDGER $(cast calldata 'revokeAuthority(bytes32,address)' "$(auth_role "$1")" "$2")";;
     threshold)         echo "$LEDGER $(cast calldata 'setThreshold(bytes32,uint8)' "$(auth_role "$1")" "$2")";;
     # 營運 Safe
-    withdrawals)       echo "$LEDGER $(cast calldata 'setWithdrawalsEnabled(bool)' "$1")";;
+    deposit)           echo "$LEDGER $(cast calldata 'creditDeposit(address,uint256,bytes32)' "$1" "$2" "$(cast keccak "co2x:bank:in:$3")")";;
     committer-grant)   echo "$LEDGER $(cast calldata 'grantRole(bytes32,address)' "$ROLE_COMMITTER" "$1")";;
     committer-revoke)  echo "$LEDGER $(cast calldata 'revokeRole(bytes32,address)' "$ROLE_COMMITTER" "$1")";;
     # Timelock（主權與營運角色本身）
@@ -150,7 +150,8 @@ cmd_status() {
   printf "thresholds "
   for r in SOVEREIGN OPERATOR AUDITOR; do t=$(call "$LEDGER" 'thresholdOf(bytes32)(uint8)' "$(cast keccak $r)"); printf " %s=%s" "$r" "${t:-0}"; done
   echo
-  echo "withdrawalsEnabled=$(call "$LEDGER" 'withdrawalsEnabled()(bool)')  epoch=$(call "$LEDGER" 'epoch()(uint64)')  escapeActive=$(call "$LEDGER" 'escapeActive()(bool)')"
+  local cash; cash=$(call "$LEDGER" 'cash()(address)')
+  echo "epoch=$(call "$LEDGER" 'epoch()(uint64)')  記帳 TWD=$cash  totalSupply=$(call "$cash" 'totalSupply()(uint256)' | awk '{print $1}')（最小單位；＝營運方宣稱的信託專戶餘額）"
   echo "timelock proposer=national:$(has $TIMELOCK $ROLE_PROPOSER $NATIONAL) executor=national:$(has $TIMELOCK $ROLE_EXECUTOR $NATIONAL) canceller=national:$(has $TIMELOCK $ROLE_CANCELLER $NATIONAL)"
   echo "（授權金鑰清單的完整歷史：cd web && npm run ledger:authority -- list，或後台治理頁）"
 }

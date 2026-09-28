@@ -8,12 +8,11 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {SafeHelper} from "./utils/SafeHelper.sol";
 import {GovernanceLib} from "../src/governance/GovernanceLib.sol";
 import {Ledger} from "../src/ledger/Ledger.sol";
-import {MockTWD} from "../src/mocks/MockTWD.sol";
 
 /// @notice 帳本合約的治理，用真實 Safe v1.4.1 與 OpenZeppelin Timelock 走一遍（和 DeployLedger 的移轉相同）。
 ///
 ///   · 國家 Safe 2-of-3（SOVEREIGN_ROLE）：授權金鑰清單與門檻——即時生效，重播以事件所在的區塊為起點
-///   · 營運 Safe 1-of-2（OPERATOR_ROLE）：一般提領的開關、承諾提交者（COMMITTER_ROLE 的 admin）
+///   · 營運 Safe 1-of-2（OPERATOR_ROLE）：新台幣入出金、承諾提交者（COMMITTER_ROLE 的 admin）
 ///   · Timelock 48h（DEFAULT_ADMIN_ROLE，國家 Safe 提案與執行）：主權與營運角色本身的更換
 ///   · 部署者移轉之後沒有任何權限
 contract LedgerGovernanceTest is Test {
@@ -43,13 +42,11 @@ contract LedgerGovernanceTest is Test {
         timelock = GovernanceLib.deployTimelock(48 hours, address(nationalSafe));
 
         vm.startPrank(deployer);
-        MockTWD twd = new MockTWD(deployer);
-        ledger = new Ledger(address(twd), deployer, deployer, deployer);
+        ledger = new Ledger(deployer, deployer, deployer);
         SOV = ledger.SOVEREIGN_ROLE();
         OP = ledger.OPERATOR_ROLE();
         ledger.grantAuthority(ledger.AUTH_SOVEREIGN(), nat[0]);
         ledger.grantRole(ledger.COMMITTER_ROLE(), committer);
-        ledger.setWithdrawalsEnabled(true);
         // 移轉（與 DeployLedger._handover 相同）
         ledger.grantRole(SOV, address(nationalSafe));
         ledger.grantRole(OP, address(operatorSafe));
@@ -103,11 +100,17 @@ contract LedgerGovernanceTest is Test {
 
     // ── 營運 Safe：提領開關與承諾提交者 ──
 
-    function test_operatorSafe_togglesWithdrawals() public {
-        operatorSafe.exec(_op1(), address(ledger), abi.encodeCall(Ledger.setWithdrawalsEnabled, (false)));
-        assertFalse(ledger.withdrawalsEnabled());
-        operatorSafe.exec(_op1(), address(ledger), abi.encodeCall(Ledger.setWithdrawalsEnabled, (true)));
-        assertTrue(ledger.withdrawalsEnabled());
+    function test_operatorSafe_creditsDeposit() public {
+        address user = makeAddr("user");
+        operatorSafe.exec(_op1(), address(ledger), abi.encodeCall(Ledger.creditDeposit, (user, 1_000e6, keccak256("bank:1"))));
+        assertEq(ledger.cash().balanceOf(address(ledger)), 1_000e6);
+    }
+
+    function test_deployerAndNationalSafeCannotCredit() public {
+        vm.prank(deployer);
+        vm.expectRevert();
+        ledger.creditDeposit(deployer, 1e6, keccak256("bank:d"));
+        nationalSafe.execExpectRevert(_nat2(), address(ledger), abi.encodeCall(Ledger.creditDeposit, (deployer, 1e6, keccak256("bank:n"))));
     }
 
     function test_operatorSafe_rotatesCommitter() public {

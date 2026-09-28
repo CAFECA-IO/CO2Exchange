@@ -19,7 +19,9 @@ import { payloadHash, type Event, type EventOf } from "./events.ts";
 /// 把結果交給引擎（`ctx.sigOk`）；引擎只負責「驗不過就以同一個理由拒絕」。
 
 /// 第 3 版（2026-09-29）：加上提領請求（`withdraw` 事件）與待提領現金；餘額樹的葉子多兩個累計欄位。
-export const RULES_VERSION = 3;
+/// 第 4 版（2026-09-29，新台幣版）：結算幣是平台自己的記帳 TWD，入出金由營運 Safe 在鏈上確認；
+/// 出金請求帶 payoutRef、新增 withdrawReject；沒有鏈上提領與逃生門，cashWithdraw 只能銷待出金。
+export const RULES_VERSION = 4;
 const KG_PER_TONNE = 1000n;
 const ZERO: Address = "0x0000000000000000000000000000000000000000";
 export const DOMESTIC = "TW";
@@ -44,7 +46,7 @@ export type ReserveReport = {
 export type Order = {
   seq: bigint; account: Address; side: "buy" | "sell"; batchId: bigint; country: string;
   amountKg: bigint; remainingKg: bigint; pricePerTonne: bigint; minFillKg: bigint; expiry: bigint; placedAt: bigint;
-  /// 買單還鎖著多少結算幣。逐筆記，不用「剩餘量 × 單價」回推——兩者會因捨去差幾個最小單位，
+  /// 買單還鎖著多少新台幣。逐筆記，不用「剩餘量 × 單價」回推——兩者會因捨去差幾個最小單位，
   /// 而那幾個最小單位要嘛變成沒有人領得走的零頭，要嘛讓鎖定變成負數。
   locked: bigint;
 };
@@ -74,10 +76,10 @@ export type State = {
   cash: Map<string, bigint>;
   lockedCredits: Map<string, Map<string, bigint>>;
   lockedCash: Map<string, bigint>;
-  /// 待提領：使用者簽了提領請求、還沒從帳本合約領回的現金（不能再拿來交易，但仍然是帳本欠他的）
+  /// 待出金：使用者簽了出金請求、營運 Safe 還沒在鏈上確認的現金（不能再拿來交易，但仍然是帳本欠他的）
   pendingWithdraw: Map<string, bigint>;
-  /// 累計：請求提領的總額／已在鏈上領回（鏡像進帳本）的總額。兩者都只增不減，進餘額樹的葉子——
-  /// 合約用它們判斷還能放款多少（一般提領看「請求累計」，逃生提領看「欠款＋已領累計」），不必逐期記帳。
+  /// 累計：請求出金的總額／已在鏈上確認出金（鏡像進帳本）的總額。兩者都只增不減，進餘額樹的葉子——
+  /// 合約用「請求累計 − 已確認累計」判斷營運 Safe 還能確認多少，不必逐期記帳。
   withdrawRequested: Map<string, bigint>;
   withdrawSettled: Map<string, bigint>;
   book: Map<string, Order>;
@@ -200,21 +202,23 @@ function step(s: State, e: Event, ctx: Context): void {
       add1(s.cash, lower(e.account), e.amount);
       return;
     case "cashWithdraw": {
-      // 提領已經在鏈上發生了（合約憑證據放款）。先從待提領銷帳；超出的部分只可能是逃生提領
-      // （逃生模式下合約放的是全部欠款），從可動用現金扣，並補進請求累計——兩個累計才會一直是「請求 ≥ 已領」。
-      // 帳本對不上就記下來——這是要查的事，不是可以默默吞掉的事。
+      // 出金已經在鏈上確認了（營運 Safe 匯款後銷毀）。只能從待出金銷帳：合約的上限是
+      // 「請求累計 − 已出金累計」，所以正常情況一定夠。帳本對不上就記下來——這是要查的事。
       const a = lower(e.account);
       const pending = s.pendingWithdraw.get(a) ?? 0n;
-      const fromPending = pending < e.amount ? pending : e.amount;
-      const rest = e.amount - fromPending;
-      // 逃生提領放的是全部欠款，包括掛著的買單鎖住的錢——錢已經在鏈上領走了，那些買單不能再成交：撤掉、放回可動用再扣
-      if (rest > 0n && (s.cash.get(a) ?? 0n) < rest) {
-        for (const o of sortedBook(s)) if (o.side === "buy" && lower(o.account) === a) { release(s, o); s.book.delete(String(o.seq)); }
-      }
-      if (rest > 0n && (s.cash.get(a) ?? 0n) < rest) return reject(s, e, "帳本餘額少於鏈上提領金額");
-      if (fromPending > 0n) add1(s.pendingWithdraw, a, -fromPending);
-      if (rest > 0n) { add1(s.cash, a, -rest); add1(s.withdrawRequested, a, rest); }
+      if (pending < e.amount) return reject(s, e, "待出金少於鏈上出金金額");
+      add1(s.pendingWithdraw, a, -e.amount);
       add1(s.withdrawSettled, a, e.amount);
+      return;
+    }
+    case "withdrawReject": {
+      // 退回：待出金放回可動用，請求累計同額扣回（合約的上限跟著變小，這筆就不可能再被出金）
+      const a = lower(e.account);
+      if (e.amount <= 0n) return reject(s, e, "退回金額要大於零");
+      if ((s.pendingWithdraw.get(a) ?? 0n) < e.amount) return reject(s, e, "待出金不足以退回");
+      add1(s.pendingWithdraw, a, -e.amount);
+      add1(s.withdrawRequested, a, -e.amount);
+      add1(s.cash, a, e.amount);
       return;
     }
     case "jurisdiction":
@@ -421,7 +425,7 @@ function doPlace(s: State, e: EventOf<"place">) {
       if (!j.enabled) return reject(s, e, "轄區已關閉交易");
     }
     const need = notional(e.amountKg, e.pricePerTonne);
-    if ((s.cash.get(a) ?? 0n) < need) return reject(s, e, "結算幣餘額不足");
+    if ((s.cash.get(a) ?? 0n) < need) return reject(s, e, "新台幣餘額不足");
     add1(s.cash, a, -need);
     add1(s.lockedCash, a, need);
   }
@@ -533,7 +537,7 @@ function doRetire(s: State, e: EventOf<"retire">) {
   const a = lower(e.account);
   if (get2(s.credits, a, String(e.batchId)) < e.amountKg) return reject(s, e, "碳權餘額不足");
   const fee = retireFeeOf(s, country, e.amountKg);
-  if ((s.cash.get(a) ?? 0n) < fee) return reject(s, e, "結算幣不足以支付註銷手續費");
+  if ((s.cash.get(a) ?? 0n) < fee) return reject(s, e, "新台幣不足以支付註銷手續費");
 
   add2(s.credits, a, String(e.batchId), -e.amountKg);
   if (fee > 0n) { add1(s.cash, a, -fee); s.treasuryCash += fee; }
@@ -547,10 +551,11 @@ function doRetire(s: State, e: EventOf<"retire">) {
   });
 }
 
-/// 提領請求。凍結的帳戶不能提領（主管機關的扣留）；身分過期不擋——那是他自己的錢。
+/// 出金請求。凍結的帳戶不能出金（主管機關的扣留）；身分過期不擋——那是他自己的錢。
 function doWithdraw(s: State, e: EventOf<"withdraw">) {
   if (!takeNonce(s, e.account, e.nonce)) return reject(s, e, "nonce 不遞增");
-  if (e.amount <= 0n) return reject(s, e, "提領金額要大於零");
+  if (e.amount <= 0n) return reject(s, e, "出金金額要大於零");
+  if (!/^0x[0-9a-fA-F]{64}$/.test(e.payoutRef) || /^0x0+$/.test(e.payoutRef)) return reject(s, e, "沒有指定收款帳戶");
   const a = lower(e.account);
   if (s.identities.get(a)?.frozen) return reject(s, e, "帳戶已凍結");
   if ((s.cash.get(a) ?? 0n) < e.amount) return reject(s, e, "可動用現金不足");
@@ -559,7 +564,7 @@ function doWithdraw(s: State, e: EventOf<"withdraw">) {
   add1(s.withdrawRequested, a, e.amount);
 }
 
-/// 狀態 → 餘額樹的輸入。鎖住的東西與待提領的現金也算使用者的；手續費算在國庫名下。
+/// 狀態 → 餘額樹的輸入。鎖住的東西與待出金的現金也算使用者的；手續費算在國庫名下。
 export function balancesOf(s: State): { account: Address; assets: { batchId: bigint; kg: bigint }[]; cash: bigint; withdrawRequested: bigint; withdrawSettled: bigint }[] {
   const accounts = new Set<string>([
     ...s.credits.keys(), ...s.cash.keys(), ...s.lockedCredits.keys(), ...s.lockedCash.keys(),

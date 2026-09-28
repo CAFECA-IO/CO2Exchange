@@ -47,8 +47,11 @@ export const KIND = {
   reserveAttest: 18,
   /// CAFECA 帳戶的 passkey 公鑰（鏈上 KeyAdded 的鏡像，帶座標）。查核驗 WebAuthn 簽章時用，不改變任何狀態
   userKey: 19,
-  /// 使用者簽的提領請求（2026-09-29 新增，規則第 3 版）：把帳本裡的現金移到「待提領」，之後憑證據從帳本合約領回
+  /// 使用者簽的出金請求（規則第 3 版新增；第 4 版起帶 payoutRef）：把帳本裡的現金移到「待出金」，
+  /// 營運方匯出新台幣之後在鏈上 settleWithdrawal，鏡像成 cashWithdraw 銷帳
   withdraw: 20,
+  /// 營運方退回一筆出金請求（第 4 版新增：例如收款帳戶有誤）：待出金放回可動用
+  withdrawReject: 21,
 } as const;
 export type Kind = keyof typeof KIND;
 
@@ -66,8 +69,9 @@ export type ReserveCash = { trustee: string; accountRef: string; balance: bigint
 
 export type Event = Base &
   (
-    | { kind: "cashDeposit"; ref: ChainRef; account: Address; amount: bigint }
-    | { kind: "cashWithdraw"; ref: ChainRef; account: Address; amount: bigint }
+    /// bankRef：銀行交易參考號的雜湊（鏈上 CashDeposited／CashWithdrawn 帶著它）
+    | { kind: "cashDeposit"; ref: ChainRef; account: Address; amount: bigint; bankRef: Hex }
+    | { kind: "cashWithdraw"; ref: ChainRef; account: Address; amount: bigint; bankRef: Hex }
     | { kind: "userKey"; ref: ChainRef; account: Address; keyId: Hex; qx: Hex; qy: Hex; rpIdHash: Hex; keyKind: number; validator: Address }
     | ({ kind: "jurisdiction"; country: string; enabled: boolean; domestic: boolean; purposeMask: number; name: string; scheme: string; registryName: string; note: string } & Auth)
     | ({ kind: "policy"; individualTransfer: boolean; individualRetire: boolean; treasury: Address } & Auth)
@@ -83,8 +87,10 @@ export type Event = Base &
     /// 賣單指定 batchId；買單 batchId = 0（不挑批次）、country 可空（不限核發國）
     | ({ kind: "place"; side: "buy" | "sell"; batchId: bigint; country: string; amountKg: bigint; pricePerTonne: bigint; minFillKg: bigint; expiry: bigint } & User)
     | ({ kind: "cancel"; orderSeq: bigint } & User)
-    /// 提領請求：amount 從可動用現金移到待提領。鏈上領回時（CashWithdrawn）再由鏡像事件銷帳
-    | ({ kind: "withdraw"; amount: bigint } & User)
+    /// 出金請求：amount 從可動用現金移到待出金。payoutRef 是收款帳戶的雜湊（明文只在營運方）。
+    /// 營運方匯款後鏈上銷毀（CashWithdrawn），再由鏡像事件銷帳
+    | ({ kind: "withdraw"; amount: bigint; payoutRef: Hex } & User)
+    | ({ kind: "withdrawReject"; account: Address; amount: bigint; reason: string } & Auth)
     /// purpose：0 碳費扣除、1 自願性碳中和、2 增量抵換、3 環評承諾（對齊環境部註銷申請書四類）
     | ({ kind: "retire"; batchId: bigint; amountKg: bigint; beneficiary: string; beneficiaryHash: Hex; purpose: number; memo: string } & User)
     | ({ kind: "certDocument"; certId: bigint; documentHash: Hex } & Auth)
@@ -96,7 +102,7 @@ export type Event = Base &
 
 export type EventOf<K extends Kind> = Extract<Event, { kind: K }>;
 
-/// 誰簽這一筆。鏈上事件（存入／提領）沒有簽章者，由 ChainRef 背書。
+/// 誰簽這一筆。鏈上事件（入金／出金確認）沒有簽章者，由 ChainRef 背書。
 export function signerOf(e: Event): Address | null {
   if (e.kind === "cashDeposit" || e.kind === "cashWithdraw" || e.kind === "userKey") return null;
   if ("signer" in e) return e.signer;
@@ -122,7 +128,7 @@ export function payloadOf(e: Event): Hex {
   switch (e.kind) {
     case "cashDeposit":
     case "cashWithdraw":
-      return T(["bytes32", "uint256", "uint32", "address", "uint256"], [e.ref.txHash, e.ref.block, e.ref.logIndex, e.account, e.amount]);
+      return T(["bytes32", "uint256", "uint32", "address", "uint256", "bytes32"], [e.ref.txHash, e.ref.block, e.ref.logIndex, e.account, e.amount, e.bankRef]);
     case "userKey":
       return T(["bytes32", "uint256", "uint32", "address", "bytes32", "bytes32", "bytes32", "bytes32", "uint8", "address"],
         [e.ref.txHash, e.ref.block, e.ref.logIndex, e.account, e.keyId, e.qx, e.qy, e.rpIdHash, e.keyKind, e.validator]);
@@ -154,7 +160,9 @@ export function payloadOf(e: Event): Hex {
     case "cancel":
       return T(["address", "uint64", "uint256"], [e.account, e.orderSeq, e.nonce]);
     case "withdraw":
-      return T(["address", "uint256", "uint256"], [e.account, e.amount, e.nonce]);
+      return T(["address", "uint256", "bytes32", "uint256"], [e.account, e.amount, e.payoutRef, e.nonce]);
+    case "withdrawReject":
+      return T(["address", "uint256", "string"], [e.account, e.amount, e.reason]);
     case "retire":
       return T(["address", "uint256", "uint256", "string", "bytes32", "uint8", "string", "uint256"],
         [e.account, e.batchId, e.amountKg, e.beneficiary, e.beneficiaryHash, e.purpose, e.memo, e.nonce]);

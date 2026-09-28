@@ -1,16 +1,15 @@
 import "server-only";
-import { createWalletClient, http, type Address, type PrivateKeyAccount } from "viem";
+import type { Address } from "viem";
 import { PROOF_ABI, readCommitments, type OnchainCommitment } from "@/lib/ledger/chain";
-import { balanceProofArgs, snapshotAt, userProofFile, type Snapshot } from "@/lib/ledger/proofs";
+import { snapshotAt, userProofFile, type Snapshot } from "@/lib/ledger/proofs";
 import { epochIndexOf, publicEpoch } from "@/lib/ledger/publish";
 import { ApiError } from "../api";
-import { chain, deployment, publicClient, RPC_URL } from "../chain";
-import { submit } from "../tx";
+import { deployment, publicClient } from "../chain";
 import { ledgerView } from "./view";
 
-/// 證據的伺服器端（設計 v4 第 6 期）：使用者的證明檔、提領要帶的證據。
+/// 證據的伺服器端（設計 v4 第 6 期）：使用者的證明檔、出金確認要帶的證據（見 fiat.ts）。
 ///
-/// 證據一律對**鏈上最新一期**出（合約只收最新一期的證據）。快照依期別快取：
+/// 證據一律對**鏈上最新一期**出（合約的 settleWithdrawal 只收最新一期的證據）。快照依期別快取：
 /// 一期一小時，每一期只重播一次、建一次樹。快照建出來之後先和鏈上的 root 比對，對不上就不給——
 /// 給出去的證明檔在鏈上驗不過，比沒有證明檔更糟。
 
@@ -49,43 +48,6 @@ export async function proofFileOf(account: Address) {
     chainId: d.chainId, ledger: d.ledger!, settlementToken: d.settlementToken, account,
     commitments: await commitments(), events: ledgerView().events, snap,
   });
-}
-
-/// 提領的狀態：帳本裡待提領多少、最新一期證據說可以領多少、合約已經放給他多少。
-export async function withdrawStatus(account: Address) {
-  const d = deployment();
-  const low = account.toLowerCase();
-  const { state } = ledgerView();
-  const [snap, withdrawn, enabled, escape] = await Promise.all([
-    latestSnapshot(),
-    publicClient.readContract({ address: d.ledger!, abi: PROOF_ABI, functionName: "withdrawnTotal", args: [account] }),
-    publicClient.readContract({ address: d.ledger!, abi: PROOF_ABI, functionName: "withdrawalsEnabled" }),
-    publicClient.readContract({ address: d.ledger!, abi: PROOF_ABI, functionName: "escapeActive" }),
-  ]);
-  const proof = snap ? balanceProofArgs(snap, account) : null;
-  // 合約的兩種上限（見 Ledger.withdrawCash）
-  const cap = proof ? (escape ? proof.leafCash + proof.leafSettled : proof.leafRequested) : 0n;
-  const claimable = cap > withdrawn ? cap - withdrawn : 0n;
-  return {
-    pending: state.pendingWithdraw.get(low) ?? 0n,
-    requestedTotal: state.withdrawRequested.get(low) ?? 0n,
-    settledTotal: state.withdrawSettled.get(low) ?? 0n,
-    withdrawnOnChain: withdrawn,
-    latestEpoch: snap?.commitment.epoch ?? null,
-    claimable, withdrawalsEnabled: enabled, escapeActive: escape,
-    // 待提領但還沒進最新一期承諾的部分：要等下一期（最長一小時）
-    waitingForCommit: (state.pendingWithdraw.get(low) ?? 0n) > claimable ? (state.pendingWithdraw.get(low) ?? 0n) - claimable : 0n,
-    proof: claimable > 0n ? proof : null,
-  };
-}
-
-/// 開發用登入（本機鏈）：伺服器用推出來的私鑰代送領回交易
-export async function devWithdraw(signer: PrivateKeyAccount, account: Address) {
-  const s = await withdrawStatus(account);
-  if (!s.proof || s.claimable === 0n) throw new ApiError("INVALID_PARAM", "目前沒有可以領回的金額（要等提領請求進下一期承諾）");
-  const w = createWalletClient({ chain, account: signer, transport: http(RPC_URL) });
-  const { hash } = await submit({ address: deployment().ledger!, abi: PROOF_ABI, functionName: "withdrawCash", args: [s.claimable, s.proof], account: signer, chain }, w);
-  return { txHash: hash, amount: s.claimable };
 }
 
 // ── 公開檔（每一期） ──

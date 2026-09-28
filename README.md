@@ -6,7 +6,8 @@
 由卡菲卡金融科技股份有限公司（CAFECA）建置，**設計為控制權可完整移轉給國家單位、由 CAFECA 代運營**。
 目前是 **Phase 0**：功能完整、可以從頭走到尾，但身分驗證與查驗簽章是模擬的。
 
-目標鏈是 **Boltchain 8018**（CAFECA 的身分合約在那裡，交易所要同鏈），結算幣是鏈上既有的 **TWDC**，
+目標鏈是 **Boltchain 8018**（CAFECA 的身分合約在那裡，交易所要同鏈）。**使用者的錢是信託專戶裡的真新台幣**：
+入金是匯款、出金是匯款，鏈上只有帳本合約自己建立的記帳 TWD（不能轉出，作為審計數據）。
 登入是**以 CAFECA 登入**（EIP-712 SignIn + ERC-1271）。anvil 只出現在本機開發與自動測試。
 
 | 你是誰 | 從哪裡開始 |
@@ -30,9 +31,9 @@
 
 | 在哪裡 | 放什麼 |
 |---|---|
-| **鏈上**（`src/ledger/Ledger.sol`） | 每小時一期的**承諾**（事件 log root、帶總額的餘額樹 root、登錄簿 root、身分 root、逐批次總量雜湊），前後串連；**授權金鑰清單與門檻**（誰能簽核發、身分、凍結、費率、對帳）；**結算幣託管**；**提領與逃生門**；碳權**請求權登記** |
-| **鏈上治理** | 國家 Safe 2-of-3（授權清單、門檻）、營運 Safe（提領開關、承諾提交者）、Timelock 48h（角色本身的更換）。部署者移轉後沒有任何權限 |
-| **鏈下帳本**（`web/data/ledger/`） | 所有事件：委託、撤單、註銷、提領請求、核發、身分、凍結、費率、轄區、對帳報告……每一筆帶簽章，依序接成雜湊鏈。持有、成交、憑證是**重播的結果**，不另外記 |
+| **鏈上**（`src/ledger/Ledger.sol`） | 每小時一期的**承諾**（事件 log root、帶總額的餘額樹 root、登錄簿 root、身分 root、逐批次總量雜湊），前後串連；**授權金鑰清單與門檻**（誰能簽核發、身分、凍結、費率、對帳）；**記帳 TWD**（`LedgerTWD`：只有帳本合約能持有、不能轉出，總量＝營運方宣稱的信託專戶餘額）；營運 Safe 的**入金與出金確認**（帶銀行交易參考號的雜湊） |
+| **鏈上治理** | 國家 Safe 2-of-3（授權清單、門檻）、營運 Safe（入出金確認、承諾提交者）、Timelock 48h（角色本身的更換）。部署者移轉後沒有任何權限 |
+| **鏈下帳本**（`web/data/ledger/`） | 所有事件：委託、撤單、註銷、出金請求（與營運方的退回）、核發、身分、凍結、費率、轄區、對帳報告……每一筆帶簽章，依序接成雜湊鏈。持有、成交、憑證是**重播的結果**，不另外記 |
 | **官方登錄簿** | 碳權本身。國內額度在專案方的額度帳戶，國外額度在本站於核發國登錄簿的託管帳戶。帳本記的是對它們的請求權 |
 
 **它是**：
@@ -40,15 +41,16 @@
 - 一個**登錄簿**：專案登錄、查驗機構簽章核發、序號唯一、註銷後發出憑證（PDF 雜湊記入帳本）。
 - 一個**市場**：使用者在 CAFECA 錢包簽 EIP-712 委託單，帳本收單、回簽收收據、引擎撮合。不付 gas、不等出塊。
 - 一個**可驗證的託管方**：每小時把「誰有多少」壓成帶總額的 Merkle 樹上鏈；使用者下載自己的證明檔，
-  用任一節點就能驗；合約拒絕宣稱欠的結算幣多於它持有的承諾。
-- 一個**拿得回來的地方**：提領請求 → 下一期承諾 → 憑證據從合約領回；
-  72 小時沒有新承諾就進逃生模式，任何人憑最後一期的證據領回全部，沒有角色關得掉。
+  用任一節點就能驗；合約拒絕宣稱欠的新台幣多於記帳 TWD 的總量。
+- 一個**錢在信託專戶的地方**：入金匯款到信託專戶（備註填入金識別碼）→ 營運 Safe 在鏈上確認；
+  出金簽請求（帶收款帳戶的雜湊）→ 下一期承諾 → 營運方匯款 → 營運 Safe 憑證據確認、銷毀記帳 TWD。
+  **沒有鏈上提領、沒有逃生門**：營運方停擺時，最後一期的證據是債權憑證，不是提款單。
 - 一個**可以交出去的系統**：主權與營運兩層角色從第一天就分開，移轉是 `grantRole` / `renounceRole`。
 
 **它不是**：
 
 - 不是把既有碳權「橋接」上鏈。本平台自己就是登錄簿，額度在這裡誕生。
-- Phase 0 **不是正式營運**。身分驗證、查驗機構簽章由平台金鑰模擬，結算幣是測試幣。見 [十、Phase 0 限制](#十phase-0-限制與後續)。
+- Phase 0 **不是正式營運**。身分驗證、查驗機構簽章由平台金鑰模擬，信託專戶尚未開立（入出金是模擬的）。見 [十、Phase 0 限制](#十phase-0-限制與後續)。
 
 ### 保證的降級（要寫在最前面）
 
@@ -56,9 +58,12 @@
 手續費、撮合——現在由帳本引擎（`web/lib/ledger/engine.ts`）執行。保證從「**合約拒絕**」變成「**重播抓得到**」：
 營運方收下一筆違規事件，鏈上不會擋，但任何重播帳本的人都會在同一個位置看到，承諾也對不上。
 
-營運方仍然做不到的：替使用者簽單、改已上鏈的任何一期、宣稱欠的結算幣多於合約持有、阻止逃生提領、
-不經查驗機構金鑰核發。營運方做得到但藏不住的：決定同時到達的事件順序、拒收事件、停止提交承諾。
-**已知缺口**：營運方持續提交承諾、卻只拒收某一人的提領請求時，逃生門不會開啟（見 [十](#十phase-0-限制與後續)）。
+營運方仍然做不到的：替使用者簽單、改已上鏈的任何一期、宣稱欠的新台幣多於記帳 TWD 的總量、把記帳 TWD 轉給任何人、
+同一筆匯款入帳兩次、確認超過使用者請求的出金、不經查驗機構金鑰核發。
+營運方做得到但藏不住的：決定同時到達的事件順序、拒收事件、停止提交承諾、收下出金請求卻不匯款。
+
+**新台幣這一層的降級**：錢在信託專戶，鏈上證明不了專戶裡真的有那麼多錢（記帳 TWD 是營運方的宣稱，
+與專戶的相符靠信託銀行對帳與查核報告），也沒有任何機制能繞過營運方把錢領出來。能強制的是信託契約與主管機關。
 
 這一段也寫在網站的 `/audit`（審計）與平台使用約定書第五條之一。
 
@@ -142,9 +147,8 @@ bash script/demo-box.sh commit-loop                 # 再一個終端：每小�
 
 ```bash
 export RPC_URL=http://211.22.118.149:8545
-export SETTLEMENT_TOKEN=0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3   # CAFECA 的 TWDC
 
-./script/preflight.sh "$RPC_URL"       # Cancun（MCOPY）、EIP-1559、eth_getLogs 範圍、結算幣、部署者餘額
+./script/preflight.sh "$RPC_URL"       # Cancun（MCOPY）、EIP-1559、eth_getLogs 範圍、營運 Safe 金鑰、部署者餘額
 bash script/bootstrap.sh               # 建金鑰 → 等撥款 → 驗餘額 → 部署 → 寫回 web/.env.local
 
 cd web && npm install && npm run build && npm start
@@ -157,7 +161,7 @@ cd web && npm install && npm run build && npm start
 
 | 金鑰 | 做什麼 | 要餘額嗎 |
 |---|---|---|
-| `DEPLOYER_PK` | 部署帳本合約與治理（部署完放棄全部權限）；做市與模擬人物的撥款、gas 也從它出 | 要，最多 |
+| `DEPLOYER_PK` | 部署帳本合約與治理（部署完放棄全部權限）；送營運 Safe 的入出金確認交易、模擬人物的 gas 也從它出（它只付 gas，不是持有人） | 要，最多 |
 | `RELAYER_PK` | 每小時提交承諾（COMMITTER）、簽收單回執（RECEIPT_SIGNER） | 要（`COMMIT_DAYS` × 24 × `COMMIT_GAS`） |
 | `IDENTITY_VERIFIER_PK` | 只簽帳本的身分事件 | 不要 |
 | `CARBON_VERIFIER_PK` | 只簽帳本的核發事件、月度查核 | 不要 |
@@ -167,8 +171,9 @@ cd web && npm install && npm run build && npm start
 等於把主權／營運分權整個抵銷。腳本產生的五把治理金鑰全部落在同一台機器上——展示可以，正式不行。
 正式部署由各持有人自己產生，只把**地址**設成 `NATIONAL_OWNERS` / `OPERATOR_OWNERS`。
 
-外部結算幣（TWDC）本站沒有鑄幣權：做市與模擬人物的撥款要由 `DEPLOYER` 事先持有 TWDC。
-**把 TWDC 轉到帳本合約或 DEPLOYER 的地址——不要轉到 TWDC 代幣合約本身**（那筆錢拿不回來）。
+**不接外部結算幣**（不再使用 CAFECA 的 TWDC，`SETTLEMENT_TOKEN` 已經不用了）。帳本合約部署時建立自己的記帳 TWD，
+只有營運 Safe 確認入金時鑄出、確認出金時銷毀。做市與模擬人物的撥款也是營運 Safe 的入金確認，
+所以跑 `npm run mm` / 模擬器的那台機器要有營運 Safe 持有人的金鑰（`.governance.env` 的 `OPERATOR_OWNER_<n>_PK`）。
 
 部署完兩件事要自己做：`SITE_ORIGIN` 與瀏覽器網址列逐字相同；登入一次後把 `/account` 上的地址填進
 `ADMIN_ADDRESSES` 再重啟。
@@ -178,7 +183,8 @@ cd web && npm install && npm run build && npm start
 `CAFECA_RECOVERY` / `CAFECA_FACTORY` / `CAFECA_KEYRING`，見 `web/.env.example`。
 
 > 規則版本（`RULES_VERSION`）改過就要重新部署帳本合約：舊合約的承諾格式與新的餘額樹葉子不相容。
-> 目前是第 3 版（提領請求事件、葉子帶 requested／settled）。
+> 目前是第 4 版（新台幣入出金：出金請求帶 `payoutRef`、營運方退回 `withdrawReject`；合約 `ledgerVersion` 3）。
+> 從第 3 版升上來要重新部署：`bash script/bootstrap.sh deploy`（舊的 `web/data/` 會搬到 `data.bak-<時間>`）。
 
 ---
 
@@ -189,7 +195,7 @@ cd web && npm install && npm run build && npm start
 | 行程 | 指令 | 失敗時的後果 |
 |---|---|---|
 | 網站 | `cd web && npm start` | 收不了單。帳本與鏈上不受影響 |
-| 承諾 | `bash script/demo-box.sh commit-loop`（或排程 `npm run ledger:commit`＋`npm run ledger:publish`） | **72 小時沒有新承諾就進逃生模式**。沒有新事件時仍會每 `HEARTBEAT_AFTER`（預設 24h）提交一期空的 |
+| 承諾 | `bash script/demo-box.sh commit-loop`（或排程 `npm run ledger:commit`＋`npm run ledger:publish`） | 出金請求進不了證據，營運方不能確認出金；揭露頁的數字停在最後一期。沒有新事件時仍會每 `HEARTBEAT_AFTER`（預設 24h）提交一期空的 |
 | 做市 | `bash script/mm-service.sh install`（macOS launchd／Linux systemd） | 掛單簿變薄。控制在 `/admin`「後台做市」 |
 
 ### 承諾
@@ -197,7 +203,7 @@ cd web && npm install && npm run build && npm start
 ```bash
 cd web
 npm run ledger:commit -- --plan     # 只算、不送：這一期會提交什麼
-npm run ledger:commit               # 先完整查核（重播、重驗每一筆簽章、對帳存提），全過才送
+npm run ledger:commit               # 先完整查核（重播、重驗每一筆簽章、對帳入出金），全過才送
 npm run ledger:verify               # 查核者模式：重播全部，逐期比對鏈上的 anchor
 ```
 
@@ -215,7 +221,7 @@ npm run ledger:publish -- --mirror /path/to/mirror   # 完整帳本＋部署檔�
 
 ### 授權事件（k-of-n）
 
-主權、營運、查核角色的事件（費率、轄區、政策、凍結、對帳報告）門檻大於 1 時變成**提案**，
+主權、營運、查核角色的事件（費率、轄區、政策、凍結、退回出金請求、對帳報告）門檻大於 1 時變成**提案**，
 持有人各自簽，收滿門檻才寫進帳本。持有人的私鑰不放在本站：
 
 ```bash
@@ -229,7 +235,7 @@ npm run ledger:authority -- submit <id>
 ### 鏈上治理（`script/govern.sh`）
 
 ```bash
-./script/govern.sh status                                   # 角色、Safe、門檻、提領開關、epoch、逃生倒數
+./script/govern.sh status                                   # 角色、Safe、門檻、epoch、記帳 TWD 發行量
 
 read T D < <(./script/govern.sh build revoke-authority CARBON_VERIFIER 0xABC…)
 H=$(./script/govern.sh safe national hash $T $D)            # 給每位簽章者
@@ -240,7 +246,7 @@ S1=$(./script/govern.sh sign $H --ledger)                   # 各自簽（--priv
 | 預設 | 由誰 | 即時或延遲 |
 |---|---|---|
 | `grant-authority` / `revoke-authority <角色> <地址>`、`threshold <角色> <k>` | 國家 Safe | 即時；重播以事件所在區塊為起點 |
-| `withdrawals <true\|false>`、`committer-grant` / `committer-revoke` | 營運 Safe | 即時 |
+| `deposit <帳戶> <最小單位> <銀行參考號>`、`committer-grant` / `committer-revoke` | 營運 Safe | 即時（出金確認要帶證據，用 `npm run fiat -- settle … --print`） |
 | `grant-role` / `revoke-role <sovereign\|operator\|admin>` | 國家 Safe 經 Timelock | 48 小時 |
 | `safe-add-owner` / `safe-remove-owner` / `safe-swap-owner` / `safe-threshold` | 各 Safe 自己 | 即時 |
 
@@ -253,11 +259,35 @@ S1=$(./script/govern.sh sign $H --ledger)                   # 各自簽（--priv
 網站**不持有**做市金鑰。報價是簽名委託單，和使用者同一條撮合與查核路徑；做市只被動報價，絕不與平台控制的帳戶成交。
 模擬模式只在 `SIMULATION_CHAINS` 列出的測試鏈上能開，掛單簿上會標「模擬」，`/custody` 揭露做市帳戶。
 
-### 提領（使用者這一側）
+### 新台幣入出金（`npm run fiat`）
 
-在 `/trade` 的提領區：簽提領請求（金額從可動用轉為待提領）→ 下一期承諾上鏈後按「領回」→ 錢包送出
-`withdrawCash`（透過 CAFECA 簽章通道送出，gas 由平台贊助）。同一頁可以下載自己的證明檔。
-營運方要暫停一般提領用 `govern.sh build withdrawals false`（營運 Safe）；逃生提領不受影響。
+使用者的錢是**信託專戶裡的真新台幣**，鏈上只有記帳 TWD。兩個動作都是營運 Safe 的鏈上交易，
+**網站不持有營運 Safe 的金鑰**：在持有人的機器上（金鑰在 `.governance.env`）用 `npm run fiat`，
+或在 `/admin`「出入金」取得要執行的內容（本機鏈才由網站直接代送，因為持有人是公開的測試金鑰）。
+
+**入金**：使用者匯款到信託專戶、備註填自己的**入金識別碼**（`/trade`「新台幣」卡上，由地址決定的 10 位數字）→
+營運方對帳 → 確認：
+
+```bash
+cd web
+npm run fiat -- code 0x…                           # 查某個帳戶的入金識別碼
+npm run fiat -- deposit <地址或入金識別碼> 12345.5 'TXN-20260929-0001'   # 金額是元；參考號只以雜湊上鏈，不能重複
+```
+
+**出金**：使用者在 `/trade` 設定收款帳戶（銀行代碼、帳號、戶名；明文只在營運方，帳本記加鹽的雜湊 `payoutRef`）
+→ 簽出金請求（可動用 → 待出金）→ 下一期承諾上鏈 → 營運方依 `/admin`「出入金」的收款帳戶**匯款** → 確認：
+
+```bash
+npm run fiat -- list                               # 待出金、可確認多少、收款帳戶雜湊
+npm run fiat -- settle <地址> 1000 'WIRE-20260929-0007'   # 附最新一期的證據，不能超過已承諾的請求
+npm run fiat -- settle … --print                   # 不送出：印出 to / data，交給硬體錢包走 govern.sh
+```
+
+不匯款就退回（金額回到可動用）：`/admin`「出入金」的「退回請求」，或
+`npm run ledger:authority -- propose withdrawReject '{"account":"0x…","amount":"…","reason":"收款帳戶有誤"}'`。
+
+**沒有鏈上提領、沒有逃生門。** 記帳 TWD 只存在帳本合約裡、不能轉出；它的發行量是營運方宣稱的信託專戶餘額，
+每月的對帳報告由查核機構比對它與銀行對帳單。停止營運時只留證據：最後一期的承諾與每位使用者的證明檔是債權憑證。
 
 ---
 
@@ -282,21 +312,21 @@ LEDGER_DIR=<鏡像>/ledger DEPLOYMENT_FILE=<鏡像>/deployment.json RPC_URL=<任
 ## 七、測試
 
 ```bash
-forge test                                   # 31：帳本合約、Merkle 樹、治理（真 Safe v1.4.1 ＋ Timelock）
+forge test                                   # 34：帳本合約、記帳 TWD、Merkle 樹、治理（真 Safe v1.4.1 ＋ Timelock）
 
 cd web
 npm run check:boundary                       # 前端沒有直接連節點
 npm run check:api-envelope                   # 每支 API 都走制式信封與錯誤碼
-npm run test:ledger                          # 24：引擎規則、重播、雜湊鏈、提領與逃生
+npm run test:ledger                          # 24：引擎規則、重播、雜湊鏈、出金請求／退回／確認
 npm run test:cafeca                          # 23：登入 nonce、SignIn digest、委託單 EIP-712、設定檔解析
 npm run test:keys && npm run test:mm         # 金鑰來源、做市策略
 npm run build
 
 # 需要 anvil 的端到端（各自一條鏈）
-anvil --port 38546 & npm run test:ledger-chain    # 帳本 × 合約：承諾、重播、逃生、請求權登記
+anvil --port 38546 & npm run test:ledger-chain    # 帳本 × 合約：營運 Safe 入金、承諾、重播、出金確認
 anvil --port 38548 & npm run test:ledger-mm       # 11：做市與模擬器
-anvil --port 38549 & npm run test:ledger-proof    # 10：證明檔、公開檔、監理鏡像、提領
-# 55：網站 API → 帳本 → 承諾 → 查核。前置見 scripts/e2e-ledger-write.mjs 開頭
+anvil --port 38549 & npm run test:ledger-proof    # 10：npm run fiat、證明檔、公開檔、監理鏡像、沒有逃生門
+# 65：網站 API → 帳本 → 收款帳戶、出金、/admin 出入金 → 承諾 → 查核。前置見 scripts/e2e-ledger-write.mjs 開頭
 npm run test:ledger-write
 ```
 
@@ -314,16 +344,19 @@ npm run test:ledger-write
 | 「nonce 格式錯誤」 | CAFECA 錢包要求 `[A-Za-z0-9_-]{8,128}`；本站發的是固定 61 字元。瀏覽器快取了舊版前端就重新整理 |
 | 登入了但每個按鈕按下去都失敗 | 沒有開啟 CAFECA 簽章通道。回首頁重新登入一次 |
 | 下單說「被帳本規則拒絕」 | 事件已簽收但不生效（身分、餘額、轄區、用途……），理由寫在訊息裡 |
-| 存入後帳本餘額沒變 | 鏡像是下一次同步才入帳；`/trade` 的存入卡會顯示錢包餘額、帳本合約與結算幣地址供核對 |
-| 領回說「證據不是最新一期」／`NotLatestEpoch` | 剛換期。重新整理提領狀態再送 |
+| 匯款了但帳本餘額沒變 | 營運方還沒對帳確認（Phase 0 人工，通常一個營業日內）；確認之後鏡像才入帳。`npm run fiat -- list` / `/admin`「出入金」 |
+| 確認出金說「證據不是最新一期」／`NotLatestEpoch` | 剛換期。重新整理出金佇列再送 |
+| 確認出金說「還沒進承諾」 | 出金請求要先進一期承諾（最長一小時） |
+| 確認入金說「參考號已經確認過了」／`BankRefUsed` | 同一筆匯款不能入帳兩次。確認一下是不是重複按了 |
+| `npm run fiat` 說「沒有營運 Safe 持有人的金鑰」 | 這台機器沒有 `.governance.env` 的 `OPERATOR_OWNER_<n>_PK`。加 `--print` 交給持有人簽 |
 | 承諾送不出去 `ChainBroken` / `EpochOutOfOrder` | 承諾程式讀到的帳本和上一期不是同一份，或上一期沒上鏈。`npm run ledger:verify` 會指出哪一期 |
-| 承諾送不出去 `Insolvent` | 帳本宣稱欠的結算幣比合約持有的多。**立刻查**：多半是有一筆存入沒在鏈上發生 |
+| 承諾送不出去 `Insolvent` | 帳本宣稱欠的新台幣比記帳 TWD 多。**立刻查**：多半是帳本裡有一筆入金不是鏈上的確認鏡像來的 |
 | 承諾送不出去 AccessControl revert | `COMMITTER` 不是 `RELAYER_PK` 的地址。`bash script/bootstrap.sh roles` |
 | 部署被 `PublicKeyOnPublicChain` 擋下 | 有角色還用著 anvil 的預設帳戶（常見是 `NATIONAL_OWNERS`）。`bash script/bootstrap.sh keys` |
 | 部署一開始就 `nonce too high` | 節點的 txpool 不收未來 nonce，而 forge 預設整批送。`bootstrap.sh` 在外部鏈上會自動加 `--slow` |
 | 腳本報 `invalid private key` | shell 裡有同名的佔位變數蓋過了 `web/.env.local`。`unset DEPLOYER_PK RELAYER_PK` |
 | `/admin` 做市顯示「常駐程式沒有回應」 | `npm run mm` 沒在跑。`bash script/mm-service.sh status` / `logs` |
-| 做市撥款失敗「營運金鑰的結算幣不夠」 | TWDC 鑄不出來，要先轉到 `DEPLOYER` 地址 |
+| 做市撥款沒發生、狀態說沒有營運 Safe 金鑰 | 撥款是營運 Safe 的入金確認；跑 `npm run mm` 的機器要有 `.governance.env` 的持有人金鑰，或照警告印的 `npm run fiat` 指令請持有人確認 |
 | 開不了模擬交易（FORBIDDEN） | 這條鏈不在 `SIMULATION_CHAINS`。刻意的：正式市場不可以有平台自己的虛擬成交 |
 | 前端報 `0x` 開頭的八位十六進位 | `web/lib/error-abi.ts` 沒跟上合約：`cd web && npm run gen:errors` |
 | 重新部署後畫面有資料但對不上 | `web/data/` 是舊部署的。`cd web && npm run data:reset`（搬到 `data.bak-<時間戳>`，不是刪除） |
@@ -338,9 +371,10 @@ npm run test:ledger-write
 ### 目錄
 
 ```
-src/ledger/Ledger.sol          帳本合約：承諾鏈、授權清單、結算幣託管、提領、逃生、請求權登記
+src/ledger/Ledger.sol          帳本合約：承諾鏈、授權清單、營運 Safe 的入出金確認（沒有提領、沒有逃生門）
+src/ledger/LedgerTWD.sol       記帳 TWD：只有帳本合約能持有、不能轉出
+src/ledger/LedgerMerkle.sol    事件、登錄簿、身分樹（葉子格式的 Solidity 參考實作，給跨語言一致性測試）
 src/ledger/MerkleSumTree.sol   帶總額的餘額樹（葉子 v2：kg、cash、requested、settled）
-src/ledger/LedgerMerkle.sol    事件、登錄簿、身分樹
 src/governance/GovernanceLib.sol  Safe v1.4.1 基礎設施與 Timelock
 script/DeployLedger.s.sol      部署（含治理移轉；部署者移轉後沒有任何權限）
 script/{bootstrap,preflight,demo-box,govern,mm-service}.sh
@@ -352,9 +386,9 @@ web/contracts/*.md             定型化契約與政策
 
 ### 事件（`web/lib/ledger/events.ts`）
 
-20 種：存入／提領鏡像（1、2）、轄區、政策、費率（3–5）、身分、凍結（6、7）、專案、匯入專案、專案狀態（8–10）、
+21 種：入金／出金確認的鏡像（1、2）、轄區、政策、費率（3–5）、身分、凍結（6、7）、專案、匯入專案、專案狀態（8–10）、
 核發（11）、掛單、撤單、註銷（12–14）、憑證文件、官方註銷（15、16）、對帳報告與查核（17、18）、金鑰鏡像（19）、
-提領請求（20）。**只記輸入，不記結果**：成交、憑證、批次餘額都是引擎算出來的。
+出金請求（20，帶收款帳戶雜湊 `payoutRef`）、營運方退回出金請求（21）。**只記輸入，不記結果**：成交、憑證、批次餘額都是引擎算出來的。
 
 每一筆帶序號、邏輯時間與收單區塊高度。收單區塊決定用哪一份授權清單驗簽——查核時只用 ecrecover
 與鏈上的授權歷史，**不讀任何歷史狀態**（Boltchain 只保留最近 128 個區塊，archive 節點不是前提）。
@@ -368,12 +402,13 @@ web/contracts/*.md             定型化契約與政策
 | 授權單位 | `LedgerEvent(version, kind, payload)`，payload 是內容雜湊 | ecrecover；k-of-n 時附門檻數量的不同持有人簽章 |
 | 本站收單 | 簽收收據（RECEIPT_SIGNER） | ecrecover |
 
-### 提領（規則第 3 版）
+### 出金（規則第 4 版）
 
-帳本記每個帳戶的**待提領**、**累計請求**、**累計已領**；葉子帶 `requested` 與 `settled`。
-合約記 `withdrawnTotal[帳戶]`（累計，不分期）：一般上限是 `requested − withdrawnTotal`，
-逃生上限是 `cash + settled − withdrawnTotal`。所以換了幾期、鏡像晚了幾個區塊都一樣，同一筆錢不會領兩次。
-鏈上的 `CashWithdrawn` 鏡像進帳本，先銷待提領，超出的部分（只可能是逃生）從可動用扣，必要時先撤掉該帳戶的買單。
+帳本記每個帳戶的**待出金**、**累計請求**、**累計已確認**；葉子帶 `requested` 與 `settled`。
+合約記 `withdrawnTotal[帳戶]`（累計，不分期）：營運 Safe 能確認的上限是最新一期的 `requested − withdrawnTotal`。
+所以換了幾期、鏡像晚了幾個區塊都一樣，同一筆錢不會確認兩次。鏈上的 `CashWithdrawn` 鏡像進帳本時**只能銷待出金**
+（超過就拒絕：沒有逃生提領，不存在「從可動用扣」的情況）；營運方退回的 `withdrawReject` 把待出金放回可動用。
+每一筆入出金確認帶 `bankRef`（銀行交易參考號的雜湊，入金 `co2x:bank:in:`、出金 `co2x:bank:out:` 前綴），合約記用過的，不收第二次。
 
 ### 前端與 API 的邊界
 
@@ -382,21 +417,24 @@ web/contracts/*.md             定型化契約與政策
 
 ### 部署指紋
 
-`web/data/.deployment.json` 記下資料屬於哪一次部署（帳本合約、結算幣、`deployedAt`）。對不上時申請與憑證紀錄一律擋下
+`web/data/.deployment.json` 記下資料屬於哪一次部署（帳本合約、記帳 TWD、`deployedAt`）。對不上時申請與憑證紀錄一律擋下
 （`DATA_STALE`），不悄悄拿舊的來用。anvil 重開後重新部署會得到相同地址，所以 `deployedAt` 不是多餘的。
 
 ### 舊的全合約版本
 
 第 7 期之前的版本（KYCRegistry、CarbonRegistry、CarbonCredit1155、Listing、CarbonPool、Bank、PasskeyAccount、
 Uniswap v4 hook／router）已經移除，保留在 git 歷史（`e86089d` 以前）。Boltchain 上 rules v2 的舊帳本合約
-（`0x71034Ae8…`，區塊 26654）不再由本站使用。
+（`0x71034Ae8…`，區塊 26654），以及 rules v3（接 CAFECA 的 TWDC、有鏈上提領與逃生門）的帳本合約，在以 rules v4 重新部署後都不再由本站使用。
 
 ---
 
 ## 十、Phase 0 限制與後續
 
-- **拒收提領請求的缺口**：營運方持續提交承諾、卻只拒收某一人的提領請求時，逃生門不會開啟。
-  目前靠簽章與沒有收據這件事申訴；鏈上強制收單（使用者直接在合約登記請求、下一期必須納入）列為後續。
+- **新台幣的保證靠信託，不靠密碼學**：鏈上沒有提領與逃生門；記帳 TWD 與信託專戶真實餘額的相符靠信託銀行對帳與查核報告。
+  營運方收下出金請求卻不匯款，鏈上只留證據。**持有使用者的新台幣並提供帳戶間移轉可能涉及電子支付／儲值的監理規定**，
+  正式營運前要有法律意見與金融機構的合作（信託契約、虛擬帳號、對帳檔介接）。
+- **拒收請求的缺口**：營運方可以不給某一人的委託單或出金請求簽收收據。目前靠簽章與沒有收據這件事申訴；鏈上強制收單列為後續。
+- 入金識別碼是由地址算出的 10 位數字（填在匯款備註）；正式營運應換成信託銀行發的虛擬帳號，對帳改為自動。
 - 身分驗證是模擬的（管理員核准即通過），未介接憑證管理中心；證號目前明文存在伺服器端。
 - 查驗機構的簽章金鑰在本站（`CARBON_VERIFIER_PK`）；正式由查驗機構自己簽。
 - 治理金鑰由腳本在同一台機器產生；正式由三位持有人各自產生。
@@ -408,7 +446,7 @@ Uniswap v4 hook／router）已經移除，保留在 git 歷史（`e86089d` 以�
 |---|---|---|
 | **Phase 0**（現在） | 提案展示。功能完整；身分驗證與查驗簽章是模擬的 | Boltchain 8018 |
 | **Phase 1** | 試點。真實憑證整合、查驗機構自行簽章、強制收單、索引器與監控、金鑰移交 HSM | Besu + QBFT 四節點（Cancun） |
-| **Phase 2** | 正式。結算幣落地、指定做市商、第三方稽核、法遵定案、控制權移轉演練 | — |
+| **Phase 2** | 正式。信託專戶與虛擬帳號介接落地、指定做市商、第三方稽核、法遵定案、控制權移轉演練 | — |
 
 ---
 

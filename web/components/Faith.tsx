@@ -130,7 +130,7 @@ export function Faith() {
         return;
       }
 
-      // ③ 執行。兩條路：簽一則帳本事件，以及領水後存進帳本合約。
+      // ③ 執行。兩條路：簽一則帳本事件，以及本機展示鏈的模擬入金。
       //
       // 「凍結錢包」這條路沒有了：金鑰與帳戶的生命週期在 CAFECA 錢包裡，
       // 本站沒有能力、也不該有能力凍結別人的身分。助理改成把人帶過去
@@ -143,11 +143,10 @@ export function Faith() {
         if (o.kind === "error") throw new Error(o.text);
         note = o.text;
       } else if (fresh.deposit) {
-        // 帳本的領水：開發用登入由伺服器鑄給他並代為存入；CAFECA 帳戶先領到錢包，再自己存進帳本合約
+        // 本機展示鏈的模擬入金（伺服器代營運 Safe 確認）。正式入金是匯款到信託專戶，這裡做不到
         if (!wallet) throw new Error("還沒讀到你的帳戶");
-        if (!ledger.devSigning) await postJson("/api/faucet", { account: wallet.address });
-        await ledger.deposit(BigInt(fresh.deposit));
-        note = "已領取測試用 mTWD，並存進帳本合約。";
+        await ledger.devDeposit(BigInt(fresh.deposit));
+        note = "已模擬入金，帳本已入帳。";
       } else {
         throw new Error("這個動作沒有可執行的內容");
       }

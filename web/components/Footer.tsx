@@ -28,7 +28,7 @@ export function Footer() {
           ))}
         </nav>
         <p>
-          本站目前為 <b className="text-ink-200">Phase 0 展示版本</b>：身分驗證、查驗機構簽章與結算幣皆為模擬，
+          本站目前為 <b className="text-ink-200">Phase 0 展示版本</b>：身分驗證、查驗機構簽章與新台幣入出金皆為模擬（信託專戶尚未開立），
           額度不具法律效力，不得作為任何申報依據。
         </p>
         <p>

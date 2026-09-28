@@ -128,3 +128,24 @@ export function appendIfMissing(name, value, file = ENV_FILE) {
   fileEnv[name] = value;
   return true;
 }
+
+/// 營運 Safe 持有人的金鑰（新台幣入出金的鏈上確認要它們簽）。
+///
+/// 本機鏈：DeployLedger 預設的持有人是 anvil 助記詞第 8、9 個帳戶（公開的測試金鑰）。
+/// 外部鏈：只從 **repo 根目錄的 .governance.env**（bootstrap.sh 產生）或 shell 的同名變數讀
+/// OPERATOR_OWNER_<n>_PK——**不讀 web/.env.local**，網站不該持有營運 Safe 的金鑰。
+/// 回傳 viem 的 LocalAccount 陣列；一把都沒有就回空陣列（呼叫端決定要不要改成印出指令）。
+export async function operatorOwnerAccounts({ isLocal }) {
+  const { privateKeyToAccount, mnemonicToAccount } = await import("viem/accounts");
+  if (isLocal) return [8, 9].map((i) => mnemonicToAccount(ANVIL_MNEMONIC, { addressIndex: i }));
+  const gov = parseEnvFile(process.env.GOV_FILE ?? path.resolve(process.cwd(), "..", ".governance.env"));
+  const out = [];
+  for (let i = 1; i <= 5; i++) {
+    const n = `OPERATOR_OWNER_${i}_PK`;
+    const v = process.env[n] || gov[n];
+    if (!v) continue;
+    if (!HEX64.test(v)) throw new KeyError(`${n} 格式不對：${describe(v)}`);
+    out.push(privateKeyToAccount(v));
+  }
+  return out;
+}

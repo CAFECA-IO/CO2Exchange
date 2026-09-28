@@ -28,7 +28,7 @@ const pub = createPublicClient({ transport: http(RPC) });
 const chainId = await pub.getChainId();
 const depFile = process.env.DEPLOYMENT_FILE ?? path.resolve(process.cwd(), "..", "deployments", `${chainId}.json`);
 const D = JSON.parse(fs.readFileSync(depFile, "utf8"));
-if (D.ledgerVersion !== 2) { console.error("部署檔不是帳本 v2"); process.exit(1); }
+if ((D.ledgerVersion ?? 0) < 3) { console.error("部署檔不是目前版本的帳本（需要 ledgerVersion 3：新台幣入出金版）。請重新部署"); process.exit(1); }
 const DATA = process.env.DATA_DIR ?? path.resolve(process.cwd(), "data");
 const LEDGER_DIR = process.env.LEDGER_DIR ?? path.join(DATA, "ledger");
 const store = openStore(LEDGER_DIR);

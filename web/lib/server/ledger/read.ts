@@ -254,7 +254,7 @@ export function ledgerBulletin(): Bulletin {
   };
 }
 
-/// 託管揭露：對帳報告與各國流通量都來自帳本；結算幣的發行量是鏈上的（TWDC 本來就是鏈上資產）。
+/// 託管揭露：對帳報告與各國流通量都來自帳本；記帳 TWD 的發行量是鏈上的（營運方宣稱的信託餘額）。
 export function ledgerCustody(tokenSupply: bigint): Custody {
   const { state } = ledgerView();
   const live = new Map<string, number>();

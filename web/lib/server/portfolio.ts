@@ -1,6 +1,5 @@
 import "server-only";
-import { erc20Abi, type Address } from "viem";
-import { deployment, publicClient } from "./chain";
+import { type Address } from "viem";
 import { ledgerPortfolio } from "./ledger/read";
 
 /// 我的資產：持有、成本、市值、賺賠。
@@ -21,7 +20,7 @@ export type Movement = {
   kind: "issue" | "buy" | "sell" | "retire";
   batchId: number;
   kg: number;
-  /// 買賣的每噸價（結算幣最小單位）；核發與註銷為 null
+  /// 買賣的每噸價（新台幣最小單位，1e6 = 1 元）；核發與註銷為 null
   pricePerTonne: number | null;
   /// 買＝支出、賣＝實收（已扣手續費）
   cashDelta: number;
@@ -31,7 +30,7 @@ export type Movement = {
 export type Holding = { batchId: number; project: string; vintageYear: number; kg: number; country: string; scheme: string };
 
 export type Portfolio = {
-  twd: number; // 結算幣餘額（最小單位）
+  twd: number; // 新台幣餘額（最小單位）
   cctKg: number; // 未指定批次的額度（帳本版恆為 0，保留欄位給畫面）
   batches: Holding[];
   holdingKg: number; // 各批次合計
@@ -42,20 +41,16 @@ export type Portfolio = {
   unrealisedPnl: number | null;
   realisedPnl: number;
   totalValue: number; // 現金 + 市值
-  /// 錢包裡還沒存進帳本合約的結算幣（鏈上餘額）。null = 讀不到
-  walletTwd?: number | null;
   movements: Movement[];
   /// 淨值走勢：每一次異動後的「現金 + 持有市值（以當時價估）」
   equityCurve: { t: number; v: number }[];
   issuedKg: number; // 核發取得（成本 0）
 };
 
+/// 「現金」是帳本裡的新台幣（錢在信託專戶）。規則第 4 版起使用者錢包裡不會有任何 TWD 代幣，
+/// 所以不再另外讀鏈上餘額。
 export async function portfolio(account: Address): Promise<Portfolio> {
-  // 「現金」是帳本裡的餘額；錢包裡的結算幣要存入才能交易，兩個數字都要讓人看得到
-  const walletTwd = await publicClient
-    .readContract({ address: deployment().settlementToken, abi: erc20Abi, functionName: "balanceOf", args: [account] })
-    .then(Number).catch(() => null);
-  return { ...ledgerPortfolio(account), walletTwd };
+  return ledgerPortfolio(account);
 }
 
 /// 損益的算法本身（與資料從哪裡來無關）。lib/server/ledger/read.ts 用它。

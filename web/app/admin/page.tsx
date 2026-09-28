@@ -6,6 +6,7 @@ import { Button, Card, Field, Notice, fmtKg, inputCls } from "@/components/ui";
 import { PURPOSE_LABEL, TIER_LABEL, flagOf } from "@/lib/deployment";
 import { fetchJson, postJson } from "@/lib/client/fetchJson";
 import { MarketMakerPanel } from "@/components/admin/MarketMakerPanel";
+import { FiatPanel } from "@/components/admin/FiatPanel";
 
 type KycReq = { id: string; account: string; tier: number; idNumberMasked: string; name: string; submittedBy: string; status: string; reason?: string; txHash?: string; createdAt: string; decidedBy?: string };
 type Cert = { certId: number; batchId: number; amountKg: number; beneficiary: string; purpose: number; retiredAt: number; owner: string; pdfHash: string | null; onchainHash: string | null; anchored: boolean };
@@ -22,7 +23,7 @@ type Gov = {
   timelock: { address: string; delay: number; proposer: boolean; executor: boolean; canceller: boolean; operations: { id: string; target: string; data: string; state: string; readyAt: number; txHash: string }[] };
 };
 
-const tabs = ["KYC 審核", "憑證文件", "費率設定", "後台做市", "治理狀態"] as const;
+const tabs = ["KYC 審核", "出入金", "憑證文件", "費率設定", "後台做市", "治理狀態"] as const;
 
 /// 定義在元件內部的話，每次 render 都是一個新的元件型別，React 會把整棵子樹卸載重建。
 function Bool({ v }: { v: boolean | null }) {
@@ -225,6 +226,8 @@ export default function AdminPage() {
         </Card>
       )}
 
+      {tab === "出入金" && <FiatPanel />}
+
       {tab === "後台做市" && <MarketMakerPanel />}
 
       {tab === "治理狀態" && (gov ? (
@@ -237,7 +240,7 @@ export default function AdminPage() {
               ))}</tbody>
             </table>
             <p className="mt-2 text-xs">
-              帳本合約：鏈上只放承諾、授權金鑰清單與結算幣託管。
+              帳本合約：鏈上只放承諾、授權金鑰清單與記帳用的 TWD（入出金由營運 Safe 確認）。
               承諾提交者 <span className="font-mono">{gov.ledger.committer ? `${gov.ledger.committer.slice(0, 10)}…` : "—"}</span> <Bool v={gov.ledger.committerOk} />
             </p>
           </Card>

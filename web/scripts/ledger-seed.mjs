@@ -3,14 +3,14 @@
 //
 //   cd web && node --experimental-strip-types scripts/ledger-seed.mjs --days 60 --users 40
 //
-// **只在本機鏈上用**（入金靠 MockTWD 鑄幣與 anvil_setBalance）。公開鏈上的展示資料由後台做市
+// **只在本機鏈上用**（入金由本機營運 Safe 的公開測試金鑰確認，錢是虛構的）。公開鏈上的展示資料由後台做市
 // 與模擬器在第 5 期改送簽名委託單後產生。
 //
-// 每一筆都是真的簽章事件，經過引擎規則；結算幣是真的存進帳本合約、帳本以鏈上事件鏡像入帳。
+// 每一筆都是真的簽章事件，經過引擎規則；入金是營運 Safe 在鏈上的確認（模擬的匯款）、帳本以鏈上事件鏡像入帳。
 // 事件的邏輯時間回溯到 --days 天前，讓行情圖有歷史；收單區塊高度是現在（它們確實是現在才收的）。
 import path from "node:path";
 import fs from "node:fs";
-import { createPublicClient, createWalletClient, defineChain, http, keccak256, parseAbi, toBytes, toHex } from "viem";
+import { createPublicClient, createWalletClient, defineChain, http, keccak256, toBytes } from "viem";
 import { mnemonicToAccount, privateKeyToAccount } from "viem/accounts";
 import { buildPersonas, mulberry32 } from "./personas.mjs";
 import { ANVIL_MNEMONIC, keyring, setting } from "./lib/keys.mjs";
@@ -18,7 +18,8 @@ import { ANVIL_MNEMONIC, keyring, setting } from "./lib/keys.mjs";
 const { openStore } = await import("../lib/ledger/store.ts");
 const { apply, genesis } = await import("../lib/ledger/engine.ts");
 const { authTypedData, userTypedData, userMessageOf } = await import("../lib/ledger/typed.ts");
-const { readCashEvents, readAuthorities, LEDGER_ABI } = await import("../lib/ledger/chain.ts");
+const { readCashEvents, readAuthorities } = await import("../lib/ledger/chain.ts");
+const { bankRefOf, creditDepositCall, execOperatorSafe, localOperatorOwners } = await import("../lib/ledger/fiat.ts");
 const { activeKeys, thresholdAt } = await import("../lib/ledger/authorities.ts");
 
 const arg = (n, d) => { const i = process.argv.indexOf(`--${n}`); return i > -1 ? process.argv[i + 1] : d; };
@@ -29,11 +30,11 @@ const SEED = arg("seed", "co2x-ledger");
 const RPC = setting("RPC_URL") ?? "http://127.0.0.1:28545";
 const pub0 = createPublicClient({ transport: http(RPC) });
 const chainId = await pub0.getChainId();
-if (chainId !== 31337 && chainId !== 1337) { console.error(`chainId ${chainId} 不是本機鏈。這支腳本靠鑄幣與 anvil_setBalance 入金，只在本機用。`); process.exit(1); }
+if (chainId !== 31337 && chainId !== 1337) { console.error(`chainId ${chainId} 不是本機鏈。這支腳本用本機營運 Safe 的公開測試金鑰確認入金，只在本機用。`); process.exit(1); }
 const chain = defineChain({ id: chainId, name: "local", nativeCurrency: { name: "E", symbol: "E", decimals: 18 }, rpcUrls: { default: { http: [RPC] } } });
 const pub = createPublicClient({ chain, transport: http(RPC), pollingInterval: 50 });
 const D = JSON.parse(fs.readFileSync(process.env.DEPLOYMENT_FILE ?? path.resolve(process.cwd(), "..", "deployments", `${chainId}.json`), "utf8"));
-if (D.ledgerVersion !== 2) { console.error("部署檔不是帳本 v2（script/DeployLedger.s.sol）"); process.exit(1); }
+if ((D.ledgerVersion ?? 0) < 3) { console.error("部署檔不是目前版本的帳本（需要 ledgerVersion 3）。請重新部署"); process.exit(1); }
 const domains = { chainId, ledger: D.ledger };
 
 const ring = keyring({ chainId, isLocal: true });
@@ -72,19 +73,16 @@ for (const p of personas) { p.account = mnemonicToAccount(mnemonic, { addressInd
   }, null, 2));
 }
 
-// ── 入金：鏈上真的轉帳 ──
-const erc20 = parseAbi(["function mint(address,uint256)", "function approve(address,uint256) returns (bool)"]);
+// ── 入金：本機營運 Safe 確認（虛構的新台幣，bankRef 以 seed: 開頭）──
 const opW = createWalletClient({ account: op, chain, transport: http(RPC) });
+const owners = localOperatorOwners();
 const buyers = personas.filter((p) => p.role !== "developer");
 for (const p of buyers) {
   const budget = BigInt(Math.max(30_000, p.annualNeedTonnes * 1_500)) * 1_000_000n;
-  await pub.request({ method: "anvil_setBalance", params: [p.address, toHex(10n ** 19n)] });
-  await pub.waitForTransactionReceipt({ hash: await opW.writeContract({ address: D.settlementToken, abi: erc20, functionName: "mint", args: [p.address, budget] }) });
-  const w = createWalletClient({ account: p.account, chain, transport: http(RPC) });
-  await pub.waitForTransactionReceipt({ hash: await w.writeContract({ address: D.settlementToken, abi: erc20, functionName: "approve", args: [D.ledger, budget] }) });
-  await pub.waitForTransactionReceipt({ hash: await w.writeContract({ address: D.ledger, abi: LEDGER_ABI, functionName: "depositCash", args: [budget] }) });
+  const call = creditDepositCall(D.ledger, p.address, budget, bankRefOf("in", `seed:${p.address}:${SEED}:${Date.now()}`));
+  await execOperatorSafe({ pub, sender: opW, safe: D.operatorSafe, to: call.to, data: call.data, owners });
 }
-console.log(`  ${buyers.length} 個買方把結算幣存進帳本合約`);
+console.log(`  ${buyers.length} 個買方入金（營運 Safe 確認）`);
 
 // ── 事件：一邊寫進帳本、一邊跑引擎，後面的決策才看得到前面的結果 ──
 const state = genesis();

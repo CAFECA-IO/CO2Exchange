@@ -7,7 +7,7 @@ import { buildTree, EMPTY, leaf, type Proof } from "./merkle.ts";
 /// 狀態 → 每一期承諾裡的四個 root 與兩個總額。
 ///
 /// **這些葉子的格式與 Solidity 那邊必須逐位元組一致**（帳本合約要能驗 `registryRoot` 裡的批次、
-/// `balanceRoot` 裡的持有，逃生門的請求權登記靠它）。所以一律用 `abi.encode`，前面帶型別標籤，
+/// `balanceRoot` 裡的持有，出金確認與外部驗證靠它）。所以一律用 `abi.encode`，前面帶型別標籤，
 /// 字串欄位先各自雜湊——合約那邊只需要 `keccak256(abi.encode(...))` 一行。
 
 export const TAG = { jurisdiction: 1, project: 2, batch: 3, certificate: 4, report: 5, policy: 6, fee: 7 } as const;
@@ -22,7 +22,7 @@ export const projectContent = (p: Project) => E(
   ["uint8", "uint256", "address", "bytes32", "bytes32", "bytes32", "bytes32", "bool", "bytes2", "bytes32"],
   [TAG.project, p.id, p.owner, h(p.name), h(p.methodology), h(p.location), h(p.metadataURI), p.active, countryToBytes2(p.country), h(p.scheme)],
 );
-/// 批次葉子。**帳本合約的 `claimCredits` 會驗這一片**，欄位順序不能動。
+/// 批次葉子。證明檔的碳權請求權證據驗這一片（docs/proof-schemes.md），欄位順序不能動。
 export const batchContent = (b: Batch) => E(
   ["uint8", "uint256", "uint256", "uint64", "uint64", "uint16", "bytes32", "bytes32", "address", "uint64", "uint256", "uint256", "bool"],
   [TAG.batch, b.id, b.projectId, b.monitoringStart, b.monitoringEnd, b.vintageYear, b.serialHash, b.reportHash, b.verifier, b.issuedAt, b.issuedKg, b.retiredKg, b.frozen],

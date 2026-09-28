@@ -4,18 +4,19 @@
 //   anvil --port 38549 &
 //   npm run test:ledger-proof
 //
-// 走一遍：部署 → 回填展示資料 → 一位使用者簽提領請求 → 承諾上鏈 →
+// 走一遍（規則第 4 版：新台幣入出金）：部署 → 回填展示資料 → 營運工具確認一筆入金 → 一位使用者簽出金請求 → 承諾上鏈 →
 //   ① 他的證明檔用獨立的驗證 CLI（scripts/verify-proof.mjs，只用 viem）對鏈上驗過；竄改一個數字就驗不過
-//   ② 憑證明檔裡的參數從帳本合約領回（一般提領只放已請求的部分；同一份證據領不了第二次）
+//   ② 營運方匯款後用營運工具（npm run fiat -- settle）憑證據在鏈上確認出金：只能確認已請求的部分，
+//      同一個匯款參考號不能用兩次；使用者自己不能確認
 //   ③ 公開檔：不用帳本程式碼，只用檔案裡的雜湊重建 logRoot 與 registryRoot，等於鏈上的承諾
 //   ④ 監理鏡像：匯出的完整帳本由查核工具重播，anchor 全部相符
-//   ⑤ 逃生門：72 小時沒有新承諾之後，同一個人領回全部欠款（不只是請求的部分）
+//   ⑤ 沒有逃生門：72 小時沒有新承諾之後，使用者一樣不能從合約領任何東西；TWD 始終只在帳本合約裡
 import assert from "node:assert/strict";
 import { execFileSync, execSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createPublicClient, createWalletClient, defineChain, encodeAbiParameters, http, keccak256, parseAbi, toHex } from "viem";
+import { createPublicClient, defineChain, encodeAbiParameters, http, keccak256, parseAbi, toHex } from "viem";
 import { mnemonicToAccount, privateKeyToAccount } from "viem/accounts";
 
 const { openStore } = await import("../lib/ledger/store.ts");
@@ -53,11 +54,13 @@ const receiptSigner = privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9
 const agent = createAgent({ store, client: pub, domains: { chainId, ledger: D.ledger }, receiptSigner });
 const commits = () => readCommitments(pub, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0) });
 const low = (a) => a.toLowerCase();
-const erc20 = parseAbi(["function balanceOf(address) view returns (uint256)"]);
+const erc20 = parseAbi(["function balanceOf(address) view returns (uint256)", "function totalSupply() view returns (uint256)"]);
+const F = await import("../lib/ledger/fiat.ts");
+const fiat = (...a) => node("scripts/fiat.mjs", a);
 
 let passed = 0;
 const ok = (msg) => { passed += 1; console.log(`  ✓ ${msg}`); };
-console.log(`  部署 Ledger ${D.ledger}（一般提領已開啟：${await pub.readContract({ address: D.ledger, abi: PROOF_ABI, functionName: "withdrawalsEnabled" })}）`);
+console.log(`  部署 Ledger ${D.ledger}（記帳 TWD ${D.settlementToken}）`);
 
 // ── 展示資料與第一期 ──
 node("scripts/ledger-seed.mjs", ["--days", "6", "--users", "10"]);
@@ -69,13 +72,25 @@ let s = agent.state();
 const who = roster.map((p) => ({ ...p, account: mnemonicToAccount(ANVIL_MNEMONIC, { addressIndex: p.walletIndex }) }))
   .find((p) => (s.cash.get(low(p.address)) ?? 0n) > 10_000_000_000n);
 assert.ok(who, "找得到一位有現金的人物");
+// 營運工具確認一筆入金（用入金識別碼找帳戶）
+const code = fiat("code", who.address).trim();
+assert.match(code, /^\d{10}$/);
+const cashBefore = s.cash.get(low(who.address));
+const dep = fiat("deposit", code, "12345.5", "E2E-IN-0001");
+assert.match(dep, /已確認入金/);
+s = agent.state();
+assert.equal(s.cash.get(low(who.address)) - cashBefore, 12_345_500_000n);
+assert.throws(() => fiat("deposit", who.address, "1", "E2E-IN-0001"), "同一個銀行參考號不能入金兩次");
+ok(`營運工具用入金識別碼 ${code} 確認入金 12,345.5 元並鏡像進帳本；重複的銀行參考號被合約拒絕`);
 const cash0 = s.cash.get(low(who.address));
 const ask = cash0 / 4n;
-const r = await agent.user(who.account, "withdraw", { amount: ask });
+const PAYOUT = F.payoutRefOf({ bankCode: "812", accountNo: "00012345678901", holder: who.name }, "e2e");
+const r = await agent.user(who.account, "withdraw", { amount: ask, payoutRef: PAYOUT });
 assert.ok(r && !r.rejectedReason);
 s = agent.state();
 assert.equal(s.pendingWithdraw.get(low(who.address)), ask);
-ok(`${who.name} 簽提領請求 ${Number(ask) / 1e6} 元：可動用 → 待提領`);
+assert.throws(() => fiat("settle", who.address, String(Number(ask) / 1e6), "E2E-OUT-EARLY"), "還沒進承諾的請求不能確認");
+ok(`${who.name} 簽出金請求 ${Number(ask) / 1e6} 元（帶收款帳戶雜湊）：可動用 → 待出金；進承諾之前營運方不能確認`);
 node("scripts/ledger-commit.mjs");
 
 // ── ① 證明檔 × 獨立驗證 ──
@@ -102,25 +117,24 @@ const v2 = spawnSync(process.execPath, ["scripts/verify-proof.mjs", path.join(TM
 assert.equal(v2.status, 1);
 ok("把持有金額改掉一個最小單位，驗證就不過");
 
-// ── ② 憑證據領回 ──
-await pub.request({ method: "anvil_setBalance", params: [who.address, toHex(10n ** 19n)] });
-const w = createWalletClient({ account: who.account, chain, transport: http(RPC) });
+// ── ② 營運方匯款 → 營運 Safe 憑證據確認出金 ──
 const args = balanceProofArgs(snap, who.address);
 assert.equal(args.leafRequested, ask);
-const before = await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "balanceOf", args: [who.address] });
-const tooMuch = await pub.simulateContract({ address: D.ledger, abi: PROOF_ABI, functionName: "withdrawCash", args: [ask + 1n, args], account: who.account }).then(() => null, (e) => e);
-assert.ok(tooMuch, "超過請求的部分領不到");
-await pub.waitForTransactionReceipt({ hash: await w.writeContract({ address: D.ledger, abi: PROOF_ABI, functionName: "withdrawCash", args: [ask, args] }) });
-const after = await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "balanceOf", args: [who.address] });
-assert.equal(after - before, ask);
-const again = await pub.simulateContract({ address: D.ledger, abi: PROOF_ABI, functionName: "withdrawCash", args: [1n, args], account: who.account }).then(() => null, (e) => e);
-assert.ok(again, "同一份證據領不了第二次");
-ok(`一般提領：只放已請求的 ${Number(ask) / 1e6} 元（多 1 就被拒），同一份證據領不了第二次`);
-await agent.mirror(D.ledger);
+const supply0 = await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "totalSupply" });
+const yuanOf = (u) => `${u / 1_000_000n}.${(u % 1_000_000n).toString().padStart(6, "0")}`;
+assert.throws(() => fiat("settle", who.address, yuanOf(ask + 1n), "E2E-OUT-TOO-MUCH"), "超過請求的部分不能確認");
+const half = ask / 2n;
+assert.match(fiat("settle", who.address, yuanOf(half), "E2E-OUT-0001"), /已確認出金/);
+assert.throws(() => fiat("settle", who.address, yuanOf(ask - half), "E2E-OUT-0001"), "同一個匯款參考號不能用兩次");
+assert.match(fiat("settle", who.address, yuanOf(ask - half), "E2E-OUT-0002"), /已確認出金/);
+assert.equal(supply0 - await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "totalSupply" }), ask, "確認出金銷毀等額的 TWD");
+const self = await pub.simulateContract({ address: D.ledger, abi: PROOF_ABI, functionName: "settleWithdrawal", args: [who.address, 1n, F.bankRefOf("out", "self"), args], account: who.account }).then(() => null, (e) => e);
+assert.ok(self, "使用者不能自己確認出金");
+ok(`營運工具分兩次確認出金共 ${Number(ask) / 1e6} 元並銷毀 TWD；超額、重複參考號、使用者自行確認都被拒絕`);
 s = agent.state();
 assert.equal(s.pendingWithdraw.get(low(who.address)) ?? 0n, 0n);
 assert.equal(s.withdrawSettled.get(low(who.address)), ask);
-ok("鏈上的 CashWithdrawn 鏡像進帳本：待提領銷帳、已領累計 = 請求累計");
+ok("鏈上的 CashWithdrawn 鏡像進帳本：待出金銷帳、已出金累計 = 請求累計");
 node("scripts/ledger-commit.mjs");
 
 // ── ③ 公開檔：只用檔案裡的雜湊重建 root ──
@@ -147,24 +161,19 @@ const manifest = JSON.parse(fs.readFileSync(path.join(TMP, "mirror", "MANIFEST.j
 assert.ok(manifest.files.every((f) => /^[0-9a-f]{64}$/.test(f.sha256)));
 ok("監理鏡像（完整帳本＋部署檔＋SHA-256 清單）由查核工具獨立重播，anchor 全部相符");
 
-// ── ⑤ 逃生門 ──
+// ── ⑤ 沒有逃生門 ──
 cs = await commits();
 snap = snapshotAt(store.read(), cs.at(-1));
 const leaf = balanceProofArgs(snap, who.address);
 await pub.request({ method: "evm_increaseTime", params: [72 * 3600 + 60] });
 await pub.request({ method: "evm_mine", params: [] });
-assert.equal(await pub.readContract({ address: D.ledger, abi: PROOF_ABI, functionName: "escapeActive" }), true);
-const owed = leaf.leafCash + leaf.leafSettled - (await pub.readContract({ address: D.ledger, abi: PROOF_ABI, functionName: "withdrawnTotal", args: [who.address] }));
-const b2 = await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "balanceOf", args: [who.address] });
-await pub.waitForTransactionReceipt({ hash: await w.writeContract({ address: D.ledger, abi: PROOF_ABI, functionName: "withdrawCash", args: [owed, leaf] }) });
-const b3 = await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "balanceOf", args: [who.address] });
-assert.equal(b3 - b2, owed);
-assert.equal(owed, leaf.leafCash, "逃生領回的是全部欠款");
-ok(`逃生門：72 小時沒有新承諾，憑最後一期的證據領回全部欠款 ${Number(owed) / 1e6} 元（不只是請求的部分）`);
-await agent.mirror(D.ledger);
-s = agent.state();
-assert.equal(s.cash.get(low(who.address)) ?? 0n, 0n);
-ok("逃生提領鏡像進帳本：超出待提領的部分從可動用現金扣，帳本對得上");
+await pub.request({ method: "anvil_setBalance", params: [who.address, toHex(10n ** 19n)] });
+const stuck = await pub.simulateContract({ address: D.ledger, abi: PROOF_ABI, functionName: "settleWithdrawal", args: [who.address, leaf.leafCash, F.bankRefOf("out", "escape"), leaf], account: who.account }).then(() => null, (e) => e);
+assert.ok(stuck, "72 小時沒有新承諾，使用者一樣不能自己領");
+const held = await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "balanceOf", args: [D.ledger] });
+assert.equal(held, await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "totalSupply" }), "TWD 只在帳本合約裡");
+assert.ok(held >= cs.at(-1).totalCash, "記帳的 TWD 不少於最新一期承諾的現金總額");
+ok(`沒有逃生門：停擺 72 小時後使用者仍不能從合約領；最後一期的證據（持有 ${Number(leaf.leafCash) / 1e6} 元）只作為對營運方與信託的債權憑證`);
 
 fs.rmSync(TMP, { recursive: true, force: true });
 console.log(`\n證據與發布 × 帳本端到端：${passed} 項全部通過`);

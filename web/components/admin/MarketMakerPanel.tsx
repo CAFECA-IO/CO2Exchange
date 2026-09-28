@@ -35,7 +35,7 @@ type Config = {
 type Resp = { chainId: number; simulationAllowed: boolean; simulationChains: number[]; config: Config; status: Status | null; alive: boolean; ageSec: number | null; sameChain: boolean };
 
 const FIELDS: { key: keyof Config; label: string; unit: string; hint: string }[] = [
-  { key: "capitalTWD", label: "撥款上限", unit: "元", hint: "累計撥給做市帳戶的結算幣不超過這個數。虧掉的不會自動補" },
+  { key: "capitalTWD", label: "撥款上限", unit: "元", hint: "累計撥給做市帳戶的新台幣（營運 Safe 確認的入金）不超過這個數。虧掉的不會自動補" },
   { key: "maxInventoryTonnes", label: "持有部位上限", unit: "噸", hint: "含掛在簿子上的賣單" },
   { key: "maxOrderTonnes", label: "單筆報價上限", unit: "噸", hint: "" },
   { key: "levels", label: "每側檔數", unit: "檔", hint: "1–10" },
@@ -136,8 +136,8 @@ export function MarketMakerPanel() {
           <Button
             variant="secondary" disabled={!!busy}
             onClick={() => { if (window.confirm(s?.venue === "ledger"
-              ? "撤回所有報價並停止做市？做市帳戶錢包裡還沒存入的結算幣會轉回營運金鑰；已存進帳本合約的現金與持有的碳權留在帳本裡，要憑餘額證據提領。"
-              : "撤回所有報價，並把做市帳戶的結算幣全部轉回營運金鑰？持有的碳權會留在做市帳戶。")) act("收回資金", { action: "recall" }); }}
+              ? "撤回所有報價並停止做市？做市帳戶在帳本裡的新台幣會全部申請出金到公司帳戶，下一期承諾上鏈後由營運 Safe 確認；持有的碳權留在做市帳戶。"
+              : "撤回所有報價，並把做市帳戶的新台幣全部申請出金到公司帳戶？持有的碳權會留在做市帳戶。")) act("收回資金", { action: "recall" }); }}
           >收回資金</Button>
         </div>
         {r.config.capitalTWD <= 0 && !r.config.enabled && <p className="mt-2 text-xs text-ink-300">先在下方設定撥款上限，才能啟動。</p>}

@@ -75,7 +75,7 @@ export function PriceSpark({ points, label, height = 64 }: Props) {
         <span className="text-ink-300">{hover != null ? day(shown.t) : "近一年走勢"}</span>
         <span className="tabular-nums text-ink-50">
           <span className="font-mono">{money(shown.price)}</span>
-          <span className="ml-0.5 text-[10px] text-ink-300">mTWD / 噸</span>
+          <span className="ml-0.5 text-[10px] text-ink-300">元 / 噸</span>
           {hover == null && (
             <span className={`ml-2 font-mono ${change >= 0 ? "text-up" : "text-down"}`}>
               {change >= 0 ? "+" : ""}{(change * 100).toFixed(1)}%
@@ -90,7 +90,7 @@ export function PriceSpark({ points, label, height = 64 }: Props) {
         style={{ height: g.H }}
         className="w-full touch-none"
         role="img"
-        aria-label={`${label}：近一年成交均價走勢，起 ${money(g.xy[0].price)}、最高 ${money(g.max.price)}、最低 ${money(g.min.price)}、最新 ${money(g.last.price)} mTWD / 噸`}
+        aria-label={`${label}：近一年成交均價走勢，起 ${money(g.xy[0].price)}、最高 ${money(g.max.price)}、最低 ${money(g.min.price)}、最新 ${money(g.last.price)} 元 / 噸`}
         onPointerLeave={() => setHover(null)}
         onPointerMove={(e) => {
           const r = e.currentTarget.getBoundingClientRect();

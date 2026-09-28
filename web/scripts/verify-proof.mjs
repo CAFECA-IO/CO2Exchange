@@ -9,7 +9,8 @@
 // 每一項證據：
 //   1. 回鏈上找 anchor 指的那筆交易、那個 log，確認是那份合約發出的 Committed 事件，取出 field 那個 root
 //   2. 從證明檔裡的**原像**（ABI 型別與值、或整段編碼）自己算葉子，依 scheme 與 siblings／path 算回 root
-//   3. 兩者相等才算通過；託管證據另外比對 root 的兩個總額，並列出託管合約現在實際持有的結算幣
+//   3. 兩者相等才算通過；託管證據另外比對 root 的兩個總額，並列出帳本合約現在記帳的 TWD
+//      （規則第 4 版：真的新台幣在信託專戶；鏈上的 TWD 只存在帳本合約裡、不能轉出，總量＝營運方宣稱的專戶餘額）
 //
 // 報告（--out）只含雜湊與鏈上原始資料，不含證明檔的內容，任何人拿報告都能對任一節點重做一次。
 import fs from "node:fs";
@@ -30,7 +31,7 @@ const COMMITTED = parseAbi([
   "struct CommitInput { bytes32 prev; uint64 epoch; bytes32 logRoot; bytes32 balanceRoot; bytes32 registryRoot; bytes32 identityRoot; uint256 totalKg; uint256 totalCash; bytes32 totalsHash; uint64 upToBlock; uint64 lastSeq; uint16 rulesVersion; }",
   "event Committed(uint64 indexed epoch, bytes32 anchor, CommitInput commitment)",
 ]);
-const ERC20 = parseAbi(["function balanceOf(address) view returns (uint256)"]);
+const ERC20 = parseAbi(["function balanceOf(address) view returns (uint256)", "function totalSupply() view returns (uint256)"]);
 
 // ── 三種 scheme（和 docs/proof-schemes.md 逐字相同）──
 const abiEnc = (types, values) => encodeAbiParameters(types.map((type) => ({ type })), values);
@@ -90,14 +91,17 @@ for (const [i, p] of (P.proofs ?? []).entries()) {
         const sib = { hash: s.hash, kg: B(s.kg), cash: B(s.cash) };
         n = (B(p.path) >> BigInt(k)) & 1n ? sumNode(sib, n) : sumNode(n, sib);
       });
-      const held = await client.readContract({ address: p.custody.token, abi: ERC20, functionName: "balanceOf", args: [p.custody.holder] });
+      const [held, supply] = await Promise.all([
+        client.readContract({ address: p.custody.token, abi: ERC20, functionName: "balanceOf", args: [p.custody.holder] }),
+        client.readContract({ address: p.custody.token, abi: ERC20, functionName: "totalSupply" }),
+      ]);
       r.ok = n.hash === on.root && n.kg === on.commitment.totalKg && n.cash === on.commitment.totalCash
         && p.leaf.account.toLowerCase() === P.account.toLowerCase() && B(p.leaf.epoch) === on.commitment.epoch;
       r.detail = {
         epoch: String(on.commitment.epoch), root: on.root, computed: n.hash,
         totals: { kg: String(n.kg), cash: String(n.cash), committedKg: String(on.commitment.totalKg), committedCash: String(on.commitment.totalCash) },
         yourLeaf: { kg: String(p.leaf.kg), cash: String(p.leaf.cash), requested: String(p.leaf.requested), settled: String(p.leaf.settled) },
-        custodyHeldNow: String(held), solvent: held >= on.commitment.totalCash,
+        custodyHeldNow: String(held), tokenSupply: String(supply), onlyInLedger: held === supply, solvent: held >= on.commitment.totalCash,
       };
       custodyAssetsRoot = p.leaf.assetsRoot;
     } else if (p.type === "credit") {
@@ -128,7 +132,7 @@ const ok = results.length > 0 && results.every((r) => r.ok);
 const label = { custody: "託管（持有）", credit: "碳權批次", identity: "身分", event: "事件" };
 for (const r of results) {
   const d = r.detail ?? {};
-  const extra = r.type === "custody" ? `第 ${d.epoch} 期；碳權 ${d.yourLeaf?.kg} kg、結算幣 ${d.yourLeaf?.cash}；合約現在持有 ${d.custodyHeldNow}（${d.solvent ? "足以償付" : "⚠️ 少於承諾總額"}）`
+  const extra = r.type === "custody" ? `第 ${d.epoch} 期；碳權 ${d.yourLeaf?.kg} kg、新台幣 ${d.yourLeaf?.cash}（最小單位）；帳本合約記帳的 TWD ${d.custodyHeldNow}（${d.solvent ? "不少於承諾總額" : "⚠️ 少於承諾總額"}${d.onlyInLedger === false ? "；⚠️ 有 TWD 不在帳本合約裡" : ""}）`
     : r.type === "credit" ? `批次 #${d.batchId} ${d.kg} kg` : r.type === "event" ? `第 ${d.seq} 筆 ${d.kind}（第 ${d.epoch} 期）` : r.type === "identity" ? `第 ${d.epoch} 期` : "";
   console.log(`${r.ok ? "✓" : "✗"} ${label[r.type] ?? r.type}　${extra}${r.error ? `　${r.error}` : ""}`);
 }

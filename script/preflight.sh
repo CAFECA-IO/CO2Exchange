@@ -3,14 +3,14 @@
 #
 #   ./script/preflight.sh                        # 預設 http://127.0.0.1:28545
 #   ./script/preflight.sh http://211.22.118.149:8545
-#   RPC_URL=... SETTLEMENT_TOKEN=0x... ./script/preflight.sh
+#   RPC_URL=... ./script/preflight.sh
 #
 # 檢查項目：
 #   1. RPC 連線、chainId、節點版本、目前高度
 #   2. EIP-5656（MCOPY）—— solc 0.8.26 + evm_version=cancun 產出的碼會用到
 #   3. EIP-1559 —— 決定 forge script 要不要加 --legacy
 #   4. eth_getLogs 單次可讀的區塊範圍 —— 帳本的鏡像與重播靠它
-#   5. 結算幣（SETTLEMENT_TOKEN）—— 有設的話確認那是個 ERC-20
+#   5. 新台幣入出金 —— 記帳 TWD 由部署建立；營運 Safe 持有人的金鑰在不在這台機器上（只看有沒有，不印）
 #   6. 部署者餘額與公開鏈的金鑰檢查
 #
 # 只印位址，不印任何私鑰。
@@ -77,7 +77,7 @@ fi
 echo
 
 # --- 4. eth_getLogs 範圍 -------------------------------------------------
-# 帳本的鏡像（入金、提領、金鑰）與重播驗證都靠 eth_getLogs。Boltchain 單次上限 10,000 個區塊，
+# 帳本的鏡像（入金、出金、金鑰）與重播驗證都靠 eth_getLogs。Boltchain 單次上限 10,000 個區塊，
 # web/lib/ledger/chain.ts 的 getLogsPaged 會自動分段；這裡只是讓人知道這條鏈的上限。
 echo "[4/6] eth_getLogs"
 if [ -n "${BLOCK:-}" ] && [ "$BLOCK" -gt 0 ] 2>/dev/null; then
@@ -93,20 +93,15 @@ else
 fi
 echo
 
-# --- 5. 結算幣 -----------------------------------------------------------
-echo "[5/6] 結算幣"
-if [ -n "${SETTLEMENT_TOKEN:-}" ]; then
-  if [ "$(cast code "$SETTLEMENT_TOKEN" --rpc-url "$RPC" 2>/dev/null)" = "0x" ]; then
-    bad "SETTLEMENT_TOKEN=${SETTLEMENT_TOKEN} 上面沒有合約"; FAIL=1
-  else
-    SYM=$(cast call "$SETTLEMENT_TOKEN" "symbol()(string)" --rpc-url "$RPC" 2>/dev/null)
-    DEC=$(cast call "$SETTLEMENT_TOKEN" "decimals()(uint8)" --rpc-url "$RPC" 2>/dev/null)
-    if [ -n "$DEC" ]; then ok "${SYM:-?}，${DEC} 位小數（${SETTLEMENT_TOKEN}）"
-    else bad "${SETTLEMENT_TOKEN} 不像 ERC-20（讀不到 decimals）"; FAIL=1; fi
-  fi
-  echo "  外部結算幣沒有鑄幣權：做市與模擬人物的撥款要由部署者事先持有。"
+# --- 5. 新台幣入出金 -----------------------------------------------------
+echo "[5/6] 新台幣入出金"
+ok "記帳 TWD 由帳本合約部署時建立（LedgerTWD：只在帳本合約裡、不能轉出），不需要外部代幣"
+[ -n "${SETTLEMENT_TOKEN:-}" ] && warn "SETTLEMENT_TOKEN 已經不用了，忽略"
+GOV_FILE=${GOV_FILE:-$(dirname "$0")/../.governance.env}
+if [ -f "$GOV_FILE" ] && grep -q '^OPERATOR_OWNER_[0-9]_PK=0x' "$GOV_FILE"; then
+  ok "這台機器有營運 Safe 持有人的金鑰（$(grep -c '^OPERATOR_OWNER_[0-9]_PK=0x' "$GOV_FILE") 把）：可以在這裡用 npm run fiat 確認入出金"
 else
-  ok "沒設 SETTLEMENT_TOKEN —— 部署腳本會一起部署 MockTWD（只適合展示鏈）"
+  warn "這台機器沒有營運 Safe 持有人的金鑰：入出金確認要交給持有人（npm run fiat -- … --print 產生要簽的內容）"
 fi
 echo
 

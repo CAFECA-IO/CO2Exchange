@@ -2,15 +2,13 @@
 pragma solidity 0.8.26;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {MerkleSumTree} from "./MerkleSumTree.sol";
-import {LedgerMerkle} from "./LedgerMerkle.sol";
+import {LedgerTWD} from "./LedgerTWD.sol";
 
 /// @title Ledger
-/// @notice 交易所在鏈上的全部：**每一期的壓縮證據**、授權金鑰清單、結算幣託管、碳權請求權登記。
+/// @notice 交易所在鏈上的全部：**每一期的壓縮證據**、授權金鑰清單、新台幣入出金的審計紀錄。
 ///
-/// ## 鏈上只放證據（設計 v4，2026-09-28 定案）
+/// ## 鏈上只放證據（設計 v4，2026-09-28 定案；新台幣版 2026-09-29）
 ///
 /// 登錄簿（轄區、專案、核發、註銷憑證、對帳報告）、身分、委託單、成交，**全部在鏈下帳本**
 /// （`web/lib/ledger/`）。這份合約每小時收一筆承諾：
@@ -20,28 +18,28 @@ import {LedgerMerkle} from "./LedgerMerkle.sol";
 ///               totalKg, totalCash, totalsHash, upToBlock, lastSeq, rulesVersion )
 /// ```
 ///
-/// 任何人拿到帳本（分層公開：登錄簿全文公開、個人資料給本人、完整紀錄給主管機關與查核機構）
-/// 都能重播出同一串 anchor。合約負責的是「提交過就改不掉」，不負責「算得對不對」——
+/// 任何人拿到帳本都能重播出同一串 anchor。合約負責的是「提交過就改不掉」，不負責「算得對不對」——
 /// 那由重播驗證。
 ///
-/// ## 合約還負責的四件事
+/// ## 合約還負責的兩件事
 ///
 ///   1. **授權金鑰清單**。帳本裡的核發、身分、凍結…都要由有授權的金鑰簽。清單如果放在帳本裡，
-///      營運方就能在帳本裡自己加一個假的查驗機構而重播照樣自洽。所以清單在這裡，由國家 Safe 管，
-///      重播從這份合約的事件讀出每一把金鑰在哪一段區塊區間有效。
-///   2. **結算幣託管**。TWDC 是別人發行的鏈上資產，存入與提領是真的轉帳；
-///      承諾的 `totalCash` 不得超過合約實際持有——這是合約唯一當場驗得了的償付能力條件。
-///   3. **逃生門**。超過 72 小時沒有新承諾（時間，不是期數：每小時一期的話「3 期」只有 3 小時，
-///      一次節點維護就會誤觸），任何人憑最後一期的證據提領結算幣，沒有任何角色關得掉。
-///   4. **碳權請求權登記**。碳權不在鏈上，所以逃生時不是「領走」，而是憑證據在這裡**登記請求權**：
-///      合約驗過持有與批次後留下改不掉的紀錄，實際移轉由接手單位（主管機關）依紀錄辦理——
-///      這和法規「移轉由中央主管機關執行」（溫室氣體減量額度交易拍賣及移轉管理辦法 §26）同一個方向。
+///      營運方就能在帳本裡自己加一個假的查驗機構而重播照樣自洽。所以清單在這裡，由國家 Safe 管。
+///   2. **新台幣的審計紀錄**。使用者的錢是真的新台幣，存在信託專戶；鏈上沒有任何人領得走的東西。
+///      營運 Safe 確認一筆入金就鑄同額的 `LedgerTWD` 給這份合約自己，匯出一筆出金就銷毀同額。
+///      於是 `cash.totalSupply()` 是營運方對「信託專戶裡屬於使用者的錢」的公開聲明，
+///      每一期承諾的 `totalCash` 不得超過它——這是合約唯一當場驗得了的償付能力條件。
+///      出金另有一道上限：只能銷毀**使用者自己簽過提領請求**、而且已經進了承諾的金額。
+///
+/// ## 沒有鏈上提領、沒有逃生門
+///
+/// 平台上的新台幣與碳權都**提不出鏈外錢包**。營運方停擺時，鏈上留下的是證據：最後一期承諾、
+/// 每個人的葉子、授權清單與入出金紀錄。返還依契約與信託安排，以這些證據為準。
 contract Ledger is AccessControl {
-    using SafeERC20 for IERC20;
 
     bytes32 public constant SOVEREIGN_ROLE = keccak256("SOVEREIGN_ROLE");
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
-    /// @dev 提交承諾的服務金鑰。只能提交——關不掉逃生門、動不了資產、改不了授權清單。
+    /// @dev 提交承諾的服務金鑰。只能提交——鑄不了、銷不了、改不了授權清單。
     bytes32 public constant COMMITTER_ROLE = keccak256("COMMITTER_ROLE");
 
     /// @dev 帳本裡的授權角色（對應 web/lib/ledger/authorities.ts 的 ROLES）。
@@ -54,11 +52,8 @@ contract Ledger is AccessControl {
     bytes32 public constant AUTH_AUDITOR = keccak256("AUDITOR");
     bytes32 public constant AUTH_RECEIPT_SIGNER = keccak256("RECEIPT_SIGNER");
 
-    uint256 public constant ESCAPE_AFTER = 72 hours;
-    /// @dev 登錄簿葉子的型別標籤（web/lib/ledger/trees.ts 的 TAG）
-    uint8 internal constant TAG_BATCH = 3;
-
-    IERC20 public immutable cash;
+    /// @notice 新台幣的記帳代幣。建構時由這份合約部署，唯一的持有人是這份合約。
+    LedgerTWD public immutable cash;
 
     struct Commitment {
         bytes32 logRoot;
@@ -84,25 +79,21 @@ contract Ledger is AccessControl {
     ///      不必在過去的區塊呼叫 Safe 的 isValidSignature（那需要 archive 節點）。
     mapping(bytes32 => uint8) public thresholdOf;
 
-    bool public withdrawalsEnabled;
-    /// @dev 這個帳戶從合約領走的**累計**總額（一般提領＋逃生提領）。只增不減，不分期別——
-    ///      和葉子裡的兩個累計（請求、已領）比，怎麼換期、鏡像晚了幾塊，都不會領到第二次。
+    /// @dev 這個帳戶**累計**出金（銷毀）多少。只增不減，不分期別——和葉子裡的提領請求累計比，
+    ///      怎麼換期、鏡像晚了幾塊，同一筆請求都不會出金第二次。
     mapping(address => uint256) public withdrawnTotal;
-    mapping(address => mapping(uint64 => mapping(uint256 => uint256))) public claimedKg;
+    /// @dev 用過的銀行交易參考號（雜湊）。同一筆匯款不能入帳兩次、也不能拿來銷兩次。
+    mapping(bytes32 => bool) public bankRefUsed;
 
     event AuthorityGranted(bytes32 indexed role, address indexed account);
     event AuthorityRevoked(bytes32 indexed role, address indexed account);
     event ThresholdSet(bytes32 indexed role, uint8 threshold);
     /// @dev 整包承諾內容一起發出來：重播的人不必再逐期呼叫 `commitmentOf`。
     event Committed(uint64 indexed epoch, bytes32 anchor, CommitInput commitment);
-    event CashDeposited(address indexed account, uint256 amount);
-    event CashWithdrawn(address indexed account, uint256 amount, uint64 epoch);
-    event CashShortfall(address indexed account, uint256 owed, uint256 paid, uint64 epoch);
-    event CreditClaimed(
-        address indexed account, uint256 indexed batchId, uint256 amountKg, uint64 epoch,
-        uint256 projectId, uint16 vintageYear, bytes32 serialHash
-    );
-    event WithdrawalsToggled(bool enabled);
+    /// @notice 一筆新台幣入金已到信託專戶，記到這個帳戶名下（帳本以 txHash + logIndex 鏡像成 cashDeposit）。
+    event CashDeposited(address indexed account, uint256 amount, bytes32 indexed bankRef);
+    /// @notice 一筆新台幣出金已匯出（帳本鏡像成 cashWithdraw，從待提領銷帳）。
+    event CashWithdrawn(address indexed account, uint256 amount, uint64 epoch, bytes32 indexed bankRef);
 
     error ZeroAmount();
     error BadThreshold(uint8 threshold);
@@ -112,16 +103,16 @@ contract Ledger is AccessControl {
     error BadUpToBlock(uint64 upToBlock, uint256 current);
     error BadLastSeq(uint64 given, uint64 previous);
     error Insolvent(uint256 owed, uint256 held);
-    error WithdrawalsDisabled();
+    error BankRefUsed(bytes32 bankRef);
     error NotLatestEpoch(uint64 latest, uint64 got);
     error UnknownEpoch(uint64 epoch);
     error BadProof();
     error SumMismatch(uint256 expected, uint256 got);
     error NothingLeft(address account, uint64 epoch);
 
-    constructor(address cash_, address admin, address sovereign, address operator) {
-        if (cash_ == address(0) || admin == address(0) || sovereign == address(0) || operator == address(0)) revert ZeroAddress();
-        cash = IERC20(cash_);
+    constructor(address admin, address sovereign, address operator) {
+        if (admin == address(0) || sovereign == address(0) || operator == address(0)) revert ZeroAddress();
+        cash = new LedgerTWD();
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(SOVEREIGN_ROLE, sovereign);
         _grantRole(OPERATOR_ROLE, operator);
@@ -215,32 +206,20 @@ contract Ledger is AccessControl {
         return _commitments[e];
     }
 
-    // ───────────────────────── 結算幣 ─────────────────────────
+    // ───────────────────────── 新台幣入出金 ─────────────────────────
 
-    /// @notice 把結算幣存進交易所。這是鏈上轉帳；帳本以這個事件（txHash + logIndex）記一筆 cashDeposit。
-    function depositCash(uint256 amount) external {
+    /// @notice 營運 Safe 確認一筆新台幣入金已到信託專戶：鑄同額 TWD 給這份合約，記在帳戶名下。
+    /// @param bankRef 銀行交易參考號的雜湊（明文留在營運方與信託銀行）。同一個不能用兩次。
+    function creditDeposit(address account, uint256 amount, bytes32 bankRef) external onlyRole(OPERATOR_ROLE) {
+        if (account == address(0)) revert ZeroAddress();
         if (amount == 0) revert ZeroAmount();
-        cash.safeTransferFrom(msg.sender, address(this), amount);
-        emit CashDeposited(msg.sender, amount);
-    }
-
-    // ───────────────────────── 逃生門 ─────────────────────────
-
-    function escapeActive() public view returns (bool) {
-        uint64 at = _commitments[epoch].committedAt;
-        if (at == 0) return false;
-        return block.timestamp > uint256(at) + ESCAPE_AFTER;
-    }
-
-    function escapeIn() external view returns (uint256) {
-        uint64 at = _commitments[epoch].committedAt;
-        if (at == 0) return type(uint256).max;
-        uint256 t = uint256(at) + ESCAPE_AFTER;
-        return block.timestamp >= t ? 0 : t - block.timestamp;
+        _useRef(bankRef);
+        cash.mint(amount);
+        emit CashDeposited(account, amount, bankRef);
     }
 
     /// @notice 帳戶在最新一期餘額樹裡的那片葉子與路徑。
-    /// @dev `leafRequested`／`leafSettled` 是葉子裡的提領累計（規則第 3 版，見 MerkleSumTree.leafWithdrawals）。
+    /// @dev `leafRequested`／`leafSettled` 是葉子裡的提領累計（見 MerkleSumTree.leafWithdrawals）。
     struct BalanceProof {
         uint64 proofEpoch;
         bytes32 assetsRoot;
@@ -252,91 +231,33 @@ contract Ledger is AccessControl {
         uint256 path;
     }
 
-    /// @notice 憑最新一期的證據領回結算幣。
+    /// @notice 營運 Safe 確認一筆新台幣出金已匯出：銷毀同額 TWD。
     ///
-    /// 兩種上限，都用累計比，不用「這一期還剩多少」：
-    ///   · **一般提領**：只能領**已經請求提領**的部分——`leafRequested − withdrawnTotal`。
-    ///     使用者先在帳本裡簽提領請求，帳本把那筆錢移到「待提領」（不能再拿去交易），
-    ///     下一期承諾上鏈之後才領得到。這樣帳本裡還在用的錢，永遠不會同時被領走（沒有重複花用）。
-    ///   · **逃生提領**（72 小時沒有新承諾）：帳本已經凍結，可以領全部欠款——
-    ///     `leafCash + leafSettled − withdrawnTotal`（葉子之後才領走的，只可能是當時的待提領，已含在 leafCash 裡）。
-    function withdrawCash(uint256 amount, BalanceProof calldata p) external {
-        bool escape = escapeActive();
-        if (!withdrawalsEnabled && !escape) revert WithdrawalsDisabled();
+    /// 上限用累計比：`leafRequested − withdrawnTotal`。也就是**只能銷毀使用者自己簽過提領請求、
+    /// 而且那筆請求已經進了最新一期承諾**的金額——營運方不能憑空把某人的錢「出金」掉，
+    /// 帳本裡還在用的錢也不會同時被出金。
+    function settleWithdrawal(address account, uint256 amount, bytes32 bankRef, BalanceProof calldata p)
+        external
+        onlyRole(OPERATOR_ROLE)
+    {
         if (amount == 0) revert ZeroAmount();
-        _checkBalance(msg.sender, p);
-
-        uint256 cap = escape ? p.leafCash + p.leafSettled : p.leafRequested;
-        uint256 already = withdrawnTotal[msg.sender];
-        if (already >= cap) revert NothingLeft(msg.sender, p.proofEpoch);
-        uint256 owed = cap - already;
+        _checkBalance(account, p);
+        uint256 already = withdrawnTotal[account];
+        if (already >= p.leafRequested) revert NothingLeft(account, p.proofEpoch);
+        uint256 owed = p.leafRequested - already;
         if (amount > owed) revert SumMismatch(owed, amount);
-
-        uint256 pay = amount;
-        if (escape) {
-            // 逃生模式下池子不夠時不 revert：能領多少領多少，差額留在鏈上作為請求補足的依據
-            uint256 available = cash.balanceOf(address(this));
-            if (available < pay) {
-                emit CashShortfall(msg.sender, amount, available, p.proofEpoch);
-                pay = available;
-            }
-        }
-        if (pay == 0) revert NothingLeft(msg.sender, p.proofEpoch);
-        withdrawnTotal[msg.sender] = already + pay;
-        cash.safeTransfer(msg.sender, pay);
-        emit CashWithdrawn(msg.sender, pay, p.proofEpoch);
+        _useRef(bankRef);
+        withdrawnTotal[account] = already + amount;
+        cash.burn(amount);
+        emit CashWithdrawn(account, amount, p.proofEpoch, bankRef);
     }
 
-    /// @notice 批次在登錄簿樹裡的那片葉子（欄位與 web/lib/ledger/trees.ts 的 batchContent 相同）。
-    struct BatchLeaf {
-        uint256 id;
-        uint256 projectId;
-        uint64 monitoringStart;
-        uint64 monitoringEnd;
-        uint16 vintageYear;
-        bytes32 serialHash;
-        bytes32 reportHash;
-        address verifier;
-        uint64 issuedAt;
-        uint256 issuedKg;
-        uint256 retiredKg;
-        bool frozen;
+    function _useRef(bytes32 bankRef) internal {
+        if (bankRef == bytes32(0) || bankRefUsed[bankRef]) revert BankRefUsed(bankRef);
+        bankRefUsed[bankRef] = true;
     }
 
-    struct CreditProof {
-        uint256 batchKg; // 這個帳戶在這一批的持有（資產小樹的葉子）
-        bytes32[] assetSiblings;
-        uint256 assetPath;
-        BatchLeaf batch;
-        bytes32[] registrySiblings;
-        uint256 registryPath;
-    }
-
-    /// @notice 碳權請求權登記。**不轉任何東西**——碳權不在鏈上。
-    /// @dev 驗三件事：帳戶在最新一期餘額樹裡、這一批在他的資產小樹裡、這一批確實在同一期的登錄簿裡。
-    ///      通過後留下一筆改不掉、帶時間的 `CreditClaimed`，接手單位依此辦理移轉。
-    ///      同一份證據累計登記不能超過持有量。
-    function claimCredits(uint256 amountKg, BalanceProof calldata p, CreditProof calldata cp) external {
-        bool escape = escapeActive();
-        if (!withdrawalsEnabled && !escape) revert WithdrawalsDisabled();
-        if (amountKg == 0) revert ZeroAmount();
-        _checkBalance(msg.sender, p);
-
-        bytes32 assetLeaf = MerkleSumTree.assetLeaf(cp.batch.id, cp.batchKg);
-        if (MerkleSumTree.computeAssetRoot(assetLeaf, cp.assetSiblings, cp.assetPath) != p.assetsRoot) revert BadProof();
-
-        // 靜態 struct 的 abi.encode ＝ 各欄位依序編碼，和 trees.ts 的 batchContent 相同
-        bytes32 content = keccak256(abi.encode(TAG_BATCH, cp.batch));
-        bytes32 root = LedgerMerkle.computeRoot(LedgerMerkle.leaf(content), cp.registrySiblings, cp.registryPath);
-        if (root != _commitments[p.proofEpoch].registryRoot) revert BadProof();
-
-        uint256 already = claimedKg[msg.sender][p.proofEpoch][cp.batch.id];
-        if (already + amountKg > cp.batchKg) revert SumMismatch(cp.batchKg - already, amountKg);
-        claimedKg[msg.sender][p.proofEpoch][cp.batch.id] = already + amountKg;
-        emit CreditClaimed(msg.sender, cp.batch.id, amountKg, p.proofEpoch, cp.batch.projectId, cp.batch.vintageYear, cp.batch.serialHash);
-    }
-
-    /// @dev 只接受**最新**一期的證據：舊 root 上的餘額可能已經花掉了。
+    /// @dev 只接受**最新**一期的證據：舊 root 上的請求可能已經被退回。
     function _checkBalance(address account, BalanceProof calldata p) internal view {
         if (p.proofEpoch != epoch) revert NotLatestEpoch(epoch, p.proofEpoch);
         Commitment storage c = _commitments[p.proofEpoch];
@@ -349,15 +270,9 @@ contract Ledger is AccessControl {
         if (root.cash != c.totalCash) revert SumMismatch(c.totalCash, root.cash);
     }
 
-    // ───────────────────────── 開關與查詢 ─────────────────────────
+    // ───────────────────────── 查詢 ─────────────────────────
 
-    /// @dev 正常提領的開關在營運角色手上。逃生模式不受它影響，也沒有任何角色關得掉。
-    function setWithdrawalsEnabled(bool enabled) external onlyRole(OPERATOR_ROLE) {
-        withdrawalsEnabled = enabled;
-        emit WithdrawalsToggled(enabled);
-    }
-
-    /// @notice 結算幣的償付能力：帳本最新一期宣稱欠多少、合約實際持有多少。
+    /// @notice 新台幣的償付能力：帳本最新一期宣稱欠多少、鏈上記帳代幣（＝營運方宣稱的信託餘額）多少。
     function solvency() external view returns (uint256 owedCash, uint256 heldCash, uint64 latestEpoch, uint64 committedAt) {
         Commitment storage c = _commitments[epoch];
         return (c.totalCash, cash.balanceOf(address(this)), epoch, c.committedAt);

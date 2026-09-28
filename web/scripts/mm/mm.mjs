@@ -10,7 +10,7 @@
 //   · 做市帳戶只被動報價：在參考價兩側掛買單與賣單，等別人來成交；絕不主動吃單，
 //     絕不與平台控制的帳戶成交（見 strategy.mjs 開頭）。
 //   · **報價是簽名委託單**：做市帳戶是一般 EOA，簽的是和使用者相同的 EIP-712（PlaceOrder／CancelOrder），
-//     寫進鏈下帳本、由引擎撮合，查核時用同一條 ecrecover 驗。只有入金是鏈上交易（把結算幣存進帳本合約）。
+//     寫進鏈下帳本、由引擎撮合，查核時用同一條 ecrecover 驗。只有撥款與收回是鏈上交易（營運 Safe 的入金與出金確認）。
 //   · 風控：撥款上限、持有部位上限、單筆上限、報價上下限、單日停損。碰到停損就撤掉所有
 //     報價並停下來，等人按「恢復」。
 //   · 模擬模式（只在 SIMULATION_CHAINS 列出的測試鏈上可以開）：另起模擬器子行程（ledger-sim.mjs），
@@ -19,9 +19,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { createPublicClient, createWalletClient, defineChain, http, keccak256, parseAbi, toBytes, toHex } from "viem";
+import { createPublicClient, createWalletClient, defineChain, http, keccak256, toBytes } from "viem";
 import { english, generateMnemonic, mnemonicToAccount, privateKeyToAccount } from "viem/accounts";
-import { KeyError, keyring, parseEnvFile, setting } from "../lib/keys.mjs";
+import { KeyError, keyring, operatorOwnerAccounts, parseEnvFile, setting } from "../lib/keys.mjs";
 import {
   UNIT, bestExternal, equityOf, normalizeConfig, planRequote, platformSet,
   referencePrice, riskCheck, spreadWarnings, targetQuotes, taipeiDay,
@@ -29,7 +29,8 @@ import {
 
 const { openStore } = await import("../../lib/ledger/store.ts");
 const { createAgent, wouldMatch } = await import("../../lib/ledger/agent.ts");
-const { readAuthorities, readCommitments, LEDGER_ABI, PROOF_ABI } = await import("../../lib/ledger/chain.ts");
+const { readAuthorities, readCommitments, PROOF_ABI } = await import("../../lib/ledger/chain.ts");
+const { bankRefOf, creditDepositCall, execOperatorSafe, settleWithdrawalCall } = await import("../../lib/ledger/fiat.ts");
 const { snapshotAt, balanceProofArgs } = await import("../../lib/ledger/proofs.ts");
 const { isActive, tradeBpsOf } = await import("../../lib/ledger/engine.ts");
 
@@ -80,9 +81,8 @@ const pub = createPublicClient({ chain, transport: http(RPC), pollingInterval: L
 const depFile = process.env.DEPLOYMENT_FILE ?? path.resolve(process.cwd(), "..", "deployments", `${chainId}.json`);
 if (!fs.existsSync(depFile)) { console.error(`找不到部署檔 ${depFile}`); process.exit(1); }
 const D = JSON.parse(fs.readFileSync(depFile, "utf8"));
-if (D.ledgerVersion !== 2) {
-  // 舊的全合約部署（Listing）的做市版本已經移除（第 5 期）。要跑舊版請 checkout 1eceb80 之前的版本。
-  console.error("這個部署不是帳本 v2（script/DeployLedger.s.sol）。做市程式只支援帳本版。");
+if ((D.ledgerVersion ?? 0) < 3) {
+  console.error("這個部署不是目前版本的帳本（需要 ledgerVersion 3：新台幣入出金版）。請重新部署：bash script/bootstrap.sh deploy");
   process.exit(1);
 }
 const DEPLOYMENT_KEY = `${chainId}:${D.ledger}:${D.deployedAt ?? ""}`.toLowerCase();
@@ -98,7 +98,7 @@ let op, identitySigner, receiptSigner;
 try {
   const ring = keyring({ chainId, isLocal: LOCAL });
   for (const n of ring.notes) log(n);
-  // 營運金鑰：撥款給做市帳戶（鑄造或轉帳）、代付 gas
+  // 營運金鑰：代付營運 Safe 交易的 gas（它不是 Safe 持有人，只負責送出）
   op = privateKeyToAccount(ring.require("DEPLOYER_PK", "RELAYER_PK").pk);
   // 身分驗證金鑰：替做市帳戶登記身分（帳本的 identity 事件，門檻 1 的單一金鑰）
   identitySigner = privateKeyToAccount(ring.require("IDENTITY_VERIFIER_PK").pk);
@@ -119,7 +119,9 @@ function mmMnemonic() {
   return m;
 }
 const mm = mnemonicToAccount(mmMnemonic(), { addressIndex: 0 });
-const mmClient = createWalletClient({ account: mm, chain, transport: http(RPC) });
+/// 營運 Safe 持有人（撥款＝確認一筆公司自有資金的入金；收回＝確認一筆出金）。
+/// 外部鏈上沒有的話，改成提醒營運方用 npm run fiat 手動確認。
+const owners = await operatorOwnerAccounts({ isLocal: LOCAL });
 const opClient = createWalletClient({ account: op, chain, transport: http(RPC) });
 
 // ───────────────────────── 帳本 ─────────────────────────
@@ -135,74 +137,29 @@ const authorities = async () => {
 };
 const agent = createAgent({ store, client: pub, domains, receiptSigner, authorities, fromBlock: BigInt(D.deployedAtBlock ?? 0) });
 
-const erc20Abi = parseAbi([
-  "function balanceOf(address) view returns (uint256)",
-  "function allowance(address, address) view returns (uint256)",
-  "function approve(address, uint256) returns (bool)",
-  "function transfer(address, uint256) returns (bool)",
-  "function mint(address, uint256)",
-]);
+// ───────────────────────── 鏈上交易（只有營運 Safe 的入出金確認） ─────────────────────────
 
-// ───────────────────────── 鏈上交易（只有入金） ─────────────────────────
-
-/// 每筆都問鏈上的 pending nonce：營運金鑰同時被模擬器用著，本地計數一定會落後。
-async function send(client, account, params, label) {
-  const { request } = await pub.simulateContract({ ...params, account });
-  const nonce = await pub.getTransactionCount({ address: account.address, blockTag: "pending" });
-  const hash = await client.writeContract({ ...request, nonce });
-  const rc = await pub.waitForTransactionReceipt({ hash, retryCount: 5 });
-  if (rc.status !== "success") throw new Error(`${label} 交易失敗 ${hash}`);
+/// 營運 Safe 執行一筆入出金確認。持有人金鑰不在這台機器上時回 null，由呼叫端提醒營運方手動確認。
+async function viaOperatorSafe(call, label) {
+  if (owners.length === 0) return null;
+  const hash = await execOperatorSafe({ pub, sender: opClient, safe: D.operatorSafe, to: call.to, data: call.data, owners });
+  log(`${label}：營運 Safe ${hash}`);
   return hash;
 }
-async function sendValue(to, value) {
-  const nonce = await pub.getTransactionCount({ address: op.address, blockTag: "pending" });
-  const hash = await opClient.sendTransaction({ to, value, nonce });
-  await pub.waitForTransactionReceipt({ hash, retryCount: 5 });
-}
 
-const GAS_PRICE = await pub.getGasPrice().catch(() => 0n);
-// 做市帳戶只有入金要付 gas（approve＋depositCash），比舊版每張報價一筆交易少得多
-const GAS_TOPUP = (() => { const a = BigInt(process.env.MM_GAS_TOPUP ?? (LOCAL ? 10n ** 19n : 10n ** 15n)), b = GAS_PRICE * 1_000_000n; return a > b ? a : b; })();
-const GAS_FLOOR = GAS_TOPUP / 4n;
-
-async function ensureGas() {
-  const bal = await pub.getBalance({ address: mm.address });
-  if (bal >= GAS_FLOOR) return bal;
-  if (LOCAL) {
-    await pub.request({ method: "anvil_setBalance", params: [mm.address, toHex(GAS_TOPUP)] }).catch(() => sendValue(mm.address, GAS_TOPUP));
-  } else {
-    await sendValue(mm.address, GAS_TOPUP);
-  }
-  note(`撥 gas 給做市帳戶 ${Number(GAS_TOPUP) / 1e18}`);
-  return pub.getBalance({ address: mm.address });
-}
-
-/// 撥款：營運金鑰把結算幣給做市帳戶（本站發行的 MockTWD 就鑄造），做市帳戶自己存進帳本合約，再鏡像進帳本。
-/// 回傳實際撥了多少。
+/// 撥款：做市資金是公司自有的新台幣，匯進信託專戶後由營運 Safe 確認入金、記在做市帳戶名下。
+/// 回傳實際入帳多少。持有人金鑰不在這台機器上時不動，提醒營運方用 npm run fiat 確認。
 async function fund(want, warnings) {
-  let given = 0n;
-  if (D.settlementMintable === true) {
-    await send(opClient, op, { address: D.settlementToken, abi: erc20Abi, functionName: "mint", args: [mm.address, want] }, "撥款（鑄造）");
-    given = want;
-  } else {
-    const have = await wallet(op.address);
-    given = have < want ? have : want;
-    if (given > 0n) await send(opClient, op, { address: D.settlementToken, abi: erc20Abi, functionName: "transfer", args: [mm.address, given] }, "撥款");
-    if (given < want) warnings.push(`營運金鑰 ${op.address} 的結算幣不夠：還差 ${twd(want - given)} 元沒有撥到做市帳戶`);
+  const ref = `mm-fund:${mm.address.slice(2, 10)}:${Date.now()}`;
+  const tx = await viaOperatorSafe(creditDepositCall(D.ledger, mm.address, want, bankRefOf("in", ref)), "撥款入金");
+  if (!tx) {
+    warnings.push(`做市資金要由營運 Safe 確認入金：npm run fiat -- deposit ${mm.address} ${want} '<銀行交易參考號>'`);
+    return 0n;
   }
-  // 錢包裡的（包括上一次撥了但沒存成的）全部存進帳本合約
-  const inWallet = await wallet(mm.address);
-  if (inWallet > 0n) {
-    await ensureGas();
-    const allowance = await pub.readContract({ address: D.settlementToken, abi: erc20Abi, functionName: "allowance", args: [mm.address, D.ledger] });
-    if (allowance < inWallet) await send(mmClient, mm, { address: D.settlementToken, abi: erc20Abi, functionName: "approve", args: [D.ledger, 2n ** 255n] }, "授權帳本合約");
-    await send(mmClient, mm, { address: D.ledger, abi: LEDGER_ABI, functionName: "depositCash", args: [inWallet] }, "存入帳本合約");
-    const n = await agent.mirror(D.ledger);
-    note(`做市帳戶存入 ${twd(inWallet)} 元（鏡像 ${n} 筆）`);
-  }
-  return given;
+  const n = await agent.mirror(D.ledger);
+  note(`做市帳戶入金 ${twd(want)} 元（營運 Safe 確認，鏡像 ${n} 筆）`);
+  return want;
 }
-const wallet = (a) => pub.readContract({ address: D.settlementToken, abi: erc20Abi, functionName: "balanceOf", args: [a] });
 
 /// 做市帳戶的身分：登記成「法人」，身分雜湊標明是平台做市帳戶。這一筆 identity 事件在帳本公開層，
 /// 任何人都查得到它是誰。
@@ -317,10 +274,9 @@ function manageSimulation(cfg) {
   });
 }
 
-// ───────────────────────── 收回資金：領回 ─────────────────────────
+// ───────────────────────── 收回資金：出金 ─────────────────────────
 
-/// 提領請求進了承諾之後，憑最新一期的證據從帳本合約領回，再把錢包裡的結算幣轉回營運金鑰。
-/// 待提領全部領完才算收回完成。
+/// 出金請求進了承諾之後，由營運 Safe 確認出金（公司自有資金匯回公司帳戶）。待出金全部確認才算收回完成。
 async function settleRecall(state) {
   if (!state.recall) return;
   const commits = await readCommitments(pub, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0) });
@@ -329,21 +285,19 @@ async function settleRecall(state) {
     const snap = snapshotAt(store.read(), last);
     const proof = balanceProofArgs(snap, mm.address);
     const withdrawn = await pub.readContract({ address: D.ledger, abi: PROOF_ABI, functionName: "withdrawnTotal", args: [mm.address] });
-    const claimable = proof && proof.leafRequested > withdrawn ? proof.leafRequested - withdrawn : 0n;
-    if (claimable > 0n) {
-      await ensureGas();
-      await send(mmClient, mm, { address: D.ledger, abi: PROOF_ABI, functionName: "withdrawCash", args: [claimable, proof] }, "領回");
-      await agent.mirror(D.ledger);
-      note(`從帳本合約領回 ${twd(claimable)} 元（第 ${last.epoch} 期的證據）`);
+    const settleable = proof && proof.leafRequested > withdrawn ? proof.leafRequested - withdrawn : 0n;
+    if (settleable > 0n) {
+      const ref = `mm-recall:${mm.address.slice(2, 10)}:${Date.now()}`;
+      const tx = await viaOperatorSafe(settleWithdrawalCall(D.ledger, mm.address, settleable, bankRefOf("out", ref), proof), "收回出金");
+      if (tx) {
+        await agent.mirror(D.ledger);
+        const funded = BigInt(state.fundedTotal);
+        state.fundedTotal = (funded > settleable ? funded - settleable : 0n).toString();
+        note(`收回 ${twd(settleable)} 元（第 ${last.epoch} 期的證據，營運 Safe 確認出金）`);
+      } else {
+        note(`收回 ${twd(settleable)} 元要由營運 Safe 確認出金：npm run fiat -- settle ${mm.address} ${settleable} '<匯款參考號>'`);
+      }
     }
-  }
-  const inWallet = await wallet(mm.address);
-  if (inWallet > 0n) {
-    await ensureGas();
-    await send(mmClient, mm, { address: D.settlementToken, abi: erc20Abi, functionName: "transfer", args: [op.address, inWallet] }, "轉回營運金鑰");
-    const funded = BigInt(state.fundedTotal);
-    state.fundedTotal = (funded > inWallet ? funded - inWallet : 0n).toString();
-    note(`${twd(inWallet)} 元轉回營運金鑰`);
   }
   const pending = agent.state().pendingWithdraw.get(low(mm.address)) ?? 0n;
   if (pending === 0n) { state.recall = null; note("收回資金完成"); }
@@ -373,21 +327,21 @@ async function tick() {
   if (cfg.commands.recall > (state.cmd?.recall ?? 0)) {
     state.cmd = { ...state.cmd, recall: cfg.commands.recall };
     await cancelAll(book.mineAll, "收回資金");
-    // 帳本裡的現金：簽一筆提領請求（移到待提領），下一期承諾上鏈之後憑證據領回、轉回營運金鑰（見 settleRecall）
+    // 帳本裡的現金：簽一筆出金請求（移到待出金，收款帳戶是公司帳戶），下一期承諾上鏈之後由營運 Safe 確認（見 settleRecall）
     const inLedger = cashOf(agent.state(), mm.address);
     if (inLedger > 0n) {
-      const r = await put("withdraw", { amount: inLedger }, "提領請求");
-      if (r && !r.rejectedReason) note(`收回資金：撤單，申請提領 ${twd(inLedger)} 元（下一期承諾上鏈後自動領回、轉回營運金鑰）`);
+      const r = await put("withdraw", { amount: inLedger, payoutRef: keccak256(toBytes(`co2x:payout:company:${D.operatorSafe}`)) }, "出金請求");
+      if (r && !r.rejectedReason) note(`收回資金：撤單，申請出金 ${twd(inLedger)} 元（下一期承諾上鏈後由營運 Safe 確認）`);
     }
     state.recall = { at: new Date().toISOString() };
     state.halted = {
-      reason: `已撤回全部報價，帳本裡的 ${twd(inLedger)} 元申請提領中：下一期承諾上鏈後自動從帳本合約領回、轉回營運金鑰。按「恢復」重新報價`,
+      reason: `已撤回全部報價，帳本裡的 ${twd(inLedger)} 元申請出金中：下一期承諾上鏈後由營運 Safe 確認。按「恢復」重新報價`,
       at: new Date().toISOString(),
     };
     s = agent.state(); book = readBook(s);
   }
 
-  if (state.recall) await settleRecall(state).catch((e) => note(`領回失敗（下一輪再試）：${String(e.shortMessage ?? e.message).slice(0, 120)}`));
+  if (state.recall) await settleRecall(state).catch((e) => note(`出金確認失敗（下一輪再試）：${String(e.shortMessage ?? e.message).slice(0, 120)}`));
 
   // ── 部位與參考價 ──
   const mineLive = book.mineAll.filter((o) => o.expiry > nowSec());

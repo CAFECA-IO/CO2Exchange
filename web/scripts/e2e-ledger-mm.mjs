@@ -4,8 +4,8 @@
 //   anvil --port 38548 &
 //   npm run test:ledger-mm
 //
-// 走一遍：部署帳本合約 → 回填一小段展示資料 → 做市跑一輪（身分、撥款入金、報價）→ 模擬器跑幾輪 →
-// 一位真實使用者把額度賣給做市的買價 → 收回資金 → 承諾上鏈、查核者重播全部通過。
+// 走一遍：部署帳本合約 → 回填一小段展示資料 → 做市跑一輪（身分、營運 Safe 確認撥款入金、報價）→ 模擬器跑幾輪 →
+// 一位真實使用者把額度賣給做市的買價 → 收回資金（出金請求 → 營運 Safe 確認）→ 承諾上鏈、查核者重播全部通過。
 //
 // 驗的是這一期的三個保證：
 //   ① 做市帳戶只被動報價：它**從來不是**任何一筆成交的吃單方
@@ -75,7 +75,7 @@ let s = agent.state();
 assert.ok(s.identities.get(MM)?.tier === 2, "做市帳戶有法人身分");
 ok("做市帳戶的身分由身分驗證金鑰登記進帳本");
 assert.equal(BigInt(Math.round(st.cash * 1e6)) + BigInt(Math.round(st.bidEscrow * 1e6)), 300000n * 1_000_000n);
-ok("撥款 300,000 元：鏈上存進帳本合約、鏡像進帳本（現金＋買單鎖定 = 撥款）");
+ok("撥款 300,000 元：營運 Safe 在鏈上確認入金、鏡像進帳本（現金＋買單鎖定 = 撥款）");
 assert.ok(st.quotes.bids.length > 0, "有買價");
 ok(`掛出 ${st.quotes.bids.length} 檔買價（沒有庫存，所以還沒有賣價）`);
 
@@ -129,7 +129,7 @@ const takerMm = s.fills.filter((f) => {
 assert.equal(takerMm.length, 0, "做市帳戶不能是吃單方");
 ok(`做市帳戶參與的 ${s.fills.filter((f) => low(f.buyer) === MM || low(f.seller) === MM).length} 筆成交，吃單方全部是別人`);
 
-// ── 收回資金：撤單 → 提領請求 → 承諾上鏈 → 憑證據領回 → 轉回營運金鑰 ──
+// ── 收回資金：撤單 → 出金請求（公司帳戶）→ 承諾上鏈 → 營運 Safe 憑證據確認出金 ──
 mmConfig({ ...cfg, commands: { recall: 1, resume: 0 } });
 node("scripts/mm/mm.mjs", ["--once"]);
 st = status();
@@ -138,17 +138,17 @@ assert.ok(st.halted, "收回之後停止報價");
 assert.equal([...s.book.values()].filter((o) => low(o.account) === MM).length, 0, "做市帳戶的單全部撤掉");
 const pendingMm = s.pendingWithdraw.get(MM) ?? 0n;
 assert.ok(pendingMm > 0n && (s.cash.get(MM) ?? 0n) === 0n, "帳本裡的現金全部移到待提領");
-ok(`收回資金：撤掉全部報價、申請提領 ${Number(pendingMm) / 1e6} 元（移到待提領，不能再交易）`);
+ok(`收回資金：撤掉全部報價、申請出金 ${Number(pendingMm) / 1e6} 元（移到待出金，不能再交易）`);
 
-const erc20 = [{ type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }] }];
-const opBefore = await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "balanceOf", args: [A0] });
+const twd = [{ type: "function", name: "totalSupply", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] }];
+const supplyBefore = await pub.readContract({ address: D.settlementToken, abi: twd, functionName: "totalSupply" });
 node("scripts/ledger-commit.mjs");
 node("scripts/mm/mm.mjs", ["--once"]);
 s = agent.state();
-const opAfter = await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "balanceOf", args: [A0] });
-assert.equal(s.pendingWithdraw.get(MM) ?? 0n, 0n, "待提領已全部領回");
-assert.equal(opAfter - opBefore, pendingMm, "領回的錢轉回營運金鑰");
-ok(`下一期承諾上鏈後憑證據從帳本合約領回 ${Number(pendingMm) / 1e6} 元，轉回營運金鑰（帳本以鏈上 CashWithdrawn 鏡像銷帳）`);
+const supplyAfter = await pub.readContract({ address: D.settlementToken, abi: twd, functionName: "totalSupply" });
+assert.equal(s.pendingWithdraw.get(MM) ?? 0n, 0n, "待出金已全部確認");
+assert.equal(supplyBefore - supplyAfter, pendingMm, "確認出金銷毀等額的記帳 TWD");
+ok(`下一期承諾上鏈後營運 Safe 憑證據確認出金 ${Number(pendingMm) / 1e6} 元、銷毀記帳 TWD（帳本以鏈上 CashWithdrawn 鏡像銷帳）`);
 
 // ── 承諾與查核 ──
 node("scripts/ledger-commit.mjs");

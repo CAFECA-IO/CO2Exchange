@@ -51,7 +51,7 @@ export function MarketOverview() {
     byProject.set(o.project.name, cur);
   }
   const supply = [...byProject.entries()]
-    .map(([name, v]) => ({ label: name, value: tonnes(v.kg), hint: `最佳價 ${(v.best / 1e6).toLocaleString("zh-TW", { maximumFractionDigits: 0 })} mTWD / 噸` }))
+    .map(([name, v]) => ({ label: name, value: tonnes(v.kg), hint: `最佳價 ${(v.best / 1e6).toLocaleString("zh-TW", { maximumFractionDigits: 0 })} 元 / 噸` }))
     .sort((a, x) => x.value - a.value)
     .slice(0, 6);
 

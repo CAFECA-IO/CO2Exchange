@@ -68,15 +68,15 @@ for (const [u, tier, id] of [[corp, 2, "12345678"], [buyer, 2, "87654321"], [ind
   ok(k.tier === tier && !k.frozen, `${u.label.split("-")[1]} 身分寫進帳本（tier ${tier}）`);
 }
 
-// ── 入金：鏈上存進帳本合約 → 鏡像進帳本 ──
+// ── 入金：本機的開發入金＝營運 Safe 立刻確認了一筆匯款（creditDeposit）→ 鏡像進帳本 ──
 for (const u of [buyer, indiv]) {
   await u.post("/api/ledger", { op: "devDeposit", amount: String(500_000n * 1_000_000n) });
   const me = await u.api("/api/ledger");
-  ok(BigInt(me.cash.available) >= 500_000n * 1_000_000n, `${u.label.split("-")[1]} 存入 50 萬結算幣，帳本記到了`);
+  ok(BigInt(me.cash.available) >= 500_000n * 1_000_000n, `${u.label.split("-")[1]} 入金 50 萬元（營運 Safe 在鏈上確認），帳本記到了`);
 }
 {
   const n = await admin.post("/api/ledger", { op: "sync" });
-  ok(n.mirrored === 0, "重複同步不會重複入帳（鏈上存入只鏡像一次）");
+  ok(n.mirrored === 0, "重複同步不會重複入帳（鏈上的入金確認只鏡像一次）");
 }
 
 // ── 專案：法人簽 RegisterProject；自然人被引擎擋下 ──
@@ -128,19 +128,19 @@ let batchId;
   const buy = await buyer.post("/api/faith/act", { kind: "buy_listing", params: { orderId: Number(s.event.seq), tonnes: 5 } });
   ok(buy.ledger?.kind === "place" && buy.ledger.fields.side === "buy" && buy.ledger.fields.pricePerTonne === "900000000" && !buy.calls,
     "費思的「買這張單」產生一筆同價買單（帳本委託，不是鏈上 calldata）");
-  ok(buy.rows.some((r) => r.value === "4,500 mTWD"), "確認卡的金額從帳本算（5 噸 × 900 = 4,500）");
+  ok(buy.rows.some((r) => r.value === "4,500 元"), "確認卡的金額從帳本算（5 噸 × 900 = 4,500 元）");
   const done = await buyer.act(buy.ledger.kind, buy.ledger.fields);
   ok(done.accepted && done.fills.reduce((x, f) => x + Number(f.amountKg), 0) === 5000, "簽了之後當場和那張賣單成交 5 噸");
   let code = null;
   try { await corp.post("/api/faith/act", { kind: "buy_listing", params: { orderId: Number(s.event.seq), tonnes: 1 } }); } catch (e) { code = e.code; }
   ok(code === "INVALID_PARAM", "費思不讓人買自己的賣單");
   const bid = await indiv.post("/api/faith/act", { kind: "place_bid", params: { tonnes: 2, pricePerTonne: 700 } });
-  ok(bid.ledger?.fields.country === "TW" && bid.rows.some((r) => /鎖住/.test(r.label) && r.value === "1,400 mTWD"), "費思的掛買單：沒指定核發國就是國內，鎖定金額從帳本算");
+  ok(bid.ledger?.fields.country === "TW" && bid.rows.some((r) => /鎖住/.test(r.label) && r.value === "1,400 元"), "費思的掛買單：沒指定核發國就是國內，鎖定金額從帳本算");
   const placed = await indiv.act(bid.ledger.kind, bid.ledger.fields);
   const cx = await indiv.post("/api/faith/act", { kind: "cancel_bid", params: { bidId: Number(placed.event.seq) } });
   ok(cx.ledger?.kind === "cancel" && (await indiv.act(cx.ledger.kind, cx.ledger.fields)).accepted, "費思的撤單");
   const fau = await indiv.post("/api/faith/act", { kind: "claim_faucet", params: {} });
-  ok(fau.deposit === String(100_000n * 1_000_000n), "費思的領水在帳本版會存進帳本合約");
+  ok(fau.deposit === String(100_000n * 1_000_000n), "費思的「模擬入金」只在本機鏈，等於營運方確認一筆匯款");
 }
 {
   const m = await buyer.api(`/api/market?account=${buyer.address}`);
@@ -212,17 +212,34 @@ let batchId;
   ok(g.ledger.thresholds.SOVEREIGN === 2, "治理頁顯示主權門檻 2");
 }
 
-// ── 提領（第 6 期）：申請 → 承諾上鏈 → 憑證據領回 ──
+// ── 出金（規則第 4 版）：設定收款帳戶 → 簽出金請求 → 承諾上鏈 → 營運方匯款 → 營運 Safe 確認 ──
 const W = 1_000n * 1_000_000n;
 {
+  let code = null;
+  try { await buyer.act("withdraw", { amount: W.toString() }); } catch (e) { code = e.code; }
+  ok(code === "MISSING_PARAM", "沒有收款帳戶就不能申請出金");
+  code = null;
+  try { await buyer.post("/api/ledger", { op: "setPayoutAccount", payout: { bankCode: "81", accountNo: "123", holder: "x" } }); } catch (e) { code = e.code; }
+  ok(code === "INVALID_PARAM", "收款帳戶格式不對被擋下");
+  const pa = await buyer.post("/api/ledger", { op: "setPayoutAccount", payout: { bankCode: "812", accountNo: "0001-2345-678901", holder: buyer.label } });
+  ok(pa.accountNo.endsWith("8901") && !pa.accountNo.includes("2345"), "收款帳戶存在營運方，回給使用者的帳號只露末四碼");
   const r = await buyer.act("withdraw", { amount: W.toString() });
-  ok(r.accepted, "申請提領 1,000 元（帳本事件，移到待提領）");
+  ok(r.accepted && /^0x[0-9a-f]{64}$/.test(r.event.payoutRef), "申請出金 1,000 元（帳本事件只記收款帳戶的雜湊）");
   const me = await buyer.api("/api/ledger");
-  ok(me.cash.pendingWithdraw === W.toString(), "待提領 1,000 元");
+  ok(me.cash.pendingWithdraw === W.toString(), "待出金 1,000 元");
   const st = await buyer.post("/api/ledger", { op: "withdrawStatus" });
-  ok(st.claimable === "0" && st.waitingForCommit === W.toString(), "還沒進承諾：現在可領回 0，等下一期");
+  ok(st.settleable === "0" && st.waitingForCommit === W.toString(), "還沒進承諾：營運方現在不能確認，等下一期");
   const big = await buyer.act("withdraw", { amount: String(10n ** 15n) });
-  ok(!big.accepted && /現金不足/.test(big.rejectedReason), `超過可動用的提領請求被拒絕（${big.rejectedReason}）`);
+  ok(!big.accepted && /現金不足/.test(big.rejectedReason), `超過可動用的出金請求被拒絕（${big.rejectedReason}）`);
+  // 多申請 500，再由營運方退回（例如收款帳戶有誤）
+  await buyer.act("withdraw", { amount: String(500n * 1_000_000n) });
+  const rj = await admin.post("/api/admin/fiat", { op: "reject", account: buyer.address, amount: String(500n * 1_000_000n), reason: "e2e 退回" });
+  ok(!!rj.appended, "營運方退回 500 元的出金請求（營運授權事件）");
+  const me2 = await buyer.api("/api/ledger");
+  ok(me2.cash.pendingWithdraw === W.toString(), "退回之後待出金回到 1,000 元，500 元回到可動用");
+  code = null;
+  try { await buyer.api("/api/admin/fiat"); } catch (e) { code = e.code; }
+  ok(code === "ADMIN_REQUIRED", "一般使用者看不到出入金佇列");
 }
 
 // ── 承諾上鏈 → 查核者重播 ──
@@ -232,11 +249,22 @@ const commit = sh("node --experimental-strip-types --no-warnings scripts/ledger-
 ok(/已提交第 \d+ 期/.test(commit), "承諾上鏈");
 {
   const st = await buyer.post("/api/ledger", { op: "withdrawStatus" });
-  ok(st.claimable === W.toString() && st.proof, "承諾上鏈之後可領回 1,000 元，伺服器給出最新一期的證據");
-  const r = await buyer.post("/api/ledger", { op: "devWithdraw" });
-  ok(r.amount === W.toString() && r.mirrored === 1, "憑證據從帳本合約領回，鏈上的提領鏡像進帳本");
+  ok(st.settleable === W.toString(), "承諾上鏈之後營運方可以確認 1,000 元");
+  const q = await admin.api("/api/admin/fiat");
+  const row = q.withdrawals.find((x) => x.account.toLowerCase() === buyer.address.toLowerCase());
+  ok(row && row.payoutAccount?.accountNo === "00012345678901" && row.payoutMatches && row.settleable === W.toString(), "管理員的出入金佇列：收款帳戶明文、雜湊與請求相符、可確認金額");
+  const r = await admin.post("/api/admin/fiat", { op: "settle", account: buyer.address, amount: W.toString(), bankRef: `E2E-OUT-${RUN}` });
+  ok(r.executed && r.mirrored === 1, "營運方匯款後，營運 Safe 憑證據在鏈上確認出金（銷毀記帳 TWD），帳本鏡像一筆");
+  let code = null;
+  try { await admin.post("/api/admin/fiat", { op: "settle", account: buyer.address, amount: "1", bankRef: `E2E-OUT2-${RUN}` }); } catch (e) { code = e.code; }
+  ok(code === "INVALID_PARAM", "確認完的出金不能再確認");
   const me = await buyer.api("/api/ledger");
-  ok(me.cash.pendingWithdraw === "0", "待提領銷帳");
+  ok(me.cash.pendingWithdraw === "0", "待出金銷帳");
+  const dep = await admin.post("/api/admin/fiat", { op: "deposit", who: me.deposit.code, amount: String(2_000n * 1_000_000n), bankRef: `E2E-IN-${RUN}` });
+  ok(dep.executed && dep.account.toLowerCase() === buyer.address.toLowerCase(), `管理員用入金識別碼 ${me.deposit.code} 確認一筆 2,000 元的入金`);
+  code = null;
+  try { await admin.post("/api/admin/fiat", { op: "deposit", who: buyer.address, amount: "1", bankRef: `E2E-IN-${RUN}` }); } catch (e) { code = e.code; }
+  ok(code === "ALREADY_EXISTS", "同一個銀行參考號不能入金兩次");
   const f = await buyer.api("/api/ledger/proof");
   ok(f.version === 1 && f.proofs.some((p) => p.type === "custody") && f.proofs.some((p) => p.type === "event"), "我的證明檔：託管持有、事件包含證據（Boltchain Issue #1 格式）");
   const list = await buyer.api("/api/public/epochs");
@@ -244,6 +272,6 @@ ok(/已提交第 \d+ 期/.test(commit), "承諾上鏈");
   ok(e1.manifest.logRoot && e1.leaves.length > 0 && !e1.publicEvents.some((x) => x.kind === "place"), "公開檔：承諾、每一筆事件的雜湊、登錄簿層事件全文（委託單不公開）");
 }
 const verify = sh("node --experimental-strip-types --no-warnings scripts/ledger-commit.mjs --verify");
-ok(/查核完成/.test(verify), "查核者重播：收單區塊驗簽、存提逐筆、anchor 全部相符");
+ok(/查核完成/.test(verify), "查核者重播：收單區塊驗簽、入出金逐筆、anchor 全部相符");
 
 console.log(`\n帳本寫入面端到端：${passed} 項全部通過`);

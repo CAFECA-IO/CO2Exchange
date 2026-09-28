@@ -4,7 +4,7 @@ import { encodeEvent, eventHash, logTree, type Event } from "./events.ts";
 import type { OnchainCommitment } from "./chain.ts";
 import { rootsOf, TAG, type Roots } from "./trees.ts";
 
-/// 證據（設計 v4 第 6 期）：使用者的證明檔、帳本合約要的提領／請求權參數。
+/// 證據（設計 v4 第 6 期；規則第 4 版）：使用者的證明檔、營運 Safe 確認出金時帳本合約要的參數。
 ///
 /// ## 證明檔的格式
 ///
@@ -131,8 +131,8 @@ export function userProofFile(o: {
       leaf: { account, epoch: c.epoch, assetsRoot: bp.assetsRoot, kg: bp.leafKg, cash: bp.leafCash, requested: bp.leafRequested, settled: bp.leafSettled },
       siblings: bp.siblings, path: bp.path,
       rootTotals: { kg: c.totalKg, cash: c.totalCash },
-      custody: { token: o.settlementToken, holder: o.ledger, note: "root 的 cash 總額 ≤ 託管合約持有的結算幣（balanceOf(holder)）" },
-      meaning: "帳本在這一期欠這個帳戶：碳權 kg 公斤、結算幣 cash（最小單位，含掛單鎖定與待提領）；requested／settled 是提領的請求累計與已領累計",
+      custody: { token: o.settlementToken, holder: o.ledger, note: "root 的 cash 總額 ≤ 帳本合約持有的記帳 TWD（balanceOf(holder)）＝營運方宣稱的信託專戶餘額" },
+      meaning: "帳本在這一期欠這個帳戶：碳權 kg 公斤、新台幣 cash（最小單位，含掛單鎖定與待出金）；requested／settled 是出金的請求累計與已出金累計",
     });
     // 2. 每一批額度：帳戶的小樹 ＋ 登錄簿裡的那一批
     const assets = [...(snap.state.credits.get(low) ?? new Map()).keys(), ...(snap.state.lockedCredits.get(low) ?? new Map()).keys()];
@@ -147,7 +147,7 @@ export function userProofFile(o: {
           content: { types: BATCH_TYPES, values: [TAG.batch, b.id, b.projectId, b.monitoringStart, b.monitoringEnd, b.vintageYear, b.serialHash, b.reportHash, b.verifier, b.issuedAt, b.issuedKg, b.retiredKg, b.frozen] },
           siblings: cp.registrySiblings, path: cp.registryPath,
         },
-        meaning: `帳戶持有批次 #${id} 的 ${cp.batchKg} 公斤；這一批在同一期的登錄簿裡。憑這兩段可以在帳本合約 claimCredits 登記請求權`,
+        meaning: `帳戶持有批次 #${id} 的 ${cp.batchKg} 公斤；這一批在同一期的登錄簿裡。碳權提不出平台，這兩段是請求權的審計證據`,
       });
     }
   }
@@ -183,11 +183,10 @@ export function userProofFile(o: {
   }
 
   return toJson({
-    version: PROOF_FILE_VERSION, chainId: o.chainId, generator: "CO2Exchange ledger v2 (rules 3)",
+    version: PROOF_FILE_VERSION, chainId: o.chainId, generator: "CO2Exchange ledger v2 (rules 4)",
     generatedAt: o.generatedAt ?? new Date().toISOString(),
     account, latestEpoch: c.epoch, schemes: SCHEMES,
     proofs,
-    contractArgs: bp ? { contract: o.ledger, withdrawCash: { proof: bp }, claimCredits: Object.fromEntries(proofs.filter((p) => p.type === "credit").map((p) => [String(p.batchId), creditProofArgs(snap, account, BigInt(String(p.batchId)))])) } : null,
     note: "兄弟節點只是雜湊（與總額樹的加總），不含任何其他帳戶的資料。驗證方式見 scripts/verify-proof.mjs",
   });
 }

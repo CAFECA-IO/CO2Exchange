@@ -1,5 +1,5 @@
 import "server-only";
-import { createWalletClient, http, parseAbi, size, type Address, type Hex, type PrivateKeyAccount } from "viem";
+import { size, type Address, type Hex, type PrivateKeyAccount } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { auth } from "@/auth";
 import { authTypedData, userDigest, userMessageOf, userTypedData, type Domains } from "@/lib/ledger/typed";
@@ -11,8 +11,7 @@ import { CAFECA_ABI } from "@/lib/ledger/chain";
 import { mirrorCash } from "@/lib/ledger/mirror";
 import type { Event, EventOf, Kind } from "@/lib/ledger/events";
 import type { NewEvent, Receipt } from "@/lib/ledger/store";
-import { IS_LOCAL_CHAIN, RPC_URL, chain, deployment, documentSigner, identityVerifier, publicClient, relayerClient, requireOwnKey } from "../chain";
-import { submit } from "../tx";
+import { IS_LOCAL_CHAIN, deployment, documentSigner, identityVerifier, publicClient, requireOwnKey } from "../chain";
 import { ApiError } from "../api";
 import { devKeyOf } from "../dev-key";
 import { cafecaConfig } from "../cafeca/config";
@@ -259,7 +258,7 @@ export async function devSign<K extends UserKind>(signer: PrivateKeyAccount, kin
   return signer.signTypedData(userTypedData(domains(), kind, userMessage(kind, body)) as Parameters<PrivateKeyAccount["signTypedData"]>[0]);
 }
 
-// ── 結算幣鏡像 ──
+// ── 入出金鏡像（鏈上 CashDeposited／CashWithdrawn → 帳本） ──
 
 export async function syncCash(): Promise<number> {
   const d = deployment();
@@ -267,26 +266,6 @@ export async function syncCash(): Promise<number> {
     store: ledgerStore(), client: publicClient, ledger: d.ledger!, fromBlock: BigInt(d.deployedAtBlock ?? 0), receiptSigner,
   });
   return added.length;
-}
-
-/// 開發帳戶的入金（只在本機鏈、結算幣是本站自己發的 MockTWD 時）：
-/// 補 gas → 鑄結算幣給他 → **他自己**（推出來的私鑰）approve 並存進帳本合約 → 鏡像進帳本。
-///
-/// 存入仍然是鏈上真的一筆 `depositCash`，所以查核工具的「鏈上存提與帳本逐筆相符」照樣成立。
-export async function devDeposit(signer: PrivateKeyAccount, amount: bigint): Promise<number> {
-  const d = deployment();
-  if (!IS_LOCAL_CHAIN || d.settlementMintable !== true) throw new ApiError("FORBIDDEN", "只有本機鏈、本站發行的結算幣可以用開發入金");
-  if (amount <= 0n || amount > 10_000_000n * 10n ** 6n) throw new ApiError("INVALID_PARAM", "金額要在 0 到一千萬之間", { param: "amount" });
-  await fetch(RPC_URL, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "anvil_setBalance", params: [signer.address, "0x8ac7230489e80000"] }),
-  });
-  const abi = parseAbi(["function mint(address,uint256)", "function approve(address,uint256) returns (bool)", "function depositCash(uint256)"]);
-  await submit({ address: d.settlementToken, abi, functionName: "mint", args: [signer.address, amount], account: relayerClient.account!, chain });
-  const w = createWalletClient({ chain, account: signer, transport: http(RPC_URL) });
-  await submit({ address: d.settlementToken, abi, functionName: "approve", args: [d.ledger!, amount], account: signer, chain }, w);
-  await submit({ address: d.ledger!, abi, functionName: "depositCash", args: [amount], account: signer, chain }, w);
-  return syncCash();
 }
 
 export const receiptSignerAddress = (): Address => receiptSigner.address;

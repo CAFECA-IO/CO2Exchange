@@ -35,13 +35,14 @@ export async function buildScenario() {
   }
   function chain(kind, account, amount) {
     seq += 1n; clock += 60n; block += 1n;
-    return { seq, at: clock, atBlock: block, kind, account: account.address, amount, ref: { txHash: keccak256(toBytes(`tx${seq}`)), block, logIndex: 0 } };
+    return { seq, at: clock, atBlock: block, kind, account: account.address, amount, bankRef: keccak256(toBytes(`bank${seq}`)), ref: { txHash: keccak256(toBytes(`tx${seq}`)), block, logIndex: 0 } };
   }
   const id = (a, tier, nonce = 0n) => auth(I, "identity", { account: a.address, tier, expiry: clock + 10_000_000n, jurisdiction: "TW", identityHash: keccak256(toBytes(`id:${a.address}`)), nonce, deadline: clock + 3600n });
   const issue = (projectId, kg, n, signer = C) => auth(signer, "issue", { projectId, monitoringStart: 1_700_000_000n, monitoringEnd: 1_760_000_000n, amountKg: kg, serialHash: keccak256(toBytes(`serial${n}`)), reportHash: keccak256(toBytes(`report${n}`)), attestationId: BigInt(n), deadline: clock + 3600n });
   const place = (a, side, batchId, country, kg, price, extra = {}) => user(a, "place", { side, batchId, country, amountKg: kg, pricePerTonne: price * 1_000_000n, minFillKg: 0n, expiry: clock + 86_400n, ...extra });
 
   const P = (n) => n * 1_000_000n;
+  const PAYOUT = (a) => keccak256(toBytes(`payout:${a.address}`));
   const events = [];
   const push = async (p) => { const e = await p; events.push(e); return e; };
 
@@ -69,14 +70,17 @@ export async function buildScenario() {
   await push(place(X, "sell", 1n, "", 1_000n, 700n));                                                                         // 拒絕：凍結
   await push(auth(D, "reserveReport", { period: 202609, asOf: clock, credits: [{ country: "TW", custodian: "環境部", accountRef: "TW-1", heldKg: 48_000n, ledgerKg: 48_000n, statementHash: keccak256(toBytes("s")) }], cash: { trustee: "某銀行", accountRef: "T-1", balance: P(1_100_000n), tokenSupply: P(1_100_000n), statementHash: keccak256(toBytes("c")) }, documentHash: keccak256(toBytes("r")) }));
   await push(auth(A, "reserveAttest", { reportId: 1n, status: 1, auditorName: "某會計師事務所", note: "相符" }));
-  await push(user(Y, "withdraw", { amount: P(100_000n) }));                                                                   // Y 請求提領 10 萬（規則第 3 版）
-  await push(user(EVIL, "withdraw", { amount: 1n }));                                                                         // 拒絕：沒有現金
+  await push(user(Y, "withdraw", { amount: P(150_000n), payoutRef: PAYOUT(Y) }));                                             // Y 請求出金 15 萬
+  await push(user(EVIL, "withdraw", { amount: 1n, payoutRef: PAYOUT(EVIL) }));                                                // 拒絕：沒有現金
+  await push(user(Z, "withdraw", { amount: 1n, payoutRef: "0x" + "00".repeat(32) }));                                        // 拒絕：沒有指定收款帳戶
+  await push(auth(O, "withdrawReject", { account: Y.address, amount: P(50_000n), reason: "收款帳戶戶名不符" }));              // 退回 5 萬：Y 待出金 10 萬
+  await push(auth(O, "withdrawReject", { account: Y.address, amount: P(500_000n), reason: "超過" }));                         // 拒絕：待出金不足
   block = 600n;
   await push(issue(1n, 1_000n, 4));                                                                                           // 拒絕：C 的授權到 500 為止
 
 
   return {
     events, domains, authorities, actors: { S, I, C, D, A, O, X, Y, Z, T, EVIL },
-    factory: { auth, user, chain, id, issue, place, acct, P, reset: () => { seq = 0n; }, now: () => clock },
+    factory: { auth, user, chain, id, issue, place, acct, P, PAYOUT, reset: () => { seq = 0n; }, now: () => clock },
   };
 }

@@ -48,7 +48,7 @@ const MEASURES = [
   {
     key: "avgPricePerTonne", label: "成交均價",
     hint: "近一年在本站的成交均價，以成交量加權（沒有成交就沒有價格）",
-    unit: "mTWD / 噸", fmt: money,
+    unit: "元 / 噸", fmt: money,
   },
 ] as const;
 type MeasureKey = (typeof MEASURES)[number]["key"];
@@ -234,7 +234,7 @@ export default function GlobeHero() {
                 ["鏈上流通", `${t(sel.circulatingKg)} 噸`],
                 ["累計註銷", `${t(sel.retiredKg)} 噸`],
                 ["近一年成交", `${t(sel.tradedKg)} 噸 · ${sel.trades} 筆`],
-                ["成交均價", sel.avgPricePerTonne > 0 ? `${money(sel.avgPricePerTonne)} mTWD / 噸` : "—"],
+                ["成交均價", sel.avgPricePerTonne > 0 ? `${money(sel.avgPricePerTonne)} 元 / 噸` : "—"],
                 ["掛單簿", `${t(sel.listedKg)} 噸 · ${sel.orders} 筆`],
               ].map(([k, v]) => (
                 <div key={k} className="flex items-baseline justify-between gap-3">
@@ -251,7 +251,7 @@ export default function GlobeHero() {
             {[
               ["全站核發", t(totals.issued), "噸"],
               ["近一年成交", t(totals.traded), "噸"],
-              ["成交均價", totals.avgPrice > 0 ? money(totals.avgPrice) : "—", "mTWD / 噸"],
+              ["成交均價", totals.avgPrice > 0 ? money(totals.avgPrice) : "—", "元 / 噸"],
             ].map(([k, v, unit]) => (
               <div key={k}>
                 <dt className="text-ink-300">{k}</dt>

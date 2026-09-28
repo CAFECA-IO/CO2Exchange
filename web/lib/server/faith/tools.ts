@@ -47,13 +47,13 @@ const needLogin = { error: "這個問題要看使用者自己的資料，但目�
 const PAGES: Record<string, string> = {
   "/": "首頁：市場現況。立體地球顯示各轄區的核發量、成交量與成交均價，下方是各轄區明細與價格走勢圖。也是以 CAFECA 登入的入口。",
   "/about": "認識碳權：制度說明（自願減量專案、巴黎協定第六條、ISO 14064、專案九階段、為什麼優先買在地、亞太各國額度、用途邊界、帳戶與帳本怎麼運作），以及 K 線行情與市場概況。",
-  "/trade": "交易：買賣同頁。買方可吃掛單或掛買單（限價）；賣方可上架持有的批次或賣給現有買單。下單是在 CAFECA 錢包簽一則訊息，不是鏈上交易。也在這裡存入、提領結算幣，以及下載自己的證明檔。",
+  "/trade": "交易：買賣同頁。買方可吃掛單或掛買單（限價）；賣方可上架持有的批次或賣給現有買單。下單是在 CAFECA 錢包簽一則訊息，不是鏈上交易。也在這裡看入金方式（匯款到信託專戶、備註填入金識別碼）、設定收款帳戶、申請出金，以及下載自己的證明檔。",
   "/portfolio": "我的資產：持有的批次、平均成本、損益，以及已取得的註銷憑證（可下載 PDF）。",
   "/retire": "註銷：把額度永久退出流通並取得憑證。要選用途（扣碳費／自願性碳中和／增量抵換／環評承諾）與受益人。自然人不能註銷。",
   "/kyc": "身分驗證：申請自然人或法人身分，通過後才能交易。",
   "/enterprise": "企業：專案登錄、上傳監測報告、申請查驗核發、上架。需要法人身分。",
   "/registry": "公告欄：所有核發、上架、移轉、註銷的即時紀錄，任何人都看得到。",
-  "/custody": "託管揭露：每月 5 日的託管與準備金對帳報告（查核機構簽署），以及帳本合約的償付能力（帳本宣稱欠多少 vs 實際有多少）、提領與逃生門。",
+  "/custody": "託管揭露：每月 5 日的託管與準備金對帳報告（查核機構簽署），以及帳本合約的償付能力（帳本宣稱欠多少 vs 記帳 TWD＝營運方宣稱的信託餘額）、出金流程；沒有逃生門。",
   "/audit": "審計（技術揭露與審計資訊）：鏈上有什麼、鏈下有什麼、哪些規則從合約拒絕降級成重播抓得到、分層公開、自己驗證的三種方法，以及每一期承諾與公開檔。",
   "/agreements": "契約：平台使用約定書、買賣契約、註銷委任書、代辦費用約定、服務流程說明書、隱私權政策、服務條款。每一份都有獨立網址與內容雜湊。",
   "/account": "帳戶與安全：CAFECA 身分合約地址、實名等級、簽章通道狀態，以及金鑰／裝置／掛失要去 CAFECA 錢包做的說明。",
@@ -106,7 +106,7 @@ export const TOOLS: { spec: FaithTool; run: Impl; needsLogin?: boolean }[] = [
       // 費率是帳本裡的 fees 事件（國內預設）
       return {
         listingFeeBps: ledgerTradeFeeBps(),
-        note: "pricePerTonne 的單位是 mTWD 的最小單位（1e6 = 1 mTWD）。remainingKg 是公斤，1000 公斤 = 1 公噸。",
+        note: "pricePerTonne 的單位是新台幣的最小單位（1e6 = 1 元）。remainingKg 是公斤，1000 公斤 = 1 公噸。",
         asks: orders.filter((o) => !country || o.country === country).slice(0, 25),
         bids: bids.filter((b) => !country || b.country === country || b.country === "").slice(0, 25),
       };
@@ -115,13 +115,13 @@ export const TOOLS: { spec: FaithTool; run: Impl; needsLogin?: boolean }[] = [
   {
     spec: {
       name: "my_portfolio",
-      description: "目前登入者在帳本裡的結算幣餘額，與持有的批次（含核發國、專案、年份、數量）。",
+      description: "目前登入者在帳本裡的新台幣餘額，與持有的批次（含核發國、專案、年份、數量）。",
       parameters: { type: "object", properties: {} },
     },
     needsLogin: true,
     run: async (_a, ctx) => ({
       ...(await holdings(ctx.address!)),
-      note: "twd 是結算幣最小單位字串（1e6 = 1 元）。batches[].kg 是公斤。",
+      note: "twd 是新台幣最小單位字串（1e6 = 1 元）。batches[].kg 是公斤。",
     }),
   },
   {
@@ -191,7 +191,7 @@ export const TOOLS: { spec: FaithTool; run: Impl; needsLogin?: boolean }[] = [
       return {
         country: c, overridden: row?.custom ?? false,
         tradeFeeBps: row?.tradeBps ?? f.defaultTradeBps, retireFeePerTonne: row?.retireFeePerTonne ?? f.defaultRetireFeePerTonne,
-        note: "retireFeePerTonne 單位是結算幣最小單位（1e6 = 1 元），每公噸。overridden=false 代表這一國沿用平台預設值。",
+        note: "retireFeePerTonne 單位是新台幣最小單位（1e6 = 1 元），每公噸。overridden=false 代表這一國沿用平台預設值。",
       };
     },
   },

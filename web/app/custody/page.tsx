@@ -20,7 +20,7 @@ import { MarketMakerDisclosure } from "@/components/MarketMakerDisclosure";
 /// 兩層並列顯示，不合併。合併之後就看不出「我們說的」與「可驗證的」哪裡不一樣了。
 ///
 /// 第三層是**帳本合約**。上面兩層講的是國家級託管：額度在核發國的登錄簿帳戶、入金在信託專戶。
-/// 使用者在交易所期間，持有記在鏈下帳本裡、結算幣託管在帳本合約，鏈上看不到個別持有人——
+/// 使用者在交易所期間，持有記在鏈下帳本裡、新台幣以記帳 TWD 記在帳本合約裡，鏈上看不到個別持有人——
 /// 那是使用者離自己最近的那一層，所以也要揭露，用同一套語言：
 /// 「帳本說欠多少」與「實際有多少」並列，不合併。
 
@@ -59,7 +59,7 @@ export default function CustodyPage() {
           本站不自己保管碳權，也不自己保管錢。
           <b>碳權</b>存放在各國政府的官方登錄簿帳戶裡——臺灣是環境部「溫室氣體減量額度管理系統」的額度帳戶，
           日本是Ｊ－クレジット登録簿，其餘依此類推；鏈上的每一公噸，都要對得到某一國登錄簿裡的一公噸。
-          <b>入金</b>存放在信託機構的信託專戶，與本站自有資金分離，鏈上結算幣的發行量要對得到專戶餘額。
+          <b>新台幣</b>存放在信託機構的信託專戶，與本站自有資金分離；鏈上只有記帳用的 TWD（只存在帳本合約裡、不能轉出），它的發行量要對得到專戶餘額。
           每月 <b>5 日</b>發布一次對帳報告並由查核機構簽署上鏈；定稿之後不能修改，要更正只能發新的一份，舊的留著。
         </p>
       </div>
@@ -148,7 +148,7 @@ export default function CustodyPage() {
                     <dt className="text-ink-300">鏈上發行量（報告）</dt><dd className="tnum text-ink-200">{twd(r.cash.tokenSupply)} {CASH}</dd>
                   </div>
                   <div className="flex justify-between gap-4">
-                    <dt className="text-ink-300">鏈上發行量（即時）</dt><dd className="tnum text-ink-200">{twd(c.liveTokenSupply)} {CASH}</dd>
+                    <dt className="text-ink-300">鏈上記帳 TWD 發行量（即時）</dt><dd className="tnum text-ink-200">{twd(c.liveTokenSupply)} {CASH}</dd>
                   </div>
                   <div className="flex justify-between gap-4">
                     <dt className="text-ink-300">對帳單雜湊</dt><dd className="font-mono text-xs text-ink-300">{short(r.cash.statementHash)}</dd>
@@ -157,7 +157,7 @@ export default function CustodyPage() {
               )}
               <p className="mt-3 border-t border-ink-500 pt-3 text-xs leading-6 text-ink-300">
                 入金不進本站的自有帳戶。使用者的錢在信託專戶裡，本站倒了也不屬於本站的財產。
-                Phase 0 的結算幣是測試代幣，這裡的數字只是把機制跑一次給你看。
+                Phase 0 展示版本尚未開立信託專戶，這裡的數字只是把機制跑一次給你看。
               </p>
             </Card>
 

@@ -106,7 +106,7 @@ export function createAgent(opts: {
     return outcome(event, receipt);
   }
 
-  /// 把鏈上的存入／提領鏡像進帳本（入金之後呼叫）。
+  /// 把鏈上的入金／出金確認鏡像進帳本（營運 Safe 確認之後呼叫）。
   async function mirror(ledger: Address): Promise<number> {
     const { added } = await mirrorCash({ store, client, ledger, fromBlock: opts.fromBlock ?? 0n, receiptSigner });
     return added.length;

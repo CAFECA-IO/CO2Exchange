@@ -3,13 +3,13 @@ import { readCashEvents } from "./chain.ts";
 import type { Event } from "./events.ts";
 import type { ReceiptSigner, Store } from "./store.ts";
 
-/// 把鏈上的結算幣存入／提領鏡像進帳本。
+/// 把鏈上的新台幣入金／出金確認鏡像進帳本。
 ///
-/// 結算幣是鏈上資產：使用者自己把 TWDC 轉進帳本合約，帳本只是**記下這件事**。
+/// 入金與出金由營運 Safe 在鏈上確認（CashDeposited／CashWithdrawn），帳本只是**記下這件事**。
 /// 所以這些事件不是誰簽的，而是由 ChainRef（tx hash ＋ log index）背書——查核者拿同一條鏈
 /// 就能逐筆比對，`ledger-commit --verify` 會雙向檢查（鏈上有、帳本沒有也算錯）。
 ///
-/// 網站（使用者存入後）、承諾工具（每期提交前）都會呼叫它；多個行程同時跑是常態，
+/// 網站、營運工具（確認之後）、承諾工具（每期提交前）都會呼叫它；多個行程同時跑是常態，
 /// 所以去重在帳本的寫入鎖裡做（`appendIf`），不能在鎖外先查再寫。
 ///
 /// 不依賴 Next——承諾工具與查核工具直接 import。

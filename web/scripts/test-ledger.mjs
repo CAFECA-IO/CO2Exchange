@@ -20,7 +20,7 @@ const { rootsOf, TAG, batchContent } = await import("../lib/ledger/trees.ts");
 const { rootFrom, leaf } = await import("../lib/ledger/merkle.ts");
 
 const { events, domains, authorities, actors, factory } = await buildScenario();
-const { X, Y, Z, T, A } = actors;
+const { X, Y, Z, T, A, EVIL } = actors;
 void Y;
 const { user, chain, id, issue, acct, P } = factory;
 let clock = factory.now();
@@ -215,42 +215,39 @@ await t("買單分批成交：捨去的零頭全部退回，鎖定歸零", async
   });
 }
 
-await t("提領請求（規則第 3 版）：現金移到待提領、兩個累計進葉子；鏈上領回先銷待提領，超出的從現金扣", async () => {
+await t("出金請求（規則第 4 版）：現金移到待出金、兩個累計進葉子；退回放回可動用；鏈上確認只能銷待出金", async () => {
   const y = Y.address.toLowerCase();
+  // 請求 15 萬、營運方退回 5 萬 → 待出金 10 萬、請求累計 10 萬
   assert.equal(s.pendingWithdraw.get(y), P(100_000n));
   assert.equal(s.withdrawRequested.get(y), P(100_000n));
-  const evilSeq = events.find((e) => e.kind === "withdraw" && e.amount === 1n).seq;
+  const evilSeq = events.find((e) => e.kind === "withdraw" && e.account === EVIL.address).seq;
   assert.match(reasons[String(evilSeq)], /可動用現金不足/);
-  // 葉子：cash 含待提領（仍是帳本欠他的），請求累計 = 10 萬、已領 = 0
+  const noPayout = events.find((e) => e.kind === "withdraw" && e.account === Z.address).seq;
+  assert.match(reasons[String(noPayout)], /沒有指定收款帳戶/);
+  const bigReject = events.filter((e) => e.kind === "withdrawReject").at(-1).seq;
+  assert.match(reasons[String(bigReject)], /待出金不足以退回/);
+  // 葉子：cash 含待出金（仍是帳本欠他的），請求累計 = 10 萬、已出金 = 0
   const b = balancesOf(s).find((x) => x.account.toLowerCase() === y);
   assert.equal(b.cash, s.cash.get(y) + (s.lockedCash.get(y) ?? 0n) + P(100_000n));
   assert.equal(b.withdrawRequested, P(100_000n)); assert.equal(b.withdrawSettled, 0n);
-  // 鏈上領回 6 萬、再領 5 萬（第二筆超出待提領的 1 萬只可能是逃生提領，從可動用現金扣）
+  // 營運方分兩筆匯出 6 萬、4 萬（鏈上 settleWithdrawal 的鏡像）：待出金歸零、已出金 10 萬、可動用不變
   const last = events.at(-1);
   const after = (e, i) => ({ ...e, seq: last.seq + BigInt(i + 1), at: last.at + BigInt(i + 1) });
-  const extra = [chain("cashWithdraw", Y, P(60_000n)), chain("cashWithdraw", Y, P(50_000n))].map(after);
+  const extra = [chain("cashWithdraw", Y, P(60_000n)), chain("cashWithdraw", Y, P(40_000n))].map(after);
   const s2 = apply(genesis(), [...events, ...extra], { sigOk: () => true });
   assert.equal(s2.pendingWithdraw.get(y) ?? 0n, 0n);
-  assert.equal(s2.withdrawSettled.get(y), P(110_000n));
-  assert.equal(s2.withdrawRequested.get(y), P(110_000n));
-  assert.equal(s2.cash.get(y), s.cash.get(y) - P(10_000n));
-  // 帳本裡沒有那麼多錢的鏈上提領：記成被拒絕（要查的事），不默默吞掉
-  const s3 = apply(genesis(), [...events, after(chain("cashWithdraw", Y, P(10_000_000n)), 0)], { sigOk: () => true });
-  assert.match(s3.rejected.at(-1).reason, /帳本餘額少於鏈上提領金額/);
+  assert.equal(s2.withdrawSettled.get(y), P(100_000n));
+  assert.equal(s2.withdrawRequested.get(y), P(100_000n));
+  assert.equal(s2.cash.get(y), s.cash.get(y));
+  // 超出待出金的鏈上確認（合約本來就擋）：記成被拒絕（要查的事），不從可動用扣
+  const s3 = apply(genesis(), [...events, after(chain("cashWithdraw", Y, P(100_001n)), 0)], { sigOk: () => true });
+  assert.match(s3.rejected.at(-1).reason, /待出金少於鏈上出金金額/);
+  assert.equal(s3.cash.get(y), s.cash.get(y));
 });
-await t("逃生提領放的是全部欠款：掛著的買單鎖住的錢也領走了，那些買單被撤掉，帳本對得上", async () => {
-  const y = Y.address.toLowerCase();
-  const last = events.at(-1);
-  const at = (e, k) => ({ ...e, seq: last.seq + BigInt(k), at: last.at + BigInt(k) });
-  // Y 掛一張買單鎖住 1 萬，然後鏈上逃生領走他的全部欠款（可動用＋鎖定＋待提領）
-  const bid = at({ kind: "place", account: Y.address, nonce: 10_000n, side: "buy", batchId: 0n, country: "TW", amountKg: 10_000n, pricePerTonne: P(1_000n), minFillKg: 0n, expiry: last.at + 999_999n, atBlock: last.atBlock, signature: "0x" }, 1);
-  const s1 = apply(genesis(), [...events, bid], { sigOk: () => true });
-  const owed = s1.cash.get(y) + s1.lockedCash.get(y) + s1.pendingWithdraw.get(y);
-  const esc = at(chain("cashWithdraw", Y, owed), 2);
-  const s2 = apply(genesis(), [...events, bid, esc], { sigOk: () => true });
-  assert.ok(!s2.rejected.some((r) => r.seq === esc.seq), "逃生提領沒有被拒絕");
-  assert.equal(s2.cash.get(y) ?? 0n, 0n); assert.equal(s2.lockedCash.get(y) ?? 0n, 0n); assert.equal(s2.pendingWithdraw.get(y) ?? 0n, 0n);
-  assert.ok(![...s2.book.values()].some((o) => o.account === Y.address), "Y 的買單被撤掉");
+await t("入金鏡像帶銀行參考號雜湊：它進事件內容（改了就是另一筆），但不影響餘額以外的狀態", async () => {
+  const dep = events.find((e) => e.kind === "cashDeposit");
+  assert.match(dep.bankRef, /^0x[0-9a-f]{64}$/);
+  const { keccak256, toBytes } = await import("viem");
+  assert.notEqual(eventHash(dep), eventHash({ ...dep, bankRef: keccak256(toBytes("other")) }));
 });
 console.log(`\n${n} 個測試通過（事件 ${events.length} 筆，拒絕 ${s.rejected.length} 筆，成交 ${s.fills.length} 筆）`);
-void eventHash;

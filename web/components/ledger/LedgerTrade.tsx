@@ -16,7 +16,7 @@ import { outcomeText, useLedger, type WithdrawStatus } from "@/lib/client/ledger
 /// 交易所收進帳本、回一張簽收收據；撮合是重播帳本的結果，每小時一期把整份帳本壓成承諾上鏈。
 /// 所以這裡沒有 approve、沒有 gas、沒有「等出塊」——只有簽章。
 ///
-/// 結算幣例外：它是鏈上資產，要先存進帳本合約（一筆鏈上交易），之後才能在帳本裡買。
+/// 新台幣例外：它是信託專戶裡的真錢，入金是匯款、由營運 Safe 在鏈上確認之後才能在帳本裡買；出金是簽請求、等營運方匯款。
 
 type Ask = {
   orderId: number; seller: string; batchId: number; remainingKg: number; pricePerTonne: string; minFillKg: number;
@@ -41,6 +41,7 @@ export function LedgerTrade() {
   const [buy, setBuy] = useState({ country: "TW", batchId: 0, tonnes: "1", price: "" });
   const [sell, setSell] = useState({ batchId: 0, tonnes: "1", price: "" });
   const [depositTwd, setDepositTwd] = useState("100000");
+  const [payout, setPayout] = useState({ bankCode: "", accountNo: "", holder: "" });
   const [withdrawTwd, setWithdrawTwd] = useState("");
   const [ws, setWs] = useState<WithdrawStatus | null>(null);
   const buyGate = useAgreementGate(wallet?.address, ["platform-terms", "trade-agreement"]);
@@ -55,7 +56,7 @@ export function LedgerTrade() {
     return () => { ignore = true; };
   }, [wallet, meSeq]);
 
-  // 提領狀態跟著帳本的 head 更新（申請、承諾上鏈、領回之後都會變）
+  // 出金狀態跟著帳本的 head 更新（申請、承諾上鏈、營運方確認之後都會變）
   const wsFetch = lg.withdrawStatus;
   useEffect(() => {
     if (!lg.me) return;
@@ -127,27 +128,30 @@ export function LedgerTrade() {
     return outcomeText(r, "撤單");
   });
 
-  const deposit = () => run("存入", async () => {
+  const devDeposit = () => run("模擬入金", async () => {
     const amt = BigInt(Math.round(Number(depositTwd) * 1e6));
     if (amt <= 0n) throw new Error("金額要大於零");
-    await lg.deposit(amt);
-    return { kind: "ok", text: `已存入 ${fmtTwd(amt)} ${CASH}，帳本已記下這筆鏈上存入` };
+    await lg.devDeposit(amt);
+    return { kind: "ok", text: `已模擬入金 ${fmtTwd(amt)} 元：營運 Safe 在鏈上確認了這筆匯款，帳本已入帳` };
   });
 
-  const requestWithdraw = () => run("申請提領", async () => {
+  const savePayout = () => run("收款帳戶", async () => {
+    const r = await lg.setPayoutAccount(payout);
+    setPayout({ bankCode: "", accountNo: "", holder: "" });
+    return { kind: "ok", text: `收款帳戶已設定：${r.bankCode} ${r.accountNo}（${r.holder}）` };
+  });
+
+  const requestWithdraw = () => run("申請出金", async () => {
     const amt = BigInt(Math.round(Number(withdrawTwd) * 1e6));
     if (amt <= 0n) throw new Error("金額要大於零");
+    const pa = lg.me?.payoutAccount;
+    if (!pa) throw new Error("請先設定收款帳戶");
     const r = await lg.submit("withdraw", { amount: amt.toString() }, {
-      title: `申請提領 ${fmtTwd(amt)} ${CASH}`,
-      detail: "這筆錢會從可動用移到「待提領」，不能再拿來交易；下一期承諾上鏈之後（最長一小時）就能從帳本合約領回。",
+      title: `申請出金 ${fmtTwd(amt)} 元`,
+      detail: `匯到 ${pa.bankCode} ${pa.accountNo}（${pa.holder}）。這筆錢會從可動用移到「待出金」，不能再拿來交易；下一期承諾上鏈之後由營運方匯款並在鏈上確認。`,
     });
     setWithdrawTwd("");
-    return outcomeText(r, "提領請求");
-  });
-
-  const claim = () => run("領回", async () => {
-    const { amount } = await lg.claim();
-    return { kind: "ok", text: `已從帳本合約領回 ${fmtTwd(amount)} ${CASH} 到你的錢包` };
+    return outcomeText(r, "出金請求");
   });
 
   const downloadProof = () => run("證明檔", async () => {
@@ -179,60 +183,65 @@ export function LedgerTrade() {
       )}
 
       <div className="grid gap-5 lg:grid-cols-[1fr_1.2fr]">
-        <Card title="帳本裡的結算幣">
+        <Card title="新台幣">
           <dl className="grid grid-cols-2 gap-3 text-sm">
-            <div><dt className="text-xs text-ink-300">可動用</dt><dd className="tnum text-lg text-ink-50">{fmtTwd(available)} <span className="text-xs text-ink-300">{CASH}</span></dd></div>
-            <div><dt className="text-xs text-ink-300">買單鎖定中</dt><dd className="tnum text-lg text-ink-50">{fmtTwd(locked)} <span className="text-xs text-ink-300">{CASH}</span></dd></div>
+            <div><dt className="text-xs text-ink-300">可動用</dt><dd className="tnum text-lg text-ink-50">{fmtTwd(available)} <span className="text-xs text-ink-300">元</span></dd></div>
+            <div><dt className="text-xs text-ink-300">買單鎖定中</dt><dd className="tnum text-lg text-ink-50">{fmtTwd(locked)} <span className="text-xs text-ink-300">元</span></dd></div>
           </dl>
-          {lg.me?.wallet && (
-            <dl className="mt-3 space-y-1 border-t border-ink-700 pt-3 text-xs">
-              <div className="flex justify-between gap-3">
-                <dt className="text-ink-300">錢包裡（可存入）</dt>
-                <dd className="tnum text-ink-100" data-testid="wallet-cash">
-                  {lg.me.wallet.balance === null ? "讀不到" : `${fmtTwd(BigInt(lg.me.wallet.balance))} ${CASH}`}
-                </dd>
-              </div>
-              <div className="flex justify-between gap-3">
-                <dt className="text-ink-300">結算幣合約</dt>
-                <dd className="break-all text-right font-mono text-ink-200" title={lg.me.wallet.settlementToken}>{lg.me.wallet.settlementToken}</dd>
-              </div>
-              <div className="flex justify-between gap-3">
-                <dt className="text-ink-300">存入對象（帳本合約）</dt>
-                <dd className="break-all text-right font-mono text-ink-200" title={lg.me.wallet.ledger}>{lg.me.wallet.ledger}</dd>
-              </div>
-            </dl>
+
+          {lg.me?.deposit && (
+            <div className="mt-4 border-t border-ink-700 pt-4" data-testid="deposit">
+              <h3 className="text-sm font-semibold text-ink-50">入金</h3>
+              <dl className="mt-2 space-y-1 text-xs">
+                <div className="flex justify-between gap-3"><dt className="text-ink-300">銀行</dt><dd className="text-right text-ink-100">{lg.me.deposit.trust.bank}{lg.me.deposit.trust.branch && ` ${lg.me.deposit.trust.branch}`}</dd></div>
+                <div className="flex justify-between gap-3"><dt className="text-ink-300">戶名</dt><dd className="text-right text-ink-100">{lg.me.deposit.trust.accountName}</dd></div>
+                {lg.me.deposit.trust.accountNo && <div className="flex justify-between gap-3"><dt className="text-ink-300">帳號</dt><dd className="tnum text-right font-mono text-ink-100">{lg.me.deposit.trust.accountNo}</dd></div>}
+                <div className="flex justify-between gap-3"><dt className="text-ink-300">匯款備註（入金識別碼）</dt><dd className="tnum text-right font-mono text-lg text-tide" data-testid="deposit-code">{lg.me.deposit.code}</dd></div>
+              </dl>
+              <p className="mt-2 text-xs leading-6 text-ink-300">{lg.me.deposit.trust.note}</p>
+              {lg.devSigning && (
+                <div className="mt-3 flex items-end gap-2">
+                  <Field label="模擬入金（本機展示）">
+                    <input className={inputCls} inputMode="decimal" value={depositTwd} onChange={(e) => setDepositTwd(e.target.value)} />
+                  </Field>
+                  <Button onClick={devDeposit} disabled={!!busy}>{busy === "模擬入金" ? "入帳中…" : "模擬入金"}</Button>
+                </div>
+              )}
+            </div>
           )}
-          <div className="mt-4 flex items-end gap-2">
-            <Field label={`存入金額（${CASH}）`}>
-              <input className={inputCls} inputMode="decimal" value={depositTwd} onChange={(e) => setDepositTwd(e.target.value)} />
-            </Field>
-            <Button onClick={deposit} disabled={!!busy}>{busy === "存入" ? "存入中…" : "存入帳本"}</Button>
-          </div>
-          <p className="mt-3 text-xs leading-6 text-ink-300">
-            結算幣是鏈上資產：存入是一筆鏈上轉帳，轉進帳本合約託管；之後的買賣只是帳本更新，不必等出塊、不付 gas。
-            帳本欠您多少，每小時隨承諾上鏈，可與合約實際持有對照（見<Link className="underline" href="/custody">託管揭露</Link>）。
-          </p>
 
           <div className="mt-5 border-t border-ink-700 pt-4" data-testid="withdraw">
-            <h3 className="text-sm font-semibold text-ink-50">提領</h3>
+            <h3 className="text-sm font-semibold text-ink-50">出金</h3>
             <dl className="mt-2 grid grid-cols-2 gap-3 text-sm">
-              <div><dt className="text-xs text-ink-300">待提領</dt><dd className="tnum text-ink-50">{fmtTwd(BigInt(lg.me?.cash.pendingWithdraw ?? "0"))} <span className="text-xs text-ink-300">{CASH}</span></dd></div>
-              <div><dt className="text-xs text-ink-300">現在可領回</dt><dd className="tnum text-ink-50" data-testid="claimable">{ws ? fmtTwd(BigInt(ws.claimable)) : "—"} <span className="text-xs text-ink-300">{CASH}</span></dd></div>
+              <div><dt className="text-xs text-ink-300">待出金</dt><dd className="tnum text-ink-50">{fmtTwd(BigInt(lg.me?.cash.pendingWithdraw ?? "0"))} <span className="text-xs text-ink-300">元</span></dd></div>
+              <div><dt className="text-xs text-ink-300">已進承諾、待匯款</dt><dd className="tnum text-ink-50" data-testid="settleable">{ws ? fmtTwd(BigInt(ws.settleable)) : "—"} <span className="text-xs text-ink-300">元</span></dd></div>
             </dl>
             {ws && BigInt(ws.waitingForCommit) > 0n && (
-              <p className="mt-1 text-xs text-ink-300">其中 {fmtTwd(BigInt(ws.waitingForCommit))} {CASH} 等下一期承諾上鏈（最長一小時）才領得到。</p>
+              <p className="mt-1 text-xs text-ink-300">其中 {fmtTwd(BigInt(ws.waitingForCommit))} 元等下一期承諾上鏈（最長一小時）。</p>
             )}
-            {ws && !ws.withdrawalsEnabled && !ws.escapeActive && <p className="mt-1 text-xs text-warn">營運方暫停了一般提領（逃生門不受影響）。</p>}
+            {lg.me?.payoutAccount ? (
+              <p className="mt-2 text-xs text-ink-200">收款帳戶：{lg.me.payoutAccount.bankCode} {lg.me.payoutAccount.accountNo}（{lg.me.payoutAccount.holder}）</p>
+            ) : (
+              <p className="mt-2 text-xs text-warn">還沒有設定收款帳戶，無法申請出金。</p>
+            )}
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              <input className={inputCls} placeholder="銀行代碼" value={payout.bankCode} onChange={(e) => setPayout({ ...payout, bankCode: e.target.value })} />
+              <input className={inputCls} placeholder="帳號" value={payout.accountNo} onChange={(e) => setPayout({ ...payout, accountNo: e.target.value })} />
+              <input className={inputCls} placeholder="戶名" value={payout.holder} onChange={(e) => setPayout({ ...payout, holder: e.target.value })} />
+            </div>
+            <Button className="mt-2" variant="secondary" onClick={savePayout} disabled={!!busy || !payout.bankCode || !payout.accountNo || !payout.holder}>
+              {lg.me?.payoutAccount ? "變更收款帳戶" : "設定收款帳戶"}
+            </Button>
             <div className="mt-3 flex items-end gap-2">
-              <Field label={`申請提領（${CASH}）`}>
+              <Field label="申請出金（元）">
                 <input className={inputCls} inputMode="decimal" value={withdrawTwd} onChange={(e) => setWithdrawTwd(e.target.value)} placeholder="金額" />
               </Field>
-              <Button variant="secondary" onClick={requestWithdraw} disabled={!!busy || !withdrawTwd}>{busy === "申請提領" ? "簽署中…" : "申請"}</Button>
-              <Button onClick={claim} disabled={!!busy || !ws || BigInt(ws.claimable) === 0n}>{busy === "領回" ? "領回中…" : "領回"}</Button>
+              <Button onClick={requestWithdraw} disabled={!!busy || !withdrawTwd || !lg.me?.payoutAccount}>{busy === "申請出金" ? "簽署中…" : "申請出金"}</Button>
             </div>
             <p className="mt-3 text-xs leading-6 text-ink-300">
-              提領分兩步：先在帳本裡簽一筆提領請求（錢移到待提領，不能再交易），下一期承諾上鏈後憑證據從帳本合約領回。
-              合約只放已請求的部分，所以帳本裡還在用的錢不會同時被領走。
+              您的新台幣存在信託專戶，平台上的新台幣與碳權都不能提到鏈上錢包。出金分三步：您簽出金請求（錢移到待出金，不能再交易）→
+              下一期承諾上鏈 → 營運方匯款到您的收款帳戶並在鏈上確認。鏈上的確認只能銷掉您自己簽過、而且已進承諾的請求。
+              帳本欠您多少、鏈上記帳多少，每小時隨承諾公開（見<Link className="underline" href="/custody">託管揭露</Link>）。
             </p>
             <Button variant="secondary" onClick={downloadProof} disabled={!!busy}>{busy === "證明檔" ? "產生中…" : "下載我的證明檔"}</Button>
           </div>
@@ -257,8 +266,8 @@ export function LedgerTrade() {
                 <Field label="數量（噸）"><input className={inputCls} inputMode="decimal" value={buy.tonnes} onChange={(e) => setBuy({ ...buy, tonnes: e.target.value })} /></Field>
               </div>
               <Field label="每噸最高價（元）"><input className={inputCls} inputMode="decimal" placeholder={asks[0] ? String(Number(asks[0].pricePerTonne) / 1e6) : ""} value={buy.price} onChange={(e) => setBuy({ ...buy, price: e.target.value })} /></Field>
-              <p className="text-xs text-ink-300">最多支付 {fmtTwd(buyCost)} {CASH}（另加手續費 {fee / 100}%）。沒成交的部分掛在簿子上，鎖住的結算幣隨時可以撤單拿回。</p>
-              {buyCost > available && buyKg > 0 && buyPrice > 0 && <Notice kind="warn">可動用的結算幣不夠，請先存入。</Notice>}
+              <p className="text-xs text-ink-300">最多支付 {fmtTwd(buyCost)} {CASH}（另加手續費 {fee / 100}%）。沒成交的部分掛在簿子上，鎖住的新台幣隨時可以撤單拿回。</p>
+              {buyCost > available && buyKg > 0 && buyPrice > 0 && <Notice kind="warn">可動用的新台幣不夠，請先入金。</Notice>}
               <AgreementCheck gate={buyGate} />
               <Button onClick={placeBuy} disabled={!buyReady || !!busy}>{busy === "掛買單" ? "送出中…" : "簽署並送出買單"}</Button>
             </div>

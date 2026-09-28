@@ -2,7 +2,7 @@ import type { Address } from "viem";
 
 /// deployments/<chainId>.json，由 script/DeployLedger.s.sol 寫出。
 ///
-/// 設計 v4：鏈上只有帳本合約（每小時的承諾、授權金鑰清單與門檻、結算幣託管）與治理。
+/// 設計 v4：鏈上只有帳本合約（每小時的承諾、授權金鑰清單與門檻、記帳 TWD 與入出金確認）與治理。
 /// 登錄簿、身分、市場全部在鏈下帳本。
 export type Deployment = {
   chainId: number;
@@ -11,13 +11,11 @@ export type Deployment = {
   deployedAt?: number;
   deployedAtBlock?: number;
   ledger: Address;
-  /// 帳本合約的介面版本（目前是 2）。事件規則的版本另記在每一期承諾的 rulesVersion。
+  /// 帳本合約的介面版本（目前是 3：新台幣入出金版，沒有鏈上提領與逃生門）。事件規則的版本另記在每一期承諾的 rulesVersion。
   ledgerVersion: number;
+  /// 帳本合約部署的記帳 TWD（LedgerTWD）。唯一持有人是帳本合約，不可轉讓：
+  /// 入金確認時鑄、出金確認時銷，總量＝營運方宣稱的信託專戶裡屬於使用者的新台幣。
   settlementToken: Address;
-  /// 這個結算幣是不是本站自己發的（MockTWD）。
-  /// false ＝ 外部代幣（Boltchain 上是 CAFECA 的 TWDC），本站沒有鑄幣權，demo faucet 不能用。
-  /// 讀的時候把 undefined 當「不確定」而不是 true——猜錯的方向要選安全的那一邊。
-  settlementMintable?: boolean;
   nationalSafe: Address;
   operatorSafe: Address;
   timelock: Address;

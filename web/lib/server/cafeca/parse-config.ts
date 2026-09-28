@@ -18,7 +18,7 @@ export type CafecaContracts = {
   keyring: Address;
   attestation: Address;
   recovery: Address;
-  /// 結算幣。還沒用到，但它的存在是一個提示：TWD 代幣可能不必自己發。
+  /// CAFECA 設定檔裡的結算幣（TWDC）。本站不用它：規則第 4 版起新台幣在信託專戶，帳本合約自己建立記帳 TWD。
   twdc?: Address;
   /// ERC-4337 EntryPoint。使用者的帳戶是 4337 帳戶，爭議處理時會用到。
   entryPoint?: Address;

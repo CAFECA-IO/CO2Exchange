@@ -68,7 +68,7 @@ export function MarketPanel() {
             <span className={`font-display text-4xl font-bold ${up ? "text-up" : "text-down"}`}>
               {fmtPrice(t?.last ?? null)}
             </span>
-            <span className="text-sm text-ink-300">mTWD</span>
+            <span className="text-sm text-ink-300">元</span>
             {t?.changePct != null && (
               <span className="text-sm font-medium">
                 <Delta value={t.changePct} />
@@ -103,7 +103,7 @@ export function MarketPanel() {
         <Stat label="區間高">{fmtPrice(t?.high ?? null)}</Stat>
         <Stat label="區間低">{fmtPrice(t?.low ?? null)}</Stat>
         <Stat label="成交量">{t ? `${fmtTonne(t.volumeKg)} 噸` : "—"}</Stat>
-        <Stat label="成交金額">{t ? `${(t.volumeTwd / 1e6).toLocaleString("zh-TW", { maximumFractionDigits: 0 })} mTWD` : "—"}</Stat>
+        <Stat label="成交金額">{t ? `${(t.volumeTwd / 1e6).toLocaleString("zh-TW", { maximumFractionDigits: 0 })} 元` : "—"}</Stat>
         <Stat label="成交筆數">{t?.tradeCount ?? "—"}</Stat>
         {/* 碳費是經濟錨點：額度貴過碳費，企業就寧可繳費不買額度 */}
         {t?.carbonFeePerTonne != null && (

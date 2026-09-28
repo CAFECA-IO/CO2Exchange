@@ -11,8 +11,8 @@ import { errorAbi } from "@/lib/error-abi";
 
 /// 把鏈上的 revert 拆到看得懂為止。
 ///
-/// 設計 v4 之後鏈上只剩帳本合約、結算幣與治理，會 revert 的地方少了很多：
-/// 存入（結算幣授權或餘額不夠）、提領與領回（證據過期、已經領完、提領關閉）、
+/// 設計 v4 之後鏈上只剩帳本合約、記帳 TWD 與治理，會 revert 的地方少了很多：
+/// 營運 Safe 的入金確認（銀行參考號重複）與出金確認（證據過期、超過請求）、
 /// 承諾（期別或雜湊鏈接不上、償付不足）。讀取也可能 revert，那時候一樣要翻成人話——
 /// **任何錯誤都要有制式錯誤碼**，不能掉到 handleError 的最後一行變成 INTERNAL。
 ///
@@ -23,18 +23,18 @@ const MAX_DEPTH = 6;
 /// 使用者真的會遇到的那幾個，給一句下一步。其餘的照原樣顯示就好——
 /// 硬要為每一個 error 編一句話，只會讓真正有用的那幾句被淹沒。
 const HINT: Record<string, string> = {
-  NotLatestEpoch: "證據不是最新一期的。重新整理提領狀態，用最新一期的證據再送一次。",
-  UnknownEpoch: "這一期還沒有承諾上鏈。等下一期承諾（最長一小時）再領。",
+  NotLatestEpoch: "證據不是最新一期的。重新整理出金狀態，用最新一期的證據再確認一次。",
+  UnknownEpoch: "這一期還沒有承諾上鏈。等下一期承諾（最長一小時）再確認。",
   BadProof: "證據對不上鏈上的承諾。多半是承諾剛換期，重新整理後用最新的證據再送。",
   SumMismatch: "證據裡的加總對不上鏈上的承諾，這份證據不是這一期產的。",
-  NothingLeft: "這個帳戶在這一期沒有可以領的了（已經領完，或還沒有提領請求）。",
-  WithdrawalsDisabled: "一般提領目前關閉（營運 Safe 的開關）。承諾停擺超過 72 小時之後，逃生提領不受這個開關影響。",
-  Insolvent: "帳本宣稱欠使用者的結算幣比合約持有的多，合約拒絕了這一期承諾。這是要立刻查的事。",
+  NothingLeft: "這個帳戶在這一期沒有可以確認的出金了（已經確認完，或出金請求還沒進承諾）。",
+  BankRefUsed: "這個銀行交易參考號已經確認過了，同一筆匯款不能入帳兩次。",
+  NonTransferable: "記帳 TWD 不能轉出：它只存在帳本合約裡。",
+  Insolvent: "帳本宣稱欠使用者的新台幣比記帳 TWD 的總量多，合約拒絕了這一期承諾。這是要立刻查的事。",
   ChainBroken: "承諾的 prev 接不上上一期。承諾程式讀到的帳本和上一期不是同一份。",
   EpochOutOfOrder: "期別不連續。先確認上一期承諾有沒有上鏈，再重跑 ledger:commit。",
   ZeroAmount: "數量要大於 0。",
-  ERC20InsufficientBalance: "錢包裡的結算幣不夠。",
-  ERC20InsufficientAllowance: "結算幣的授權額度不夠，重新送一次會一併補上授權。",
+  ERC20InsufficientBalance: "帳本合約裡的記帳 TWD 不夠銷毀（出金確認超過了帳本合約持有的）。",
 };
 
 function describe(data: Hex, depth = 0): string | null {

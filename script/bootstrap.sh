@@ -11,7 +11,7 @@
 # ## 部署的是哪一套
 #
 # 預設部署**設計 v4 的帳本合約**（script/DeployLedger.s.sol）：鏈上只有 Ledger（每小時的承諾鏈、
-# 授權金鑰清單與門檻、結算幣託管、逃生艙、碳權請求權登記）與治理（國家 Safe、營運 Safe、Timelock）。
+# 授權金鑰清單與門檻、記帳 TWD、營運 Safe 的入出金確認）與治理（國家 Safe、營運 Safe、Timelock）。
 # 登錄簿、身分、市場、憑證都是鏈下帳本裡的簽章事件。
 #
 # ## 金鑰在**你的機器上產生**，不會經過任何人
@@ -23,7 +23,6 @@
 #
 # 環境變數：
 #   RPC_URL                   目標鏈（與 web/.env.local 同名同義）
-#   SETTLEMENT_TOKEN          外部結算幣。Boltchain 上是 CAFECA 的 TWDC
 #   ENV_FILE=web/.env.local   金鑰與設定寫到哪
 #   DEPLOY_GAS                部署的 gas 預算（實測約 1,340 萬）
 #   SAFETY=2                  估出來的金額再乘上的倍數
@@ -168,7 +167,8 @@ cmd_keys () {
 # ── 治理 Safe 的 owner ──────────────────────────────────────────────
 #
 # 國家 Safe 2-of-3、營運 Safe 1-of-2。部署腳本吃的是**地址清單**
-# （NATIONAL_OWNERS / OPERATOR_OWNERS），私鑰只有之後用 govern.sh 簽字時才會用到。
+# （NATIONAL_OWNERS / OPERATOR_OWNERS），私鑰只有之後用 govern.sh 簽字、或營運 Safe 持有人用
+# `npm run fiat` 確認新台幣入出金時才會用到（兩者都只從 .governance.env 讀，網站不讀）。
 #
 # 預設值是 anvil 的帳戶 5~9，而那些金鑰印在 anvil 的啟動畫面上——所以在公開鏈上
 # 部署腳本會直接 revert（PublicKeyOnPublicChain）。那個檢查是對的：用它們部署
@@ -270,8 +270,8 @@ cmd_fund () {
   echo ">> 目標鏈 ${RPC_URL}（chainId ${CHAIN_ID}）"
   echo "   撥款額 = gas 預算 × 目前 gasPrice × ${SAFETY} 倍"
   echo "   帳本版：RELAYER_PK 備 ${COMMIT_DAYS} 天 × 24 期承諾 × ${COMMIT_GAS} gas（COMMIT_DAYS / COMMIT_GAS 可調）"
-  echo "   做市與模擬人物（npm run mm）：只有入金是鏈上交易，gas 與結算幣都由 DEPLOYER_PK 出；"
-  echo "     外部結算幣（TWDC）沒有鑄幣權，DEPLOYER_PK 要先持有要撥給做市帳戶與人物的 TWDC。要算進撥款額：SIM_ACCOUNTS=30"
+  echo "   做市與模擬人物（npm run mm）：撥款是營運 Safe 的鏈上入金確認（creditDeposit），gas 由 DEPLOYER_PK 出；"
+  echo "     不需要持有任何代幣（記帳 TWD 只存在帳本合約裡）。模擬人物要算進撥款額：SIM_ACCOUNTS=30"
   [ "$SIM_ACCOUNTS" = 0 ] || echo "   DEPLOYER_PK 另加 ${SIM_ACCOUNTS} × $(fmt_eth "$SIM_GAS_TOPUP")：模擬市場的人物帳戶由平台代付 gas"
   echo
   printf '   %-20s %-44s %12s %14s\n' "金鑰" "地址" "需要" "現有"
@@ -297,7 +297,7 @@ cmd_fund () {
     [ "$(key_gas "$k")" = "0" ] && printf '   %s 不需要餘額：%s\n' "$k" "$(key_role "$k")"
   done
   echo "   治理 Safe 的 owner 也不需要餘額：簽章是鏈下的，execTransaction 的 gas 由 SENDER_PK 付"
-  echo "   一般使用者也不需要：買賣與註銷是簽一筆帳本事件，不送交易（只有入金／提領會動鏈）"
+  echo "   一般使用者也不需要：買賣與註銷是簽一筆帳本事件，不送交易（入金與出金由營運 Safe 在鏈上確認，使用者不送交易）"
   if [ "$short" = "1" ]; then
     echo
     echo ">> 還沒夠。撥款到上面標 ✗ 的地址，然後再跑一次："
@@ -360,8 +360,11 @@ cmd_deploy () {
   if [ -z "${CAFECA_KEYRING:-}" ]; then CAFECA_KEYRING=$(env_get CAFECA_KEYRING); fi
   if [ -z "${CAFECA_KEYRING:-}" ] && [ "$CHAIN_ID" = "8018" ]; then CAFECA_KEYRING=0x367a9E8a6E8bA108F4cC4B863d03dD618aD7893b; fi
   if [ -n "${CAFECA_KEYRING:-}" ]; then export CAFECA_KEYRING; fi
-  # Boltchain 上的結算幣是 CAFECA 的 TWDC。沒指定就用它——在外部鏈上發 MockTWD 沒有意義。
-  if [ -z "${SETTLEMENT_TOKEN:-}" ] && [ "$CHAIN_ID" = "8018" ]; then export SETTLEMENT_TOKEN=0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3; fi
+  # 規則第 4 版：不接外部結算幣。帳本合約部署時建立自己的記帳 TWD（LedgerTWD：只有帳本合約能持有、
+  # 不能轉出），使用者的錢是信託專戶裡的真新台幣，入出金由營運 Safe 在鏈上確認（npm run fiat）。
+  if [ -n "${SETTLEMENT_TOKEN:-}" ] || [ -n "$(env_get SETTLEMENT_TOKEN)" ]; then
+    echo "   ⚠️ SETTLEMENT_TOKEN 已經不用了（帳本合約自己建立記帳 TWD），忽略它；可以從 $(basename "$ENV_FILE") 刪掉"
+  fi
 
   # 部署是一串幾十筆交易。中途按 Ctrl-C 或連線斷掉，鏈上會留下做到一半的狀態，
   # 而**下一次重跑會撞上 "nonce too low" / "replacement transaction underpriced"**——
@@ -378,9 +381,7 @@ cmd_deploy () {
   echo "   主權角色 = 國家 Safe 持有人 ${NATIONAL_OWNERS}（帳本門檻 ${SOVEREIGN_THRESHOLD:-$NATIONAL_THRESHOLD}）"
   echo "   營運角色 = 營運 Safe 持有人 ${OPERATOR_OWNERS}（帳本門檻 ${OPERATOR_AUTH_THRESHOLD:-$OPERATOR_THRESHOLD}）"
   echo "   CAFECA_KEYRING    = ${CAFECA_KEYRING:-（沒有：無法查核 CAFECA passkey 簽章，只收 EOA 簽章）}"
-  [ -n "${SETTLEMENT_TOKEN:-}" ] \
-    && echo "   SETTLEMENT_TOKEN = ${SETTLEMENT_TOKEN}（不會自己發 MockTWD）" \
-    || echo "   ⚠️ 沒有 SETTLEMENT_TOKEN，會部署 MockTWD。外部鏈上通常該指定既有的結算幣。"
+  echo "   新台幣 = 帳本合約自己建立的記帳 TWD；入金與出金由營運 Safe 確認（持有人金鑰在 .governance.env 的 OPERATOR_OWNER_<n>_PK）"
 
   # 外部鏈預設加 --slow：一筆確認過再送下一筆。
   #
@@ -403,7 +404,6 @@ cmd_deploy () {
   echo ">> 更新 $(basename "$ENV_FILE")"
   env_set RPC_URL "$RPC_URL"
   env_set CHAIN_ID "$CHAIN_ID"
-  if [ -n "${SETTLEMENT_TOKEN:-}" ]; then env_set SETTLEMENT_TOKEN "$SETTLEMENT_TOKEN"; fi
   if [ -n "${CAFECA_KEYRING:-}" ]; then env_set CAFECA_KEYRING "$CAFECA_KEYRING"; fi
   echo "   RPC_URL / CHAIN_ID 已寫入"
 
@@ -445,7 +445,7 @@ check_roles () {
   local dep=$1
   command -v python3 >/dev/null 2>&1 || { echo "   （沒有 python3，略過角色檢查）"; return 0; }
   local lv; lv=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('ledgerVersion',0))" "$dep")
-  [ "$lv" = "2" ] || { echo "!! $(basename "$dep") 不是帳本部署（script/DeployLedger.s.sol）"; return 1; }
+  [ "$lv" = "3" ] || { echo "!! $(basename "$dep") 不是目前版本的帳本部署（需要 ledgerVersion 3，script/DeployLedger.s.sol）"; return 1; }
   check_ledger_roles "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['ledger'])" "$dep")"
 }
 

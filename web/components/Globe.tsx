@@ -22,7 +22,7 @@ type Props = {
   /// 目前畫的是哪一個量，用在 tooltip 的文字上。
   measureLabel: string;
   /// 怎麼把數值寫成字（含單位）。地球畫的量不一定是噸——第三個量是價格，
-  /// 單位是 mTWD / 噸。把格式交給呼叫端，這裡就不必知道有哪些量。
+  /// 單位是 元 / 噸。把格式交給呼叫端，這裡就不必知道有哪些量。
   formatValue: (v: number) => string;
   className?: string;
 };

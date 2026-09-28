@@ -14,7 +14,7 @@
 //   ② 每一筆簽章都重驗過，而且**不讀任何歷史狀態**（不需要 archive 節點）：
 //      授權事件 k-of-n ecrecover、簽章者在收單區塊有授權且達到門檻；
 //      使用者事件 ecrecover 或 CAFECA WebAuthn（公鑰與有效區間來自鏈上事件）；收單區塊落在所屬那一期
-//   ③ 鏈上的每一筆結算幣存入／提領，帳本裡都有而且只有一筆（反之亦然）
+//   ③ 鏈上的每一筆入金／出金確認（營運 Safe），帳本裡都有而且只有一筆（反之亦然）
 //   ④ 餘額樹的總現金不超過合約持有（合約也會擋，這裡先擋，錯誤訊息比較說得清楚）
 import fs from "node:fs";
 import path from "node:path";
@@ -38,7 +38,7 @@ const LOCAL = chainId === 31337 || chainId === 1337;
 const chain = defineChain({ id: chainId, name: "c", nativeCurrency: { name: "N", symbol: "N", decimals: 18 }, rpcUrls: { default: { http: [RPC] } } });
 const pub = createPublicClient({ chain, transport: http(RPC), pollingInterval: LOCAL ? 50 : 1000 });
 const D = JSON.parse(fs.readFileSync(process.env.DEPLOYMENT_FILE ?? path.resolve(process.cwd(), "..", "deployments", `${chainId}.json`), "utf8"));
-if (D.ledgerVersion !== 2) { console.error("部署檔不是帳本 v2"); process.exit(1); }
+if ((D.ledgerVersion ?? 0) < 3) { console.error("部署檔不是目前版本的帳本（需要 ledgerVersion 3：新台幣入出金版）。請重新部署"); process.exit(1); }
 const range = { fromBlock: BigInt(D.deployedAtBlock ?? 0) };
 const domains = { chainId, ledger: D.ledger };
 const DATA = process.env.DATA_DIR ?? path.resolve(process.cwd(), "data");
@@ -101,7 +101,7 @@ const logAll = new Map(events.filter(isCash).map((e) => [key(e), e]));
 const logEpoch = [...logAll.entries()].filter(([, e]) => e.seq <= lastSeq);
 for (const k of chainSet.keys()) if (!logAll.has(k)) fail(`鏈上有一筆存提帳本裡沒有：${k}`);
 for (const [k] of logEpoch) if (!chainSet.has(k)) fail(`帳本宣稱的存提鏈上找不到：${k}`);
-console.log(`  ✓ 結算幣存提 ${chainSet.size} 筆，鏈上與帳本逐筆相符`);
+console.log(`  ✓ 入出金確認 ${chainSet.size} 筆，鏈上與帳本逐筆相符`);
 
 if (VERIFY) { console.log("\n查核完成：帳本與鏈上承諾一致。"); process.exit(0); }
 if (!next.length) { console.log("\n沒有新事件，這一期不必提交。"); process.exit(0); }
@@ -115,7 +115,7 @@ const input = {
 };
 const onchain = await pub.readContract({ address: D.ledger, abi: LEDGER_ABI, functionName: "anchorOf", args: [input] });
 if (onchain !== e.anchor) fail(`合約算的 anchor ${onchain} 與重播 ${e.anchor} 不同（公式不一致）`);
-console.log(`\n第 ${e.epoch} 期：${e.lastSeq >= e.firstSeq ? `事件 ${e.firstSeq}–${e.lastSeq}` : "空的一期（沒有新事件）"}、到區塊 ${e.upToBlock}\n  anchor ${e.anchor}\n  碳權 ${e.roots.totalKg} kg、結算幣 ${e.roots.totalCash}（合約持有 ${held}）`);
+console.log(`\n第 ${e.epoch} 期：${e.lastSeq >= e.firstSeq ? `事件 ${e.firstSeq}–${e.lastSeq}` : "空的一期（沒有新事件）"}、到區塊 ${e.upToBlock}\n  anchor ${e.anchor}\n  碳權 ${e.roots.totalKg} kg、新台幣 ${e.roots.totalCash}（記帳 TWD ${held}）`);
 if (PLAN) { console.log("\n（--plan，沒有送出）"); process.exit(0); }
 
 let pk;

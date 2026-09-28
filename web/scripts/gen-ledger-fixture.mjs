@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { buildScenario } from "./lib/ledger-scenario.mjs";
 
 const { replay } = await import("../lib/ledger/replay.ts");
-const { rootsOf, TAG } = await import("../lib/ledger/trees.ts");
+const { rootsOf } = await import("../lib/ledger/trees.ts");
 
 const { events, domains, authorities, actors } = await buildScenario();
 const boundaries = [{ epoch: 1n, lastSeq: 12n, upToBlock: 112n }, { epoch: 2n, lastSeq: BigInt(events.length), upToBlock: 700n }];
@@ -22,10 +22,6 @@ const roots = rootsOf(r.state, 2n);
 
 const who = actors.Y.address;
 const bp = roots.balanceTree.proofOf(who);
-const batchId = 1n;
-const ap = roots.balanceTree.assetProofOf(who, batchId);
-const rp = roots.registry.proofOf(TAG.batch, batchId);
-const b = r.state.batches.get(String(batchId));
 
 const s = (x) => (typeof x === "bigint" ? x.toString() : x);
 const out = {
@@ -40,16 +36,9 @@ const out = {
     leafRequested: s(bp.leafRequested), leafSettled: s(bp.leafSettled),
     siblingHashes: bp.siblings.map((x) => x.hash), siblingKgs: bp.siblings.map((x) => s(x.kg)), siblingCashes: bp.siblings.map((x) => s(x.cash)),
     path: s(bp.path),
-    batchKg: s(ap.kg), assetSiblings: ap.siblings, assetPath: s(ap.path),
-    batch: {
-      id: s(b.id), projectId: s(b.projectId), monitoringStart: s(b.monitoringStart), monitoringEnd: s(b.monitoringEnd),
-      vintageYear: b.vintageYear, serialHash: b.serialHash, reportHash: b.reportHash, verifier: b.verifier,
-      issuedAt: s(b.issuedAt), issuedKg: s(b.issuedKg), retiredKg: s(b.retiredKg), frozen: b.frozen,
-    },
-    registrySiblings: rp.siblings, registryPath: s(rp.path),
   },
 };
 const file = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "test", "fixtures", "ledger.json");
 fs.mkdirSync(path.dirname(file), { recursive: true });
 fs.writeFileSync(file, JSON.stringify(out, null, 2) + "\n");
-console.log(`已寫出 ${path.relative(process.cwd(), file)}：${out.epochs.length} 期、請求權證據（${who.slice(0, 10)}… 批次 ${batchId}，${ap.kg} kg）`);
+console.log(`已寫出 ${path.relative(process.cwd(), file)}：${out.epochs.length} 期、出金證據（${who.slice(0, 10)}…，請求累計 ${bp.leafRequested}）`);

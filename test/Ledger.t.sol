@@ -5,7 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 import {Ledger} from "../src/ledger/Ledger.sol";
 import {MerkleSumTree} from "../src/ledger/MerkleSumTree.sol";
-import {MockTWD} from "../src/mocks/MockTWD.sol";
+import {LedgerTWD} from "../src/ledger/LedgerTWD.sol";
 
 /// 帳本合約的測試，大部分以 TypeScript 產生的 fixture（test/fixtures/ledger.json）為輸入：
 /// 同一份情境在 web/scripts/lib/ledger-scenario.mjs 重播、建樹、出證據，這裡驗合約接不接受。
@@ -14,7 +14,7 @@ contract LedgerTest is Test {
     using stdJson for string;
 
     Ledger internal ledger;
-    MockTWD internal twd;
+    LedgerTWD internal twd;
     string internal fx;
     address internal sovereign = makeAddr("sovereign");
     address internal operator = makeAddr("operator");
@@ -24,16 +24,15 @@ contract LedgerTest is Test {
 
     function setUp() public {
         fx = vm.readFile("test/fixtures/ledger.json");
-        twd = new MockTWD(address(this));
-        ledger = new Ledger(address(twd), admin, sovereign, operator);
+        ledger = new Ledger(admin, sovereign, operator);
+        twd = ledger.cash();
         bytes32 committerRole = ledger.COMMITTER_ROLE();
         vm.prank(operator);
         ledger.grantRole(committerRole, committer);
         account = fx.readAddress(".claim.account");
-        // 池子裡要有帳本宣稱的那麼多結算幣，否則承諾會被 Insolvent 擋下
-        twd.mint(address(this), 10_000_000e6);
-        twd.approve(address(ledger), type(uint256).max);
-        ledger.depositCash(fx.readUint(".epochs[1].totalCash"));
+        // 鏈上的 TWD 要有帳本宣稱的那麼多，否則承諾會被 Insolvent 擋下
+        vm.prank(operator);
+        ledger.creditDeposit(account, fx.readUint(".epochs[1].totalCash"), keccak256("bank:setup"));
         vm.roll(1_000);
     }
 
@@ -75,28 +74,6 @@ contract LedgerTest is Test {
         p.path = fx.readUint(".claim.path");
     }
 
-    function _creditProof() internal view returns (Ledger.CreditProof memory cp) {
-        cp.batchKg = fx.readUint(".claim.batchKg");
-        cp.assetSiblings = fx.readBytes32Array(".claim.assetSiblings");
-        cp.assetPath = fx.readUint(".claim.assetPath");
-        cp.batch = Ledger.BatchLeaf({
-            id: fx.readUint(".claim.batch.id"),
-            projectId: fx.readUint(".claim.batch.projectId"),
-            monitoringStart: uint64(fx.readUint(".claim.batch.monitoringStart")),
-            monitoringEnd: uint64(fx.readUint(".claim.batch.monitoringEnd")),
-            vintageYear: uint16(fx.readUint(".claim.batch.vintageYear")),
-            serialHash: fx.readBytes32(".claim.batch.serialHash"),
-            reportHash: fx.readBytes32(".claim.batch.reportHash"),
-            verifier: fx.readAddress(".claim.batch.verifier"),
-            issuedAt: uint64(fx.readUint(".claim.batch.issuedAt")),
-            issuedKg: fx.readUint(".claim.batch.issuedKg"),
-            retiredKg: fx.readUint(".claim.batch.retiredKg"),
-            frozen: fx.readBool(".claim.batch.frozen")
-        });
-        cp.registrySiblings = fx.readBytes32Array(".claim.registrySiblings");
-        cp.registryPath = fx.readUint(".claim.registryPath");
-    }
-
     // ── 跨語言一致性 ──
 
     function test_anchorMatchesTypeScript() public view {
@@ -111,121 +88,115 @@ contract LedgerTest is Test {
         assertEq(ledger.commitmentOf(2).registryRoot, fx.readBytes32(".epochs[1].registryRoot"));
     }
 
-    function test_claimCreditsWithTypeScriptProof() public {
-        _commitBoth();
-        vm.prank(operator);
-        ledger.setWithdrawalsEnabled(true);
-        uint256 kg = fx.readUint(".claim.batchKg");
-        vm.expectEmit(true, true, false, false);
-        emit Ledger.CreditClaimed(account, 1, kg, 2, 0, 0, bytes32(0));
-        vm.prank(account);
-        ledger.claimCredits(kg, _balanceProof(), _creditProof());
-        assertEq(ledger.claimedKg(account, 2, 1), kg);
+    // ── 新台幣入金 ──
 
-        // 同一份證據不能超過持有量
-        vm.prank(account);
+    function test_creditDepositMintsToLedgerOnly() public {
+        uint256 before = twd.totalSupply();
+        vm.expectEmit(true, true, false, true);
+        emit Ledger.CashDeposited(account, 500e6, keccak256("bank:1"));
+        vm.prank(operator);
+        ledger.creditDeposit(account, 500e6, keccak256("bank:1"));
+        assertEq(twd.totalSupply(), before + 500e6);
+        assertEq(twd.balanceOf(address(ledger)), twd.totalSupply(), unicode"唯一的持有人是帳本合約");
+        assertEq(twd.balanceOf(account), 0, unicode"使用者的錢包裡沒有任何 TWD");
+    }
+
+    function test_onlyOperatorCredits() public {
         vm.expectRevert();
-        ledger.claimCredits(1, _balanceProof(), _creditProof());
+        ledger.creditDeposit(account, 1e6, keccak256("bank:x"));
+        vm.prank(committer);
+        vm.expectRevert();
+        ledger.creditDeposit(account, 1e6, keccak256("bank:x"));
     }
 
-    function test_claimRejectsTamperedBatch() public {
-        _commitBoth();
-        vm.prank(operator);
-        ledger.setWithdrawalsEnabled(true);
-        Ledger.CreditProof memory cp = _creditProof();
-        cp.batch.issuedKg += 1; // 宣稱多核發一公斤
-        vm.prank(account);
-        vm.expectRevert(Ledger.BadProof.selector);
-        ledger.claimCredits(1, _balanceProof(), cp);
+    function test_bankRefCannotBeReused() public {
+        vm.startPrank(operator);
+        ledger.creditDeposit(account, 1e6, keccak256("bank:dup"));
+        vm.expectRevert(abi.encodeWithSelector(Ledger.BankRefUsed.selector, keccak256("bank:dup")));
+        ledger.creditDeposit(account, 1e6, keccak256("bank:dup"));
+        vm.expectRevert(abi.encodeWithSelector(Ledger.BankRefUsed.selector, bytes32(0)));
+        ledger.creditDeposit(account, 1e6, bytes32(0));
+        vm.stopPrank();
     }
 
-    function test_claimRejectsSomeoneElse() public {
-        _commitBoth();
-        vm.prank(operator);
-        ledger.setWithdrawalsEnabled(true);
-        Ledger.BalanceProof memory p = _balanceProof();
-        Ledger.CreditProof memory cp = _creditProof();
-        vm.prank(makeAddr("thief"));
-        vm.expectRevert(Ledger.BadProof.selector);
-        ledger.claimCredits(1, p, cp);
+    function test_twdIsNotTransferable() public {
+        vm.prank(address(ledger));
+        vm.expectRevert(LedgerTWD.NonTransferable.selector);
+        twd.transfer(account, 1);
+        vm.expectRevert(LedgerTWD.NotLedger.selector);
+        twd.mint(1);
+        vm.expectRevert(LedgerTWD.NotLedger.selector);
+        twd.burn(1);
     }
 
-    function test_withdrawCashWithTypeScriptProof() public {
+    // ── 新台幣出金 ──
+
+    function test_settleWithdrawalWithTypeScriptProof() public {
         _commitBoth();
-        vm.prank(operator);
-        ledger.setWithdrawalsEnabled(true);
         uint256 requested = fx.readUint(".claim.leafRequested");
         uint256 cashOwed = fx.readUint(".claim.leafCash");
-        assertGt(requested, 0);
-        assertGt(cashOwed, requested);
-        // 一般提領只能領**已請求**的部分：帳本裡還能交易的錢不能同時被領走
-        vm.prank(account);
-        vm.expectRevert(abi.encodeWithSelector(Ledger.SumMismatch.selector, requested, cashOwed));
-        ledger.withdrawCash(cashOwed, _balanceProof());
-        vm.prank(account);
-        ledger.withdrawCash(requested, _balanceProof());
-        assertEq(twd.balanceOf(account), requested);
+        assertGt(requested, 0, "fixture should include a withdrawal request");
+        uint256 supply = twd.totalSupply();
+        // 帳本裡還在用的錢不能出金：上限是已經簽過請求的部分
+        vm.prank(operator);
+        vm.expectRevert(abi.encodeWithSelector(Ledger.SumMismatch.selector, requested, cashOwed + requested));
+        ledger.settleWithdrawal(account, cashOwed + requested, keccak256("bank:out1"), _balanceProof());
+        vm.prank(operator);
+        ledger.settleWithdrawal(account, requested, keccak256("bank:out1"), _balanceProof());
+        assertEq(twd.totalSupply(), supply - requested, unicode"出金銷毀同額");
         assertEq(ledger.withdrawnTotal(account), requested);
-        // 累計：同一份證據（或下一期還沒銷帳的證據）不能再領第二次
-        vm.prank(account);
+        // 同一筆請求不能出金第二次
+        vm.prank(operator);
         vm.expectRevert(abi.encodeWithSelector(Ledger.NothingLeft.selector, account, uint64(2)));
-        ledger.withdrawCash(1, _balanceProof());
+        ledger.settleWithdrawal(account, 1, keccak256("bank:out2"), _balanceProof());
     }
 
-    function test_withdrawInParts() public {
+    function test_settleInParts() public {
         _commitBoth();
-        vm.prank(operator);
-        ledger.setWithdrawalsEnabled(true);
         uint256 requested = fx.readUint(".claim.leafRequested");
-        vm.startPrank(account);
-        ledger.withdrawCash(requested / 3, _balanceProof());
-        ledger.withdrawCash(requested - requested / 3, _balanceProof());
+        vm.startPrank(operator);
+        ledger.settleWithdrawal(account, requested / 3, keccak256("bank:p1"), _balanceProof());
+        ledger.settleWithdrawal(account, requested - requested / 3, keccak256("bank:p2"), _balanceProof());
         vm.stopPrank();
-        assertEq(twd.balanceOf(account), requested);
+        assertEq(ledger.withdrawnTotal(account), requested);
     }
 
-    // ── 逃生門 ──
-
-    function test_escapeOpensAfter72HoursWithoutCommit() public {
+    function test_onlyOperatorSettles() public {
         _commitBoth();
-        uint256 owed = fx.readUint(".claim.leafCash");
+        Ledger.BalanceProof memory p = _balanceProof();
         vm.prank(account);
-        vm.expectRevert(Ledger.WithdrawalsDisabled.selector);
-        ledger.withdrawCash(owed, _balanceProof());
-
-        vm.warp(block.timestamp + 72 hours + 1);
-        assertTrue(ledger.escapeActive());
-        // 逃生：帳本凍結了，可以領全部欠款（葉子的現金＋已領累計，減掉已經領走的）
-        owed += fx.readUint(".claim.leafSettled");
-        vm.prank(account);
-        ledger.withdrawCash(owed, _balanceProof());
-        assertEq(twd.balanceOf(account), owed);
-        vm.prank(account);
-        ledger.claimCredits(1, _balanceProof(), _creditProof());
+        vm.expectRevert();
+        ledger.settleWithdrawal(account, 1, keccak256("bank:u"), p);
+        vm.prank(committer);
+        vm.expectRevert();
+        ledger.settleWithdrawal(account, 1, keccak256("bank:u"), p);
     }
 
-    function test_operatorCannotCloseEscape() public {
+    function test_settleRejectsSomeoneElsesProof() public {
         _commitBoth();
-        vm.warp(block.timestamp + 72 hours + 1);
         vm.prank(operator);
-        ledger.setWithdrawalsEnabled(false);
-        assertTrue(ledger.escapeActive());
-        vm.prank(account);
-        ledger.withdrawCash(1, _balanceProof());
+        vm.expectRevert(Ledger.BadProof.selector);
+        ledger.settleWithdrawal(makeAddr("other"), 1, keccak256("bank:o"), _balanceProof());
     }
 
     function test_oldEpochProofRejected() public {
-        vm.prank(committer);
-        ledger.commit(_input(0));
-        vm.prank(operator);
-        ledger.setWithdrawalsEnabled(true);
-        vm.prank(committer);
-        ledger.commit(_input(1));
+        _commitBoth();
         Ledger.BalanceProof memory p = _balanceProof();
         p.proofEpoch = 1;
-        vm.prank(account);
+        vm.prank(operator);
         vm.expectRevert(abi.encodeWithSelector(Ledger.NotLatestEpoch.selector, uint64(2), uint64(1)));
-        ledger.withdrawCash(1, p);
+        ledger.settleWithdrawal(account, 1, keccak256("bank:old"), p);
+    }
+
+    function test_noEscapeHatch() public {
+        _commitBoth();
+        vm.warp(block.timestamp + 365 days);
+        // 停擺多久都一樣：鏈上沒有任何人領得走的東西，只有證據
+        vm.prank(account);
+        vm.expectRevert();
+        ledger.settleWithdrawal(account, 1, keccak256("bank:e"), _balanceProof());
+        (uint256 owed, uint256 held,,) = ledger.solvency();
+        assertLe(owed, held);
     }
 
     // ── 承諾的檢查 ──

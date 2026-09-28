@@ -3,14 +3,17 @@ import { ApiError, fail, handleError, ok } from "@/lib/server/api";
 import { refuseIfRecovering, requireRole } from "@/lib/server/roles";
 import { ledgerView } from "@/lib/server/ledger/view";
 import {
-  appendUser, devDeposit, devSign, devSignerFor, domains, nextNonce, syncCash, userMessage, type UserBody,
+  appendUser, devSign, devSignerFor, domains, nextNonce, syncCash, userMessage, type UserBody,
 } from "@/lib/server/ledger/write";
 import { userTypedData } from "@/lib/ledger/typed";
-import { devWithdraw, withdrawStatus } from "@/lib/server/ledger/proofs";
-import { erc20Abi } from "@/lib/abis";
-import { deployment, publicClient } from "@/lib/server/chain";
+import {
+  depositCode, devCreditDeposit, maskAccountNo, payoutAccountOf, setPayoutAccount, trustAccount, withdrawStatus,
+} from "@/lib/server/ledger/fiat";
+import { deployment } from "@/lib/server/chain";
 
-/// 帳本的使用者入口（設計 v4 第 3 期）：掛單、撤單、註銷、登錄專案。
+/// 帳本的使用者入口（設計 v4 第 3 期）：掛單、撤單、註銷、登錄專案、出金請求。
+///
+/// 新台幣的入金不經過這裡：使用者匯款到信託專戶（備註填入金識別碼），營運 Safe 對帳後在鏈上確認。
 ///
 /// 兩步：
 ///   1. `prepare`：伺服器把使用者填的東西正規化（補 nonce、期限、受益人雜湊），回傳**要簽的那一包**。
@@ -70,9 +73,14 @@ function bodyOf(kind: UserKind, account: Address, f: Raw, nonce: bigint): UserBo
         purpose, memo: str(f.memo, "memo", 200),
       } as UserBody<"retire">;
     }
-    case "withdraw":
-      // 提領請求：把帳本裡可動用的現金移到待提領。下一期承諾上鏈之後，憑證據從帳本合約領回
-      return { account, nonce, amount: big(f.amount, "amount", { min: 1n }) } as UserBody<"withdraw">;
+    case "withdraw": {
+      // 出金請求：把帳本裡可動用的現金移到待出金，指定收款帳戶（帳本只記它的雜湊）。
+      // 下一期承諾上鏈之後，營運方匯款並由營運 Safe 在鏈上確認
+      const pa = payoutAccountOf(account);
+      if (!pa) throw new ApiError("MISSING_PARAM", "請先設定收款帳戶（戶名須與身分驗證的名稱相同）", { param: "payoutAccount" });
+      if (f.payoutRef !== undefined && f.payoutRef !== pa.payoutRef) throw new ApiError("INVALID_PARAM", "收款帳戶在簽署後變更了，請重新送出", { param: "payoutRef" });
+      return { account, nonce, amount: big(f.amount, "amount", { min: 1n }), payoutRef: pa.payoutRef } as UserBody<"withdraw">;
+    }
     case "project":
       return {
         account, nonce, name: str(f.name, "name", 100, { required: true }), methodology: str(f.methodology, "methodology", 100, { required: true }),
@@ -91,12 +99,8 @@ export async function GET() {
     const orders = [...state.book.values()].filter((o) => o.account.toLowerCase() === a).sort((x, y) => (x.seq < y.seq ? 1 : -1));
     const fills = state.fills.filter((f) => f.buyer.toLowerCase() === a || f.seller.toLowerCase() === a).slice(-50).reverse();
     const credits = [...(state.credits.get(a) ?? new Map<string, bigint>()).entries()].map(([batchId, kg]) => ({ batchId, kg }));
-    // 錢包裡（還沒存進帳本合約）的結算幣，以及是哪一個代幣合約——存入前使用者要能自己核對。
-    // 讀不到（RPC 斷線）就回 null，畫面顯示「讀不到」，不要假裝是 0。
-    const settlementToken = deployment().settlementToken;
-    const walletCash = await publicClient
-      .readContract({ address: settlementToken, abi: erc20Abi, functionName: "balanceOf", args: [m.address] })
-      .catch(() => null);
+    const d = deployment();
+    const pa = payoutAccountOf(m.address);
     return ok({
       domains: domains(),
       account: m.address,
@@ -104,7 +108,9 @@ export async function GET() {
       devSigning: !!(await devSignerFor(m.address)),
       head,
       cash: { available: state.cash.get(a) ?? 0n, locked: state.lockedCash.get(a) ?? 0n, pendingWithdraw: state.pendingWithdraw.get(a) ?? 0n },
-      wallet: { settlementToken, ledger: deployment().ledger, balance: walletCash },
+      // 入金：匯到信託專戶、備註填入金識別碼。鏈上的 TWD 只是記帳（唯一持有人是帳本合約），使用者錢包裡不會有
+      deposit: { code: depositCode(m.address), trust: trustAccount(), ledger: d.ledger, token: d.settlementToken },
+      payoutAccount: pa ? { bankCode: pa.bankCode, accountNo: maskAccountNo(pa.accountNo), holder: pa.holder } : null,
       credits,
       orders,
       fills,
@@ -117,24 +123,22 @@ export async function POST(req: Request) {
     const m = await requireRole("user");
     const b = (await req.json()) as { op?: string; kind?: UserKind; fields?: Raw; nonce?: string; signature?: Hex };
 
-    // 使用者剛在鏈上存入結算幣：把那筆存入鏡像進帳本。誰都可以觸發（它只記鏈上真的發生的事）。
+    // 把鏈上已確認的入出金鏡像進帳本。誰都可以觸發（它只記鏈上真的發生的事）。
     if (b.op === "sync") return ok({ mirrored: await syncCash() });
 
-    // 開發帳戶（本機鏈）沒有 CAFECA 通道送不了鏈上交易，由伺服器用他推出來的私鑰代送存入
+    // 開發帳戶（本機鏈）：等於營運方立刻確認了一筆匯款
     if (b.op === "devDeposit") {
-      const dev = await devSignerFor(m.address);
-      if (!dev) throw new ApiError("FORBIDDEN", "只有本機鏈的開發用登入可以這樣存入");
-      return ok({ mirrored: await devDeposit(dev, big((b as { amount?: string }).amount, "amount", { min: 1n })) });
+      if (!(await devSignerFor(m.address))) throw new ApiError("FORBIDDEN", "只有本機鏈的開發用登入可以模擬入金");
+      return ok({ mirrored: await devCreditDeposit(m.address, big((b as { amount?: string }).amount, "amount", { min: 1n })) });
     }
 
-    // 提領的狀態與要帶的證據（領回是使用者自己的鏈上交易：CAFECA 通道送 withdrawCash）
+    // 出金的狀態（待出金、已進承諾、鏈上已確認）
     if (b.op === "withdrawStatus") return ok(await withdrawStatus(m.address));
-    // 開發帳戶（本機鏈）由伺服器用推出來的私鑰代送領回
-    if (b.op === "devWithdraw") {
-      const dev = await devSignerFor(m.address);
-      if (!dev) throw new ApiError("FORBIDDEN", "只有本機鏈的開發用登入可以這樣領回");
-      const r = await devWithdraw(dev, m.address);
-      return ok({ ...r, mirrored: await syncCash() });
+    // 收款帳戶（明文只在營運方；帳本裡的出金請求只記它的雜湊）
+    if (b.op === "setPayoutAccount") {
+      refuseIfRecovering(m);
+      const r = setPayoutAccount(m.address, (b as { payout?: Record<string, string> }).payout ?? {});
+      return ok({ bankCode: r.bankCode, accountNo: maskAccountNo(r.accountNo), holder: r.holder });
     }
 
     if (!b.kind || !KINDS.has(b.kind)) return fail("UNSUPPORTED_ACTION", { details: { kind: b.kind } });

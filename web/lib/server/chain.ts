@@ -88,8 +88,8 @@ export function deployment(): Deployment {
   const { mtimeMs } = fs.statSync(file);
   if (cached && cached.file === file && cached.mtimeMs === mtimeMs) return cached.value;
   const value = JSON.parse(fs.readFileSync(file, "utf8")) as Deployment;
-  if (!value.ledger) {
-    throw new Error(`${file} 不是帳本部署（沒有 ledger 欄位）。舊的全合約版本已經移除，請重新部署：bash script/bootstrap.sh deploy`);
+  if (!value.ledger || (value.ledgerVersion ?? 0) < 3) {
+    throw new Error(`${file} 不是目前版本的帳本部署（需要 ledgerVersion 3：新台幣入出金版）。請重新部署：bash script/bootstrap.sh deploy`);
   }
   cached = { mtimeMs, file, value };
   return value;

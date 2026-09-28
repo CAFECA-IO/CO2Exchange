@@ -16,7 +16,7 @@ import { TAG } from "./trees.ts";
 ///
 /// 身分只公開 identityRoot；委託單與成交明細在監理鏡像（完整帳本）裡。
 
-/// 登錄簿層：這些事件全文公開。其他種類（place、cancel、identity、存提、提領請求、金鑰鏡像、帳戶凍結）只公開雜湊
+/// 登錄簿層：這些事件全文公開。其他種類（place、cancel、identity、入出金、出金請求、金鑰鏡像、帳戶凍結）只公開雜湊
 export function isPublicEvent(e: Event): boolean {
   switch (e.kind) {
     case "jurisdiction": case "policy": case "fees": case "project": case "importProject": case "projectStatus":

@@ -90,13 +90,7 @@ export default function PortfolioPage() {
         <>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <StatTile label="資產總值" value={`${twd(p.totalValue)} ${CASH}`} sub="現金 + 碳權市值" />
-            <StatTile
-              label={p.walletTwd !== undefined ? "帳本裡的現金" : "可用現金"}
-              value={`${twd(p.twd)} ${CASH}`}
-              sub={p.walletTwd !== undefined
-                ? `錢包裡另有 ${p.walletTwd === null ? "（讀不到）" : `${twd(p.walletTwd)} ${CASH}`}，存入帳本才能交易`
-                : "存於信託專戶"}
-            />
+            <StatTile label="新台幣" value={`${twd(p.twd)} ${CASH}`} sub="存於信託專戶；入出金在交易頁" />
             <StatTile
               label="持有碳權"
               value={fmtKg(p.holdingKg)}
@@ -115,7 +109,7 @@ export default function PortfolioPage() {
               <Donut
                 slices={[
                   { label: "碳權市值", value: p.marketValue, hint: `${twd(p.marketValue)} ${CASH}` },
-                  { label: "現金 mTWD", value: p.twd, hint: `${twd(p.twd)} ${CASH}` },
+                  { label: "現金（新台幣）", value: p.twd, hint: `${twd(p.twd)} ${CASH}` },
                 ]}
                 centerLabel="資產總值"
                 centerValue={twd(p.totalValue)}
@@ -123,11 +117,11 @@ export default function PortfolioPage() {
               <dl className="mt-4 space-y-1.5 border-t border-ink-500 pt-3 text-sm">
                 <div className="flex justify-between">
                   <dt className="text-ink-300">目前市價</dt>
-                  <dd className="tnum text-ink-50">{p.marketPricePerTonne ? `${twd2(p.marketPricePerTonne)} mTWD / 噸` : "尚無成交"}</dd>
+                  <dd className="tnum text-ink-50">{p.marketPricePerTonne ? `${twd2(p.marketPricePerTonne)} 元 / 噸` : "尚無成交"}</dd>
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-ink-300">平均成本</dt>
-                  <dd className="tnum text-ink-50">{p.avgCostPerTonne ? `${twd2(p.avgCostPerTonne)} mTWD / 噸` : "—"}</dd>
+                  <dd className="tnum text-ink-50">{p.avgCostPerTonne ? `${twd2(p.avgCostPerTonne)} 元 / 噸` : "—"}</dd>
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-ink-300">未實現損益</dt>
@@ -156,7 +150,7 @@ export default function PortfolioPage() {
                 <AreaChart
                   points={p.equityCurve.map((e) => ({ t: e.t, v: e.v / 1e6 }))}
                   format={(v) => v.toLocaleString("zh-TW", { maximumFractionDigits: 0 })}
-                  label="mTWD"
+                  label="元"
                 />
               )}
             </Card>
@@ -282,7 +276,7 @@ export default function PortfolioPage() {
             註銷會把該部分成本從部位中扣除，但不計入損益——那是「用掉」，不是「賣掉」。
             碳權託管於各國政府登錄簿帳戶、入金託管於信託專戶，對帳狀況見
             <Link className="text-tide underline" href="/custody">託管揭露</Link>。
-            Phase 0 的結算幣為測試代幣，數字不代表任何真實金額。
+            Phase 0 展示版本尚未開立信託專戶，數字不代表任何真實金額。
           </p>
         </>
       )}

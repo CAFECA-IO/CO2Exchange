@@ -1,11 +1,9 @@
 // 伺服器端只需要的最小 ABI 子集。帳本合約的 ABI 在 lib/ledger/chain.ts（LEDGER_ABI）。
 
-/// 結算幣：MockTWD 多一個 mint（只在本站發行的展示鏈上用得到）
+/// 記帳 TWD（LedgerTWD）：只讀。它只存在帳本合約裡、不能轉出，鑄造與銷毀只有帳本合約做得到。
 export const erc20Abi = [
   { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "totalSupply", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
-  { type: "function", name: "approve", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [{ type: "bool" }] },
-  { type: "function", name: "mint", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [] },
 ] as const;
 
 export const accessControlAbi = [

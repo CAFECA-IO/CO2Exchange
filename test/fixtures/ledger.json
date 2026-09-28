@@ -4,7 +4,7 @@
     {
       "prev": "0x0000000000000000000000000000000000000000000000000000000000000000",
       "epoch": "1",
-      "logRoot": "0xba379d369acfbbd743048edf588fde955bc111d0440c2e9e71a23e6fed69c870",
+      "logRoot": "0x60cbbf5b57dbd07500f74ee1d1e92307724640fc674a9a8cbf2adc647a567ac1",
       "balanceRoot": "0x25eaef1a0eba93f4687fd62a448474dab670a5a10095f1982aa0a9ef72dfc632",
       "registryRoot": "0x3766a58fc0a1a956e17cfa121c574e2dc8065a088ae73ded87083b6311962fb4",
       "identityRoot": "0xea0eee5e68c7eb16521e7cf981d7c53b78c270dab26fa6bcb5adf1843baab59a",
@@ -13,13 +13,13 @@
       "totalsHash": "0x5ec886e614b3a618e1c47f61b3c6cbaa74e01f68e481cddf645206e2ecdf9b96",
       "upToBlock": "112",
       "lastSeq": "12",
-      "rulesVersion": 3,
-      "anchor": "0x155ba861611bb4dda89ed0d1e83e616dfefe5558add0cedaf67fb68aa0ebea53"
+      "rulesVersion": 4,
+      "anchor": "0x6bf90075a69b20634491518db8f0256748e04d1254f93c88659cd00dc66bf9a0"
     },
     {
-      "prev": "0x155ba861611bb4dda89ed0d1e83e616dfefe5558add0cedaf67fb68aa0ebea53",
+      "prev": "0x6bf90075a69b20634491518db8f0256748e04d1254f93c88659cd00dc66bf9a0",
       "epoch": "2",
-      "logRoot": "0xfff09b18ee9263b8955a3d905a0b14b2f98146d6066ab11896204a83557d2b5c",
+      "logRoot": "0xeccca56089bb37d93c64f6272cf9b69cf6edc12c00990c1c33af5701569f735d",
       "balanceRoot": "0xac23ef8bea583dabef1a88f61fb13e981bfac21683dbf0f5c9efd3c730d0a59e",
       "registryRoot": "0x516c0d95b1779e932c484f26aa23950d7706c0f34c339d0dbdb6241f966d5a60",
       "identityRoot": "0x22fba6803772515d698fd5a05ac2215bf5424043cdbe035cebe6dd193fafb06e",
@@ -27,9 +27,9 @@
       "totalCash": "1100000000000",
       "totalsHash": "0x79f76cfbedfc8840dfa3ab23ad96b9250a86824fc5d0275cfc5cec5769ce70fd",
       "upToBlock": "700",
-      "lastSeq": "29",
-      "rulesVersion": 3,
-      "anchor": "0x368e19a1df2468ddd52c212f4e9a6d518146602cd5d67fa12060630fcd3ee39c"
+      "lastSeq": "32",
+      "rulesVersion": 4,
+      "anchor": "0x03462bb92a31a3c7b04a1b43e088b226cf3318fdc3113fabdb5bf055c96ae8f2"
     }
   ],
   "claim": {
@@ -55,30 +55,6 @@
       "99268000000",
       "0"
     ],
-    "path": "1",
-    "batchKg": "3000",
-    "assetSiblings": [],
-    "assetPath": "0",
-    "batch": {
-      "id": "1",
-      "projectId": "1",
-      "monitoringStart": "1700000000",
-      "monitoringEnd": "1760000000",
-      "vintageYear": 2025,
-      "serialHash": "0x09549c2a9db7230ccb2b530e8f297487340ea30bfcf493bb0019b6693ad06ce5",
-      "reportHash": "0xb0703af66bafc21cd5be43995c603c1bbec33eea2ff065ed19b35e8aa095e9a1",
-      "verifier": "0x68E527780872cda0216Ba0d8fBD58b67a5D5e351",
-      "issuedAt": "1800000420",
-      "issuedKg": "50000",
-      "retiredKg": "2000",
-      "frozen": false
-    },
-    "registrySiblings": [
-      "0xf158a93367bea81d9c4ff3b276c83a938781dd981b939a3cd5272a2b42d8f330",
-      "0xa64866d979b5c1bd863ba9261894058f4bae10454d89f6b092563161d4e6f784",
-      "0xd6a499f70286c15953f8f73771850057bec835af0052dea1b6c28d73d7f24851",
-      "0xb507ef239f8947177bbf3562cde52f18788bb13a813b3e9669a836fad5b7fbd4"
-    ],
-    "registryPath": "4"
+    "path": "1"
   }
 }
