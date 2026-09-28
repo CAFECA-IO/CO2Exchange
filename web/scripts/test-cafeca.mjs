@@ -39,31 +39,39 @@ test("同一個 nonce 用第二次會被擋——這就是重送保護本身", (
   assert.match(consumeNonce(nonce) ?? "", /用過/);
 });
 
+// nonce 的版面：隨機 24 ＋ 到期秒 10 ＋ HMAC 27（沒有分隔符，見 nonce.ts）
+const split = (n) => [n.slice(0, 24), n.slice(24, 34), n.slice(34)];
+
+test("nonce 符合 CAFECA 錢包的規格：8–128 字元的 [A-Za-z0-9_-]", () => {
+  for (let i = 0; i < 200; i++) {
+    const { nonce } = newNonce();
+    assert.match(nonce, /^[A-Za-z0-9_-]{8,128}$/);
+    assert.equal(nonce.length, 61);
+  }
+});
+
 test("不是本站發的 nonce 驗不過（改掉 HMAC）", () => {
-  const { nonce } = newNonce();
-  const [rand, exp] = nonce.split("~");
-  assert.match(consumeNonce(`${rand}~${exp}~${"A".repeat(27)}`) ?? "", /不是本站/);
+  const [rand, exp] = split(newNonce().nonce);
+  assert.match(consumeNonce(`${rand}${exp}${"A".repeat(27)}`) ?? "", /不是本站/);
 });
 
 test("改掉到期時間也驗不過——HMAC 蓋住的是整個 body", () => {
-  const { nonce } = newNonce();
-  const [rand, , mac] = nonce.split("~");
-  const far = Math.floor(Date.now() / 1000) + 86400;
-  assert.match(consumeNonce(`${rand}~${far}~${mac}`) ?? "", /不是本站/);
+  const [rand, , mac] = split(newNonce().nonce);
+  const far = String(Math.floor(Date.now() / 1000) + 86400).padStart(10, "0");
+  assert.match(consumeNonce(`${rand}${far}${mac}`) ?? "", /不是本站/);
 });
 
 test("HMAC 正確但已經過期的 nonce 被擋", () => {
   // 用同一把金鑰自己偽造一個「過去發出、已經過期」的 nonce：
   // HMAC 會對，所以擋下它的只能是時間檢查。這正是要測的那一條路。
   const rand = crypto.randomBytes(18).toString("base64url");
-  const exp = Math.floor(Date.now() / 1000) - 60;
-  const body = `${rand}~${exp}`;
-  const mac = crypto.createHmac("sha256", process.env.AUTH_SECRET).update(body).digest("base64url").slice(0, 27);
-  assert.match(consumeNonce(`${body}~${mac}`) ?? "", /過期/);
+  const exp = String(Math.floor(Date.now() / 1000) - 60).padStart(10, "0");
+  const mac = crypto.createHmac("sha256", process.env.AUTH_SECRET).update(`${rand}.${exp}`).digest("base64url").slice(0, 27);
+  assert.match(consumeNonce(`${rand}${exp}${mac}`) ?? "", /過期/);
 });
 
 test("格式不對的直接擋掉，不進雜湊比對", () => {
-  for (const bad of ["", "short", "a".repeat(200), "has space", "a~b"]) {
+  for (const bad of ["", "short", "a".repeat(200), "has space", "a~b", `${"a".repeat(24)}~${"1".repeat(9)}${"b".repeat(27)}`, "a".repeat(61)]) {
     assert.notEqual(consumeNonce(bad), null, `應該擋掉：${bad}`);
   }
 });

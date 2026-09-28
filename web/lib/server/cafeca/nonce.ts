@@ -35,14 +35,29 @@ function secret(): string {
 
 const b64u = (b: Buffer) => b.toString("base64url");
 
-/// 發一個新的 nonce。格式是 `<隨機>.<到期秒>.<HMAC>`，全部落在 SDK 允許的
-/// `[A-Za-z0-9_-]` 8–128 字元裡（所以分隔符用 `~`，不用 `.`）。
+/// 發一個新的 nonce。CAFECA 錢包只收 **8–128 字元的 `[A-Za-z0-9_-]`**（CAFECA README；
+/// 錢包端 `/dl/auth` 不合就顯示「nonce 格式錯誤」，連簽都不給簽）。
+///
+/// 所以不用任何分隔符，改成**定長**三段接在一起：
+///   `<隨機 24>` ＋ `<到期秒，十進位補滿 10 位>` ＋ `<HMAC 27>` ＝ 61 字元
+/// 隨機與 HMAC 是 base64url（只會出現 A–Z a–z 0–9 _ -），到期秒只有數字。
+///
+/// （以前用 `~` 分隔，`~` 不在允許的字元裡——SDK 不擋、錢包擋，所以登入視窗一打開就報錯。）
+const RAND_LEN = 24; // 18 bytes → base64url 剛好 24 字元，沒有 padding
+const EXP_LEN = 10;
+const MAC_LEN = 27;
+export const NONCE_RE = /^[A-Za-z0-9_-]{8,128}$/;
+
+const macOf = (rand: string, exp: string) =>
+  b64u(crypto.createHmac("sha256", secret()).update(`${rand}.${exp}`).digest()).slice(0, MAC_LEN);
+
 export function newNonce(): { nonce: string; expiresAt: number } {
   const expiresAt = Math.floor((Date.now() + TTL_MS) / 1000);
   const rand = b64u(crypto.randomBytes(18));
-  const body = `${rand}~${expiresAt}`;
-  const mac = b64u(crypto.createHmac("sha256", secret()).update(body).digest()).slice(0, 27);
-  return { nonce: `${body}~${mac}`, expiresAt };
+  const exp = String(expiresAt).padStart(EXP_LEN, "0");
+  const nonce = `${rand}${exp}${macOf(rand, exp)}`;
+  if (!NONCE_RE.test(nonce)) throw new Error("nonce 產生的格式不符合 CAFECA 規格"); // 不該發生；發生了寧可報錯也不要送出去
+  return { nonce, expiresAt };
 }
 
 const used = new Map<string, number>();
@@ -58,21 +73,20 @@ function sweep() {
 /// 把作廢放在後面（例如登入成功才標記）會留下一個窗口——簽章驗證失敗的請求
 /// 可以無限次重送，而那正是暴力嘗試需要的。
 export function consumeNonce(nonce: string): string | null {
-  if (typeof nonce !== "string" || !/^[A-Za-z0-9_~-]{8,128}$/.test(nonce)) return "nonce 格式不正確";
+  if (typeof nonce !== "string" || !NONCE_RE.test(nonce) || nonce.length !== RAND_LEN + EXP_LEN + MAC_LEN) return "nonce 格式不正確";
 
   sweep();
   if (used.has(nonce)) return "這個 nonce 已經用過了";
   used.set(nonce, Date.now());
 
-  const parts = nonce.split("~");
-  if (parts.length !== 3) return "nonce 格式不正確";
-  const [rand, expStr, mac] = parts;
-  const body = `${rand}~${expStr}`;
-  const want = b64u(crypto.createHmac("sha256", secret()).update(body).digest()).slice(0, 27);
+  const rand = nonce.slice(0, RAND_LEN);
+  const expStr = nonce.slice(RAND_LEN, RAND_LEN + EXP_LEN);
+  const mac = nonce.slice(RAND_LEN + EXP_LEN);
+  if (!/^\d{10}$/.test(expStr)) return "nonce 格式不正確";
   // 定長比較。這裡的時間差洩漏的是「猜對了幾個字元」，而 nonce 只有 5 分鐘壽命——
   // 但寫對的成本是一行，沒有理由不寫。
   const a = Buffer.from(mac);
-  const b = Buffer.from(want);
+  const b = Buffer.from(macOf(rand, expStr));
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return "nonce 不是本站發出的";
 
   const exp = Number(expStr);
