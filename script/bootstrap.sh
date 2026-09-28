@@ -301,6 +301,8 @@ cmd_fund () {
   echo "   撥款額 = gas 預算 × 目前 gasPrice × ${SAFETY} 倍"
   if ledger_mode; then
     echo "   帳本版：RELAYER_PK 備 ${COMMIT_DAYS} 天 × 24 期承諾 × ${COMMIT_GAS} gas（COMMIT_DAYS / COMMIT_GAS 可調）"
+    echo "   做市與模擬人物（npm run mm）：只有入金是鏈上交易，gas 與結算幣都由 DEPLOYER_PK 出；"
+    echo "     外部結算幣（TWDC）沒有鑄幣權，DEPLOYER_PK 要先持有要撥給做市帳戶與人物的 TWDC。要算進撥款額：SIM_ACCOUNTS=30"
   fi
   [ "$SIM_ACCOUNTS" = 0 ] || echo "   DEPLOYER_PK 另加 ${SIM_ACCOUNTS} × $(fmt_eth "$SIM_GAS_TOPUP")：模擬市場的人物帳戶由平台代付 gas"
   echo

@@ -123,10 +123,28 @@ let batchId;
   ok(after.cash.locked === "0" && after.orders.length === 0, "撤單之後鎖定歸零、簿子上沒有他的單");
   const bad = await buyer.act("cancel", { orderSeq: s.event.seq });
   ok(!bad.accepted, `撤別人的單被拒絕（${bad.rejectedReason}）`);
+
+  // ── 費思的代操（第 5 期）：確認卡的數字從帳本算，要簽的是一筆帳本委託 ──
+  const buy = await buyer.post("/api/faith/act", { kind: "buy_listing", params: { orderId: Number(s.event.seq), tonnes: 5 } });
+  ok(buy.ledger?.kind === "place" && buy.ledger.fields.side === "buy" && buy.ledger.fields.pricePerTonne === "900000000" && !buy.calls,
+    "費思的「買這張單」產生一筆同價買單（帳本委託，不是鏈上 calldata）");
+  ok(buy.rows.some((r) => r.value === "4,500 mTWD"), "確認卡的金額從帳本算（5 噸 × 900 = 4,500）");
+  const done = await buyer.act(buy.ledger.kind, buy.ledger.fields);
+  ok(done.accepted && done.fills.reduce((x, f) => x + Number(f.amountKg), 0) === 5000, "簽了之後當場和那張賣單成交 5 噸");
+  let code = null;
+  try { await corp.post("/api/faith/act", { kind: "buy_listing", params: { orderId: Number(s.event.seq), tonnes: 1 } }); } catch (e) { code = e.code; }
+  ok(code === "INVALID_PARAM", "費思不讓人買自己的賣單");
+  const bid = await indiv.post("/api/faith/act", { kind: "place_bid", params: { tonnes: 2, pricePerTonne: 700 } });
+  ok(bid.ledger?.fields.country === "TW" && bid.rows.some((r) => /鎖住/.test(r.label) && r.value === "1,400 mTWD"), "費思的掛買單：沒指定核發國就是國內，鎖定金額從帳本算");
+  const placed = await indiv.act(bid.ledger.kind, bid.ledger.fields);
+  const cx = await indiv.post("/api/faith/act", { kind: "cancel_bid", params: { bidId: Number(placed.event.seq) } });
+  ok(cx.ledger?.kind === "cancel" && (await indiv.act(cx.ledger.kind, cx.ledger.fields)).accepted, "費思的撤單");
+  const fau = await indiv.post("/api/faith/act", { kind: "claim_faucet", params: {} });
+  ok(fau.deposit === String(100_000n * 1_000_000n), "費思的領水在帳本版會存進帳本合約");
 }
 {
   const m = await buyer.api(`/api/market?account=${buyer.address}`);
-  ok(m.orders.some((o) => o.batchId === batchId && o.remainingKg === 20_000), "掛單簿讀自帳本：賣單剩 20 噸");
+  ok(m.orders.some((o) => o.batchId === batchId && o.remainingKg === 15_000), "掛單簿讀自帳本：賣單剩 15 噸");
 }
 
 // ── 簽章：錯的 nonce、偽造的簽章都進不了帳本 ──

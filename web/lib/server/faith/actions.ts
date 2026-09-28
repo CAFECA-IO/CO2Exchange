@@ -5,6 +5,8 @@ import { PURPOSE_LABEL, countryToBytes2, flagOf, purposeAllowed } from "@/lib/de
 import { deployment, publicClient } from "../chain";
 import { holdings } from "../market";
 import { ApiError } from "../api";
+import { ledgerEnabled, ledgerView } from "../ledger/view";
+import { notional, retireFeeOf, tradeBpsOf } from "@/lib/ledger/engine";
 import type { Ctx } from "./tools";
 
 /// 費思可以**提議**的動作。這一支檔案是那條界線。
@@ -58,6 +60,11 @@ export type Preview = {
   /// 不需要簽章的動作（例如換頁）在這裡給目的地，前端直接導過去。
   href?: string;
   calls?: Call[];
+  /// 帳本 v2：要使用者簽的那一筆帳本事件（交給 /api/ledger 的 prepare → CAFECA 簽 → submit）。
+  /// 只有純量欄位；nonce 與要簽的 typed data 由 /api/ledger 在 prepare 時才組，前端不自己組。
+  ledger?: { kind: "place" | "cancel" | "retire"; fields: Record<string, string | number> };
+  /// 帳本 v2 的領水：領到之後直接存進帳本合約
+  deposit?: string;
 };
 
 const twd = (raw: bigint) => `${(Number(raw) / 1e6).toLocaleString("zh-TW", { maximumFractionDigits: 2 })} mTWD`;
@@ -73,6 +80,7 @@ function need(v: unknown, name: string): number {
 /// 讀鏈上現況這一步不能省：它同時是「這張單還在嗎」的檢查，
 /// 也是預覽裡那些數字的來源。
 export async function buildAction(kind: ActionKind, p: Record<string, unknown>, ctx: Ctx): Promise<Preview> {
+  if (ledgerEnabled() && kind !== "navigate" && kind !== "manage_identity") return buildLedgerAction(kind, p, ctx);
   const d = deployment();
   const me = ctx.address;
 
@@ -273,14 +281,186 @@ export async function buildAction(kind: ActionKind, p: Record<string, unknown>, 
   throw new ApiError("UNSUPPORTED_ACTION", `不支援的動作：${kind}`, { kind });
 }
 
+// ── 帳本 v2（設計 v4 第 5 期）──
+//
+// 同樣三條規則，換成帳本的說法：模型只給動作名稱與純量；**要簽的內容由 /api/ledger 組**（這裡只給欄位）；
+// 確認時重算——這裡的每個數字都從帳本現在的狀態讀。使用者簽的是一則 EIP-712 委託單，
+// CAFECA 錢包會把每個欄位攤開給他核對，所以確認卡上的數字要和那些欄位一一對得上。
+
+const DAY = 86400;
+const nowSec = () => Math.floor(Date.now() / 1000);
+
+function buildLedgerAction(kind: ActionKind, p: Record<string, unknown>, ctx: Ctx): Preview {
+  const me = ctx.address;
+  if (!me) throw new ApiError("UNAUTHENTICATED", "要先登入");
+  const { state: s } = ledgerView();
+  const a = me.toLowerCase();
+  const cash = s.cash.get(a) ?? 0n;
+  const batchLabel = (batchId: bigint) => {
+    const b = s.batches.get(String(batchId));
+    const pr = b ? s.projects.get(String(b.projectId)) : undefined;
+    return `#${batchId}　${flagOf(pr?.country ?? "")} ${pr?.country ?? ""}　${pr?.name ?? ""}　${b?.vintageYear ?? ""}`;
+  };
+  const held = (batchId: bigint) => s.credits.get(a)?.get(String(batchId)) ?? 0n;
+  const countryOf = (batchId: bigint) => s.projects.get(String(s.batches.get(String(batchId))?.projectId ?? 0n))?.country ?? "";
+
+  switch (kind) {
+    case "claim_faucet": {
+      if (deployment().settlementMintable !== true) throw new ApiError("FORBIDDEN", "這條鏈上的結算幣不是本站發行的，沒有鑄幣權。請改由發行方入金。");
+      const amount = 100_000n * 10n ** 6n;
+      return {
+        kind, title: "領取測試用 mTWD 並存進帳本",
+        rows: [{ label: "帳戶", value: me }, { label: "數量", value: twd(amount) }, { label: "存入後帳本餘額", value: twd(cash + amount), emphasis: true }],
+        warnings: ["mTWD 是模擬的結算幣，沒有任何實際價值。", "存入是一筆鏈上交易（轉進帳本合約託管），gas 由平台贊助。"],
+        deposit: amount.toString(),
+      };
+    }
+
+    case "buy_listing": {
+      const seq = BigInt(Math.trunc(need(p.orderId, "orderId")));
+      const o = s.book.get(String(seq));
+      if (!o || o.side !== "sell" || o.remainingKg === 0n || o.expiry <= BigInt(nowSec())) {
+        throw new ApiError("ORDER_INACTIVE", `帳本第 ${seq} 號賣單已經不在了（被買走、撤單或到期）。`, { orderId: Number(seq) });
+      }
+      if (o.account.toLowerCase() === a) throw new ApiError("INVALID_PARAM", "這是你自己的賣單。", { orderId: Number(seq) });
+      const kg = BigInt(Math.min(Number(o.remainingKg), Math.max(1, Math.round(need(p.tonnes, "tonnes") * 1000))));
+      if (o.minFillKg > 0n && kg < o.minFillKg && kg !== o.remainingKg) {
+        throw new ApiError("INVALID_PARAM", `這張單的最小成交量是 ${tonnes(o.minFillKg)}，買不了 ${tonnes(kg)}。`, { param: "tonnes", minFillKg: Number(o.minFillKg) });
+      }
+      const cost = notional(kg, o.pricePerTonne);
+      return {
+        kind, title: `買進 ${tonnes(kg)}`,
+        rows: [
+          { label: "賣單", value: `帳本第 ${seq} 號　批次 ${batchLabel(o.batchId)}` },
+          { label: "數量", value: tonnes(kg) },
+          { label: "單價", value: `${twd(o.pricePerTonne)} / 公噸` },
+          { label: "你要付（最多）", value: twd(cost), emphasis: true },
+          { label: "帳本餘額", value: `${twd(cash)} → ${twd(cash - cost)}` },
+        ],
+        warnings: [
+          ...(cash < cost ? [`帳本裡的結算幣不夠：你有 ${twd(cash)}，這筆要 ${twd(cost)}。先存入結算幣。`] : []),
+          "你簽的是一張同批次、同價格的買單，由帳本撮合；手續費由賣方負擔。",
+          "那張賣單若在你簽署之前被別人買走，沒成交的部分會以同價掛著一小時（期間你可以撤單），之後自動失效。",
+        ],
+        ledger: { kind: "place", fields: { side: "buy", batchId: o.batchId.toString(), country: "", amountKg: kg.toString(), pricePerTonne: o.pricePerTonne.toString(), minFillKg: "0", expiry: nowSec() + 3600 } },
+      };
+    }
+
+    case "place_bid": {
+      const kg = BigInt(Math.round(need(p.tonnes, "tonnes") * 1000));
+      const pricePerTonne = BigInt(Math.round(need(p.pricePerTonne, "pricePerTonne") * 1e6));
+      const c = String(p.country ?? "").toUpperCase();
+      // 帳本裡不指定批次的買單一定要指定核發國（收單 API 的規則）：國外額度的用途受限，不能讓人不小心買到
+      const country = !c || c === "ANY" ? "TW" : c;
+      if (!/^[A-Z]{2}$/.test(country)) throw new ApiError("INVALID_COUNTRY", "country 要是兩碼國別", { param: "country" });
+      const j = s.jurisdictions.get(country);
+      if (!j || !j.enabled) throw new ApiError("INVALID_COUNTRY", `${country} 目前沒有開放交易`, { param: "country" });
+      const lock = notional(kg, pricePerTonne);
+      return {
+        kind, title: `掛買單 ${tonnes(kg)}`,
+        rows: [
+          { label: "核發國", value: `${flagOf(country)} ${country}${!c || c === "ANY" ? "（沒有指定，預設國內額度）" : ""}` },
+          { label: "數量", value: tonnes(kg) },
+          { label: "出價", value: `${twd(pricePerTonne)} / 公噸` },
+          { label: "現在在帳本裡鎖住", value: twd(lock), emphasis: true },
+          { label: "帳本餘額", value: `${twd(cash)} → ${twd(cash - lock)}` },
+          { label: "有效期限", value: "30 日" },
+        ],
+        warnings: [
+          ...(cash < lock ? [`帳本裡的結算幣不夠：你有 ${twd(cash)}，這筆要鎖 ${twd(lock)}。`] : []),
+          "錢會**當場**在帳本裡鎖住，直到成交、撤單或到期為止。撤單會全額退回。",
+        ],
+        ledger: { kind: "place", fields: { side: "buy", batchId: "0", country, amountKg: kg.toString(), pricePerTonne: pricePerTonne.toString(), minFillKg: "0", expiry: nowSec() + 30 * DAY } },
+      };
+    }
+
+    case "cancel_bid": {
+      // 帳本裡買單與賣單共用序號，撤哪一種都用這一個動作
+      const seq = BigInt(Math.trunc(need(p.bidId ?? p.orderId, "bidId")));
+      const o = s.book.get(String(seq));
+      if (!o || o.remainingKg === 0n) throw new ApiError("ORDER_INACTIVE", `帳本第 ${seq} 號委託已經不在了。`, { bidId: Number(seq) });
+      if (o.account.toLowerCase() !== a) throw new ApiError("FORBIDDEN", "這不是你的委託。");
+      return {
+        kind, title: `撤掉${o.side === "buy" ? "買單" : "賣單"}（帳本第 ${seq} 號）`,
+        rows: [
+          { label: "剩餘數量", value: tonnes(o.remainingKg) },
+          { label: "退回", value: o.side === "buy" ? twd(o.locked) : `${tonnes(o.remainingKg)} 額度`, emphasis: true },
+        ],
+        warnings: [],
+        ledger: { kind: "cancel", fields: { orderSeq: seq.toString() } },
+      };
+    }
+
+    case "sell_batch": {
+      const batchId = BigInt(Math.trunc(need(p.batchId, "batchId")));
+      const have = held(batchId);
+      if (have === 0n) throw new ApiError("INVALID_PARAM", `你沒有可動用的批次 #${batchId}。`, { param: "batchId", batchId: Number(batchId) });
+      const kg = BigInt(Math.min(Number(have), Math.round(need(p.tonnes, "tonnes") * 1000)));
+      const pricePerTonne = BigInt(Math.round(need(p.pricePerTonne, "pricePerTonne") * 1e6));
+      const gross = notional(kg, pricePerTonne);
+      const feeBps = tradeBpsOf(s, countryOf(batchId));
+      return {
+        kind, title: `上架批次 #${batchId} ${tonnes(kg)}`,
+        rows: [
+          { label: "批次", value: batchLabel(batchId) },
+          { label: "你可動用", value: tonnes(have) },
+          { label: "這次上架", value: tonnes(kg) },
+          { label: "開價", value: `${twd(pricePerTonne)} / 公噸` },
+          { label: `全部賣出可得（扣手續費 ${Number(feeBps) / 100}%）`, value: twd(gross - (gross * feeBps) / 10_000n), emphasis: true },
+          { label: "有效期限", value: "30 日" },
+        ],
+        warnings: [
+          "上架不是賣出：要有人來買才成交；簿子上已經有出價不低於你開價的買單的話，會當場成交。",
+          "上架期間這些額度在帳本裡鎖住，撤單或到期就退回。",
+        ],
+        ledger: { kind: "place", fields: { side: "sell", batchId: batchId.toString(), country: "", amountKg: kg.toString(), pricePerTonne: pricePerTonne.toString(), minFillKg: "0", expiry: nowSec() + 30 * DAY } },
+      };
+    }
+
+    case "retire": {
+      const batchId = BigInt(Math.trunc(need(p.batchId, "batchId")));
+      const purpose = Math.trunc(Number(p.purpose ?? -1));
+      if (!(purpose >= 0 && purpose < PURPOSE_LABEL.length)) {
+        throw new ApiError("INVALID_PARAM", `purpose 要是 0–${PURPOSE_LABEL.length - 1}：${PURPOSE_LABEL.map((l, i) => `${i}=${l}`).join("、")}`, { param: "purpose" });
+      }
+      const beneficiary = String(p.beneficiary ?? "").trim();
+      if (!beneficiary) throw new ApiError("MISSING_PARAM", "註銷一定要指名受益人——憑證上會載明，而且不能改。", { param: "beneficiary" });
+      const have = held(batchId);
+      if (have === 0n) throw new ApiError("INVALID_PARAM", `你沒有可動用的批次 #${batchId}。`, { param: "batchId", batchId: Number(batchId) });
+      const kg = BigInt(Math.min(Number(have), Math.round(need(p.tonnes, "tonnes") * 1000)));
+      const country = countryOf(batchId);
+      const allowed = purposeAllowed(s.jurisdictions.get(country)?.purposeMask ?? 0, purpose);
+      const fee = retireFeeOf(s, country, kg);
+      return {
+        kind, title: `註銷 ${tonnes(kg)}`,
+        rows: [
+          { label: "批次", value: batchLabel(batchId) },
+          { label: "數量", value: tonnes(kg), emphasis: true },
+          { label: "用途", value: PURPOSE_LABEL[purpose] },
+          { label: "受益人", value: beneficiary },
+          { label: "註銷手續費", value: twd(fee) },
+        ],
+        warnings: [
+          ...(allowed ? [] : [`${country} 核發的額度不允許用於「${PURPOSE_LABEL[purpose]}」。換一個用途，或換一批額度。`]),
+          ...(cash < fee ? [`帳本裡的結算幣不夠付註銷手續費（${twd(fee)}）。`] : []),
+          "**註銷不可逆。** 這些額度會永久退出流通，不能再轉讓、也不能再被任何人主張。",
+          "受益人與用途會寫進憑證，之後改不了。憑證要等下一期承諾上鏈才定稿（最長一小時）。",
+        ],
+        ledger: { kind: "retire", fields: { batchId: batchId.toString(), amountKg: kg.toString(), beneficiary, purpose, memo: String(p.memo ?? "").slice(0, 200) } },
+      };
+    }
+  }
+  throw new ApiError("UNSUPPORTED_ACTION", `不支援的動作：${kind}`, { kind });
+}
+
 /// 給模型看的動作說明。**只有這些**——清單以外的事情費思只能解釋與導航。
 export const ACTION_CATALOG = `
 可提議的動作（propose_action 的 kind 與參數）：
 - navigate {path}                     帶使用者去某一頁。不需要簽章。
 - claim_faucet {}                     領測試用 mTWD。
 - buy_listing {orderId, tonnes}       買一張現有掛單。先用 order_book 取得 orderId。
-- place_bid {country?, tonnes, pricePerTonne}  掛買單（錢會鎖進合約）。country 省略或 ANY = 不限核發國。
-- cancel_bid {bidId}                  取消自己的買單，退回鎖住的錢。
+- place_bid {country?, tonnes, pricePerTonne}  掛買單（錢會鎖住）。country 省略：舊版 = 不限核發國；帳本版 = 國內（TW）。
+- cancel_bid {bidId}                  取消自己的買單，退回鎖住的錢。帳本版買單賣單共用序號，撤賣單也用這個（bidId 給 order_book 的 orderId）。
 - sell_batch {batchId, tonnes, pricePerTonne}  上架自己持有的批次。
 - retire {batchId, tonnes, purpose, beneficiary, memo?}  註銷。purpose 是 0–3 的整數。**不可逆**。
 - manage_identity {}                  帶使用者去管理自己的 CAFECA 身分（掛失、裝置、恢復）。

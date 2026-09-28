@@ -4,6 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useAccount } from "./AccountProvider";
 import { Button } from "./ui";
 import { postJson } from "@/lib/client/fetchJson";
+import { outcomeText, useLedger } from "@/lib/client/ledger";
 
 /// 費思：站內的對話助理。掛在 layout，所以每一頁都在。
 ///
@@ -29,6 +30,10 @@ type Row = { label: string; value: string; emphasis?: boolean };
 type Action = {
   kind: string; title: string; rows: Row[]; warnings: string[];
   href?: string; calls?: { target: `0x${string}`; value: string; data: `0x${string}` }[];
+  /// 帳本 v2：要簽的那一筆帳本事件的欄位（/api/ledger 組 typed data，CAFECA 錢包簽）
+  ledger?: { kind: "place" | "cancel" | "retire"; fields: Record<string, string | number> };
+  /// 帳本 v2 的領水：領到之後存進帳本合約的數量（最小單位）
+  deposit?: string;
   /// 提議時用的參數。確認時拿它重算，不從畫面上的文字反推。
   params?: Record<string, unknown>;
   why?: string;
@@ -71,6 +76,7 @@ export function Faith() {
   const path = usePathname();
   const router = useRouter();
   const { relay, wallet } = useAccount();
+  const ledger = useLedger();
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -130,7 +136,19 @@ export function Faith() {
       // 本站沒有能力、也不該有能力凍結別人的身分。助理改成把人帶過去
       //（見 lib/server/faith/actions.ts 的白名單）。
       let note = "";
-      if (a.kind === "claim_faucet") {
+      if (fresh.ledger) {
+        // 帳本：簽一則 EIP-712 委託（錢包把每個欄位攤開給使用者核對），送進帳本，拿簽收收據
+        const r = await ledger.submit(fresh.ledger.kind, fresh.ledger.fields, { title: a.title, detail: a.why });
+        const o = outcomeText(r, a.title);
+        if (o.kind === "error") throw new Error(o.text);
+        note = o.text;
+      } else if (fresh.deposit) {
+        // 帳本的領水：開發用登入由伺服器鑄給他並代為存入；CAFECA 帳戶先領到錢包，再自己存進帳本合約
+        if (!wallet) throw new Error("還沒讀到你的帳戶");
+        if (!ledger.devSigning) await postJson("/api/faucet", { account: wallet.address });
+        await ledger.deposit(BigInt(fresh.deposit));
+        note = "已領取測試用 mTWD，並存進帳本合約。";
+      } else if (a.kind === "claim_faucet") {
         if (!wallet) throw new Error("還沒讀到你的帳戶");
         await postJson("/api/faucet", { account: wallet.address });
         note = "已領取測試用 mTWD。";
@@ -149,7 +167,7 @@ export function Faith() {
       const why = e instanceof Error ? e.message : String(e);
       setMsgs((m) => m.map((x, i) => (i === idx && x.role === "assistant" ? { ...x, failed: why } : x)));
     } finally { setBusy(false); }
-  }, [relay, router, wallet]);
+  }, [ledger, relay, router, wallet]);
 
   const suggestions = SUGGESTIONS[path ?? "/"] ?? DEFAULT_SUGGESTIONS;
 

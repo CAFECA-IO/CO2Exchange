@@ -18,6 +18,8 @@ type Status = {
   ref?: { pricePerTonne: number; source: string };
   cash?: number; bidEscrow?: number; inventoryKg?: number; freeInventoryKg?: number; equity?: number; pnl?: number; dayPnl?: number;
   fundedTotal?: number; capitalTWD?: number; feeBps?: number; gas?: number; intervalSec?: number;
+  /// 帳本 v2：報價是簽名委託單（"ledger"）
+  venue?: string;
   quotes?: { bids: Quote[]; asks: Quote[] };
   externalBest?: { bid: number | null; ask: number | null };
   simulation?: { allowed: boolean; requested: boolean; running: boolean; lastExit: { code: number | null; at: string } | null };
@@ -133,7 +135,9 @@ export function MarketMakerPanel() {
           {s.halted && <Button disabled={!!busy} onClick={() => act("恢復", { action: "resume" })}>恢復</Button>}
           <Button
             variant="secondary" disabled={!!busy}
-            onClick={() => { if (window.confirm("撤回所有報價，並把做市帳戶的結算幣全部轉回營運金鑰？持有的碳權會留在做市帳戶。")) act("收回資金", { action: "recall" }); }}
+            onClick={() => { if (window.confirm(s?.venue === "ledger"
+              ? "撤回所有報價並停止做市？做市帳戶錢包裡還沒存入的結算幣會轉回營運金鑰；已存進帳本合約的現金與持有的碳權留在帳本裡，要憑餘額證據提領。"
+              : "撤回所有報價，並把做市帳戶的結算幣全部轉回營運金鑰？持有的碳權會留在做市帳戶。")) act("收回資金", { action: "recall" }); }}
           >收回資金</Button>
         </div>
         {r.config.capitalTWD <= 0 && !r.config.enabled && <p className="mt-2 text-xs text-ink-300">先在下方設定撥款上限，才能啟動。</p>}

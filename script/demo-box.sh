@@ -22,8 +22,8 @@
 #
 # 預設是設計 v4 的帳本：鏈上只有 Ledger 合約，資料是鏈下的簽章事件，每小時一期承諾上鏈。
 #   rebuild：新鏈（時間＝現在）→ DeployLedger → ledger:seed 回填 LEDGER_DAYS 天的事件 → 提交第一期
-#   seed：   只在本機鏈（入金靠 MockTWD 鑄幣）；外部鏈的展示資料等第 5 期的簽名委託單
-#   live：   等於 commit-loop（模擬器與做市商第 5 期才改成送簽名委託單）
+#   seed：   本機鏈回填；外部鏈上由模擬人物從現在開始交易 EXT_TICKS 輪（ledger-sim.mjs）
+#   live：   等於 commit-loop；做市與模擬交易由 npm run mm 管（/admin「做市」頁）
 # `LEGACY=1` 走舊的全合約流程（DemoFlowV4 + simulate.mjs）。
 #
 # 環境變數：
@@ -246,9 +246,16 @@ commit_loop () {
 do_seed () {
   if ledger_mode; then
     if ! is_local; then
-      echo "!! 帳本版的展示資料目前只能在本機鏈鋪（入金靠 MockTWD 鑄幣）。" >&2
-      echo "   外部鏈上的市場資料要等第 5 期：做市商與模擬器改送簽名委託單。" >&2
-      exit 1
+      # 外部鏈不能回填（沒有 anvil_setBalance、時間不是我們的）：模擬人物從現在開始交易幾輪。
+      # 人物的入金是鏈上真的轉帳——結算幣不是本站發行的話，營運金鑰要先持有足夠的結算幣（TWDC）。
+      local users=${SIM_USERS:-30} ticks=${EXT_TICKS:-10} interval=${EXT_INTERVAL:-30}
+      echo ">> 外部鏈：模擬人物 ${users} 人從現在開始交易 ${ticks} 輪（每 ${interval} 秒一輪）"
+      echo "   入金由營運金鑰轉結算幣給人物、人物自己存進帳本合約；gas 由營運金鑰代付"
+      ( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/ledger-sim.mjs \
+          --users "$users" --ticks "$ticks" --interval "$interval" )
+      echo ">> 提交一期承諾"
+      do_commit | tail -4
+      return
     fi
     echo ">> 帳本回填：${LEDGER_USERS} 人、${LEDGER_DAYS} 天的事件（事件時間回溯，收單區塊是現在）"
     ( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/ledger-seed.mjs \
@@ -323,7 +330,8 @@ live)
   banner
   rpc_up || { echo "!! $RPC_URL 沒有回應"; exit 1; }
   if ledger_mode; then
-    echo ">> 帳本版的持續模式：每小時提交承諾。模擬器與做市商第 5 期才改成送簽名委託單。"
+    echo ">> 帳本版的持續模式：每小時提交承諾。"
+    echo "   做市與模擬交易另外跑：cd web && npm run mm（在 /admin「做市」頁啟動報價、開模擬交易）"
     commit_loop
   fi
   echo ">> 持續模式。提醒：年度需求額度大約一小時會用完，之後只剩做市商還在買。"

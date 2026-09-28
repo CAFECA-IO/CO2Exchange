@@ -1,6 +1,7 @@
 import "server-only";
 import { ledgerEnabled } from "../ledger/view";
 import { ledgerCertificates, ledgerFees, ledgerIdentity } from "../ledger/registry";
+import { ledgerTradeFeeBps } from "../ledger/read";
 import type { FaithTool } from "./provider";
 import { byCountry } from "../by-country";
 import { holdings, listBids, listOrders } from "../market";
@@ -105,9 +106,10 @@ export const TOOLS: { spec: FaithTool; run: Impl; needsLogin?: boolean }[] = [
         side === "bid" ? Promise.resolve([]) : listOrders(),
         side === "ask" ? Promise.resolve([]) : listBids(),
       ]);
-      const feeBps = await publicClient.readContract({
-        address: deployment().listing, abi: listingAbi, functionName: "feeBps",
-      });
+      // 帳本版沒有 Listing 合約：費率是帳本裡的 fees 事件（國內預設）
+      const feeBps = ledgerEnabled()
+        ? ledgerTradeFeeBps()
+        : await publicClient.readContract({ address: deployment().listing, abi: listingAbi, functionName: "feeBps" });
       return {
         listingFeeBps: Number(feeBps),
         note: "pricePerTonne 的單位是 mTWD 的最小單位（1e6 = 1 mTWD）。remainingKg 是公斤，1000 公斤 = 1 公噸。",

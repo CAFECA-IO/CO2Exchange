@@ -87,17 +87,21 @@ export function openStore(dir: string) {
     return r;
   }
 
+  /// `partial` 也可以是一個函式：在**鎖裡**才決定內容（回 null 就不寫）。使用者事件的 nonce 要在鎖裡定，
+  /// 簽章又包含 nonce——所以常駐程式在這裡面簽（見 agent.ts）。簽 EIP-712 是本機運算，不會拖住鎖。
   async function appendIf(
-    partial: NewEvent,
+    partial: NewEvent | (() => Promise<NewEvent | null> | NewEvent | null),
     opts: { receiptSigner?: ReceiptSigner; at?: bigint; skipIf?: () => boolean } = {},
   ): Promise<{ event: Event; receipt: Receipt | null } | null> {
-    const done = await withLock(() => {
+    const done = await withLock(async () => {
       if (opts.skipIf?.()) return null;
+      const content = typeof partial === "function" ? await partial() : partial;
+      if (!content) return null;
       const h = readHead();
       const seq = h.seq + 1n;
       const now = opts.at ?? BigInt(Math.floor(Date.now() / 1000));
       const at = now < h.lastAt ? h.lastAt : now;
-      const event = { ...partial, seq, at } as Event;
+      const event = { ...content, seq, at } as Event;
       const runningHash = chainHash(h.runningHash, event);
       // 先寫事件，再更新 head：中途當掉最多留下一筆 head 還不知道的事件，重開時會被偵測到
       fs.appendFileSync(EVENTS, `${JSON.stringify(event, replacer)}\n`);

@@ -32,8 +32,10 @@
     "ledger:commit": "node --experimental-strip-types --no-warnings scripts/ledger-commit.mjs",
     "ledger:verify": "node --experimental-strip-types --no-warnings scripts/ledger-commit.mjs --verify",
     "ledger:authority": "node --experimental-strip-types --no-warnings scripts/ledger-authority.mjs",
-    "mm": "node scripts/mm/mm.mjs",
-    "test:cafeca": "node --conditions=react-server --experimental-strip-types --no-warnings scripts/test-cafeca.mjs"
+    "mm": "node --experimental-strip-types --no-warnings scripts/mm/mm.mjs",
+    "test:cafeca": "node --conditions=react-server --experimental-strip-types --no-warnings scripts/test-cafeca.mjs",
+    "ledger:sim": "node --experimental-strip-types --no-warnings scripts/ledger-sim.mjs",
+    "test:ledger-mm": "node --experimental-strip-types --no-warnings scripts/e2e-ledger-mm.mjs"
   },
   "dependencies": {
     "@noble/curves": "^1.9.1",

@@ -2,6 +2,7 @@ import { buildAction, type ActionKind } from "@/lib/server/faith/actions";
 import { me } from "@/lib/server/roles";
 import { ApiError, handleError, ok } from "@/lib/server/api";
 import { walletOf } from "@/lib/server/wallet";
+import { ledgerEnabled } from "@/lib/server/ledger/view";
 
 /// 確認的那一刻，把動作**重新**算一次。
 ///
@@ -18,9 +19,10 @@ export async function POST(req: Request) {
     const { kind, params } = (await req.json()) as { kind?: string; params?: Record<string, unknown> };
     if (!kind) throw new ApiError("MISSING_PARAM", "缺少 kind", { param: "kind" });
     const who = await me();
-    const wallet = who ? await walletOf(who.address).catch(() => null) : null;
+    const wallet = who && !ledgerEnabled() ? await walletOf(who.address).catch(() => null) : null;
     const preview = await buildAction(kind as ActionKind, params ?? {}, {
-      address: wallet?.exists ? wallet.address : undefined,
+      // 帳本版：帳戶就是登入的地址（CAFECA 帳戶或本機的開發帳戶都能簽帳本委託）；舊版要有鏈上錢包合約
+      address: ledgerEnabled() ? who?.address : wallet?.exists ? wallet.address : undefined,
       userId: who?.id,
     });
     return ok(preview);

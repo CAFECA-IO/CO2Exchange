@@ -60,6 +60,17 @@ const store = openStore(process.env.LEDGER_DIR ?? path.join(DATA, "ledger"));
 const personas = buildPersonas(USERS, SEED);
 const mnemonic = process.env.SIM_MNEMONIC ?? ANVIL_MNEMONIC;
 for (const p of personas) { p.account = mnemonicToAccount(mnemonic, { addressIndex: p.walletIndex }); p.address = p.account.address; }
+// 名冊：網站靠它在掛單簿上標「模擬」，做市程式靠它避開平台自己的帳戶（和 ledger-sim.mjs 同一份格式、同一批人）
+{
+  const rosterPath = path.join(DATA, "sim-personas.json");
+  fs.mkdirSync(DATA, { recursive: true });
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const current = personas.map(({ account, ...p }) => ({ ...p, active: true }));
+  fs.writeFileSync(rosterPath, JSON.stringify({
+    note: "模擬用虛構人物，與任何真實公司或個人無關", seed: SEED, chainId, generatedAt: new Date().toISOString(), personas: current,
+    addressSpace: Array.from({ length: Math.max(USERS, 100) }, (_, i) => mnemonicToAccount(mnemonic, { addressIndex: 100 + i }).address),
+  }, null, 2));
+}
 
 // ── 入金：鏈上真的轉帳 ──
 const erc20 = parseAbi(["function mint(address,uint256)", "function approve(address,uint256) returns (bool)"]);
