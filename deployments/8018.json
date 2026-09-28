@@ -1,0 +1,15 @@
+{
+  "cafecaKeyring": "0x367a9E8a6E8bA108F4cC4B863d03dD618aD7893b",
+  "chainId": 8018,
+  "committer": "0x8745277171F320062568f3aA512a6F55dd0fC3fc",
+  "deployedAt": 1790605744032,
+  "deployedAtBlock": 26654,
+  "ledger": "0x71034Ae8453Af2F68C113770ADD46a1D8037A71D",
+  "ledgerVersion": 2,
+  "nationalSafe": "0x298AfF8D1d6EA78413ff185EB02250654d4Ffcbc",
+  "operatorSafe": "0xeD9159844726946F7cB1700C425F9BEdB14a0199",
+  "settlementMintable": false,
+  "settlementToken": "0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3",
+  "timelock": "0x4940b0D65CcDF27704775b21B15477A3a45a3726",
+  "timelockDelay": 172800
+}
