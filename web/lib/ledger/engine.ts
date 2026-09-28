@@ -182,9 +182,12 @@ function takeNonce(s: State, account: Address, nonce: bigint): boolean {
 
 function step(s: State, e: Event, ctx: Context): void {
   // 鏈上鏡像事件由 ChainRef 背書；其餘一律先看簽章。
-  if (e.kind !== "cashDeposit" && e.kind !== "cashWithdraw" && !ctx.sigOk(e.seq)) return reject(s, e, "簽章或授權無效");
+  if (e.kind !== "cashDeposit" && e.kind !== "cashWithdraw" && e.kind !== "userKey" && !ctx.sigOk(e.seq)) return reject(s, e, "簽章或授權無效");
 
   switch (e.kind) {
+    case "userKey":
+      // 公鑰鏡像只給查核驗簽用，不改變任何狀態（它仍在 logRoot 裡，改不掉）
+      return;
     case "cashDeposit":
       add1(s.cash, lower(e.account), e.amount);
       return;

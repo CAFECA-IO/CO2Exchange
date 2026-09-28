@@ -45,6 +45,8 @@ export const KIND = {
   certOfficial: 16,
   reserveReport: 17,
   reserveAttest: 18,
+  /// CAFECA 帳戶的 passkey 公鑰（鏈上 KeyAdded 的鏡像，帶座標）。查核驗 WebAuthn 簽章時用，不改變任何狀態
+  userKey: 19,
 } as const;
 export type Kind = keyof typeof KIND;
 
@@ -64,6 +66,7 @@ export type Event = Base &
   (
     | { kind: "cashDeposit"; ref: ChainRef; account: Address; amount: bigint }
     | { kind: "cashWithdraw"; ref: ChainRef; account: Address; amount: bigint }
+    | { kind: "userKey"; ref: ChainRef; account: Address; keyId: Hex; qx: Hex; qy: Hex; rpIdHash: Hex; keyKind: number; validator: Address }
     | ({ kind: "jurisdiction"; country: string; enabled: boolean; domestic: boolean; purposeMask: number; name: string; scheme: string; registryName: string; note: string } & Auth)
     | ({ kind: "policy"; individualTransfer: boolean; individualRetire: boolean; treasury: Address } & Auth)
     /// country 為空字串 = 預設費率
@@ -91,7 +94,7 @@ export type EventOf<K extends Kind> = Extract<Event, { kind: K }>;
 
 /// 誰簽這一筆。鏈上事件（存入／提領）沒有簽章者，由 ChainRef 背書。
 export function signerOf(e: Event): Address | null {
-  if (e.kind === "cashDeposit" || e.kind === "cashWithdraw") return null;
+  if (e.kind === "cashDeposit" || e.kind === "cashWithdraw" || e.kind === "userKey") return null;
   if ("signer" in e) return e.signer;
   return e.account;
 }
@@ -116,6 +119,9 @@ export function payloadOf(e: Event): Hex {
     case "cashDeposit":
     case "cashWithdraw":
       return T(["bytes32", "uint256", "uint32", "address", "uint256"], [e.ref.txHash, e.ref.block, e.ref.logIndex, e.account, e.amount]);
+    case "userKey":
+      return T(["bytes32", "uint256", "uint32", "address", "bytes32", "bytes32", "bytes32", "bytes32", "uint8", "address"],
+        [e.ref.txHash, e.ref.block, e.ref.logIndex, e.account, e.keyId, e.qx, e.qy, e.rpIdHash, e.keyKind, e.validator]);
     case "jurisdiction":
       return T(["bytes2", "bool", "bool", "uint8", "string", "string", "string", "string"],
         [countryToBytes2(e.country), e.enabled, e.domestic, e.purposeMask, e.name, e.scheme, e.registryName, e.note]);

@@ -11,7 +11,12 @@ type KycReq = { id: string; account: string; tier: number; idNumberMasked: strin
 type Cert = { certId: number; batchId: number; amountKg: number; beneficiary: string; purpose: number; retiredAt: number; owner: string; pdfHash: string | null; onchainHash: string | null; anchored: boolean };
 type Gov = {
   /// 帳本 v2 才有：鏈上只剩帳本合約，信任根是授權金鑰清單
-  ledger?: { address: string; committer: string | null; committerOk: boolean | null; authorities: { role: string; account: string; since: string }[] };
+  ledger?: {
+    address: string; committer: string | null; committerOk: boolean | null;
+    authorities: { role: string; account: string; since: string }[];
+    thresholds: Record<string, number>;
+    proposals: { id: string; kind: string; role: string; note: string; createdAt: string; required: number; collected: number; pending: string[] }[];
+  };
   matrix: { name: string; address: string; admin: boolean; sovereign: boolean | null; operator: boolean | null }[];
   hasV4: boolean;
   poolManagerOwner: string | null; poolManagerOwnerIsTimelock: boolean; listingPaused: boolean; poolPaused: boolean; trustedRouter: string | null; swapsEnabled: boolean;
@@ -75,8 +80,10 @@ export default function AdminPage() {
   async function act(label: string, fn: () => Promise<unknown>) {
     setBusy(label); setMsg(null);
     try {
-      const j = (await fn()) as { txHash?: string; sha256?: string };
-      setMsg({ kind: "ok", text: `${label}完成${j.txHash ? ` · tx ${j.txHash.slice(0, 10)}…` : ""}${j.sha256 ? ` · SHA-256 ${j.sha256.slice(0, 14)}…` : ""}` });
+      const j = (await fn()) as { txHash?: string; sha256?: string; proposal?: string; required?: number };
+      // k-of-n 角色（簽章模型方案 B）：本站簽不出來，建立提案等持有人簽署
+      if (j.proposal) setMsg({ kind: "ok", text: `${label}：已建立提案 ${j.proposal}，需要 ${j.required} 位持有人簽署後才會寫進帳本（npm run ledger:authority -- show ${j.proposal}）` });
+      else setMsg({ kind: "ok", text: `${label}完成${j.txHash ? ` · tx ${j.txHash.slice(0, 10)}…` : ""}${j.sha256 ? ` · SHA-256 ${j.sha256.slice(0, 14)}…` : ""}` });
       reload();
     } catch (e) { setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) }); }
     finally { setBusy(null); }
@@ -248,13 +255,39 @@ export default function AdminPage() {
           {gov.ledger && (
             <Card title="授權金鑰清單（國家 Safe 管理）" className="md:col-span-2">
               <table className="w-full text-xs">
-                <thead className="text-left text-ink-300"><tr><th className="py-1">角色</th><th>金鑰</th><th>自區塊</th></tr></thead>
+                <thead className="text-left text-ink-300"><tr><th className="py-1">角色</th><th>門檻</th><th>金鑰</th><th>自區塊</th></tr></thead>
                 <tbody>{gov.ledger.authorities.map((a) => (
-                  <tr key={`${a.role}-${a.account}`} className="border-t border-ink-500"><td className="py-1">{a.role}</td><td className="font-mono">{a.account}</td><td className="tnum">{a.since}</td></tr>
+                  <tr key={`${a.role}-${a.account}`} className="border-t border-ink-500">
+                    <td className="py-1">{a.role}</td>
+                    <td className="tnum">{gov.ledger!.thresholds[a.role] ?? 1}-of-{gov.ledger!.authorities.filter((x) => x.role === a.role).length}</td>
+                    <td className="font-mono">{a.account}</td><td className="tnum">{a.since}</td>
+                  </tr>
                 ))}</tbody>
               </table>
               <p className="mt-2 text-xs leading-6 text-ink-300">
-                帳本裡每一筆授權事件都要由這張清單上、且在收單當時有效的金鑰簽署；查核時依鏈上的授權歷史逐筆重驗。
+                帳本裡每一筆授權事件都要由這張清單上、且在收單當時有效的金鑰簽署。主權、營運、查核角色是 k-of-n：
+                一筆事件要附上門檻數量的不同持有人簽章。查核時只用 ecrecover 與鏈上的授權歷史重驗，不讀任何歷史狀態。
+              </p>
+            </Card>
+          )}
+          {gov.ledger && (
+            <Card title={`待簽署的授權事件（${gov.ledger.proposals.length}）`} className="md:col-span-2">
+              {gov.ledger.proposals.length === 0 ? <p className="text-sm text-ink-300">沒有進行中的提案。</p> : (
+                <table className="w-full text-xs">
+                  <thead className="text-left text-ink-300"><tr><th className="py-1">提案</th><th>事件</th><th>角色</th><th>簽署</th><th>還可以簽的持有人</th></tr></thead>
+                  <tbody>{gov.ledger.proposals.map((p) => (
+                    <tr key={p.id} className="border-t border-ink-500">
+                      <td className="py-1 font-mono">{p.id}</td><td>{p.kind}<span className="ml-1 text-ink-300">{p.note}</span></td><td>{p.role}</td>
+                      <td className="tnum">{p.collected}/{p.required}</td>
+                      <td className="font-mono">{p.pending.map((a) => `${a.slice(0, 8)}…`).join(" ")}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              )}
+              <p className="mt-2 text-xs leading-6 text-ink-300">
+                持有人以自己的錢包簽署（EIP-712）：<code>npm run ledger:authority -- show &lt;提案&gt;</code> 取得要簽的內容，
+                或在自己的 shell 以 <code>sign &lt;提案&gt; --key-env 變數名</code> 簽；收滿門檻後 <code>submit &lt;提案&gt;</code>。
+                持有人的私鑰不放在本站。
               </p>
             </Card>
           )}

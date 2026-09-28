@@ -1,11 +1,13 @@
 import "server-only";
-import { createWalletClient, http, parseAbi, type Address, type Hex, type PrivateKeyAccount } from "viem";
+import { createWalletClient, http, parseAbi, size, type Address, type Hex, type PrivateKeyAccount } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { auth } from "@/auth";
 import { authTypedData, userDigest, userMessageOf, userTypedData, type Domains } from "@/lib/ledger/typed";
-import { isAuthorized, roleFor, type Authorities, type Role } from "@/lib/ledger/authorities";
+import { isAuthorized, roleFor, thresholdAt, type Authorities, type Role } from "@/lib/ledger/authorities";
 import { readAuthorities } from "@/lib/ledger/chain";
-import { onchainVerifier } from "@/lib/ledger/replay";
+import { liveErc1271 } from "@/lib/ledger/replay";
+import { decodeCafecaSignature, keyIdOf, verifyWebAuthn } from "@/lib/ledger/signatures";
+import { CAFECA_ABI } from "@/lib/ledger/chain";
 import { mirrorCash } from "@/lib/ledger/mirror";
 import type { Event, EventOf, Kind } from "@/lib/ledger/events";
 import type { NewEvent, Receipt } from "@/lib/ledger/store";
@@ -13,7 +15,9 @@ import { IS_LOCAL_CHAIN, RPC_URL, chain, deployment, documentSigner, identityVer
 import { submit } from "../tx";
 import { ApiError } from "../api";
 import { devKeyOf } from "../dev-key";
-import { ledgerStore, ledgerView } from "./view";
+import { cafecaConfig } from "../cafeca/config";
+import { LEDGER_DIR, ledgerStore, ledgerView } from "./view";
+import { createProposal, listProposals, progressOf, type Proposal } from "@/lib/ledger/proposals";
 
 /// 帳本的寫入面（設計 v4 第 3 期）：網站上所有會改變登錄簿、身分、市場狀態的動作，
 /// 都在這裡變成一筆**簽過章、記了收單區塊高度**的帳本事件。
@@ -69,6 +73,9 @@ function signerFor(role: Role): PrivateKeyAccount {
 
 // ── 鏈上授權清單（快取一分鐘；授權變動要走 Timelock，一分鐘的延遲無關緊要） ──
 
+/// 區塊高度一律 `cacheTime: 0`：viem 預設把 getBlockNumber 快取 4 秒，收單區塊會落後，
+/// 剛好跨過金鑰移除的那一塊時，查核與收單的判斷就會不一致。
+///
 /// 快取的鍵要含部署時間：本機鏈重開之後，新部署常常落在**同一個位址**上，
 /// 只用位址當鍵會拿舊鏈的授權歷史去判斷新鏈的區塊高度。
 let authCache: { key: string; at: number; value: Authorities } | null = null;
@@ -95,12 +102,18 @@ type AuthBody<K extends Kind> = Omit<EventOf<K>, "seq" | "at" | "atBlock" | "kin
 /// 以本站的服務金鑰簽一筆授權事件並寫進帳本。
 export async function appendAuthority<K extends Kind>(kind: K, body: AuthBody<K>): Promise<Appended> {
   const d = domains();
-  const atBlock = await publicClient.getBlockNumber();
+  const atBlock = await publicClient.getBlockNumber({ cacheTime: 0 });
   const draft = { seq: 0n, at: 0n, atBlock, kind, ...body, signer: "0x0000000000000000000000000000000000000000", signature: "0x" } as unknown as Event;
   const role = roleFor(draft);
   if (!role) throw new ApiError("INVALID_PARAM", `${kind} 不是授權事件`);
+  const auth = await authorities();
+  const k = thresholdAt(auth, role, atBlock);
+  if (k > 1) {
+    // k-of-n 角色（主權、營運、查核）：本站一把金鑰簽不出來，要走提案收集簽章
+    throw new ApiError("FORBIDDEN", `${role} 需要 ${k} 個持有人簽章；請建立提案並由持有人簽署（npm run ledger:authority）`);
+  }
   const signer = signerFor(role);
-  if (!isAuthorized(await authorities(), role, signer.address, atBlock)) {
+  if (!isAuthorized(auth, role, signer.address, atBlock)) {
     // 只講地址與角色，不碰金鑰本身
     throw new ApiError("FORBIDDEN", `本站的 ${role} 金鑰（${signer.address}）不在帳本合約的授權清單裡，寫進去也會在重播時被拒絕`);
   }
@@ -110,6 +123,31 @@ export async function appendAuthority<K extends Kind>(kind: K, body: AuthBody<K>
   void _s; void _a;
   const { event, receipt } = await ledgerStore().append(rest as NewEvent, { receiptSigner });
   return outcome(event, receipt);
+}
+
+/// k-of-n 角色的事件：門檻 1 就直接簽（和 appendAuthority 相同）；門檻大於 1 就建立提案，
+/// 由持有人各自簽署後再寫進帳本（`npm run ledger:authority`）。
+export async function appendAuthorityOrPropose<K extends Kind>(
+  kind: K, body: AuthBody<K>, meta: { createdBy: string; note?: string },
+): Promise<{ appended: Appended } | { proposal: Proposal; required: number }> {
+  const atBlock = await publicClient.getBlockNumber({ cacheTime: 0 });
+  const draft = { seq: 0n, at: 0n, atBlock, kind, ...body, signer: "0x0000000000000000000000000000000000000000", signature: "0x" } as unknown as Event;
+  const role = roleFor(draft);
+  if (!role) throw new ApiError("INVALID_PARAM", `${kind} 不是授權事件`);
+  const auth = await authorities();
+  const required = thresholdAt(auth, role, atBlock);
+  if (required <= 1) return { appended: await appendAuthority(kind, body) };
+  const proposal = createProposal(LEDGER_DIR, domains(), { kind, body: body as Record<string, unknown>, createdBy: meta.createdBy, note: meta.note });
+  return { proposal, required };
+}
+
+/// 治理頁：進行中的提案與簽署進度。
+export async function openProposals() {
+  const auth = await authorities();
+  const atBlock = await publicClient.getBlockNumber({ cacheTime: 0 });
+  return listProposals(LEDGER_DIR).filter((p) => p.status === "open").map((p) => ({
+    id: p.id, kind: p.kind, role: p.role, note: p.note, createdAt: p.createdAt, digest: p.digest, ...progressOf(p, auth, atBlock),
+  }));
 }
 
 // ── 使用者事件 ──
@@ -130,14 +168,65 @@ export function userMessage<K extends UserKind>(kind: K, body: UserBody<K>) {
 /// 驗過使用者的簽章（在現在的區塊高度）後寫進帳本。
 export async function appendUser<K extends UserKind>(kind: K, body: UserBody<K>, signature: Hex): Promise<Appended> {
   const d = domains();
-  const atBlock = await publicClient.getBlockNumber();
+  const atBlock = await publicClient.getBlockNumber({ cacheTime: 0 });
   const digest = userDigest(d, kind, userMessage(kind, body));
-  const check = await onchainVerifier(publicClient)({ signer: body.account, digest, signature, atBlock });
+  // 第一道：帳戶合約現在認不認這個簽章（ERC-1271 用現在的狀態，不需要 archive）
+  const check = await liveErc1271(publicClient)({ signer: body.account, digest, signature });
   if (!check.ok) throw new ApiError("SIGNATURE_INVALID", `簽章沒有通過驗證：${check.reason ?? "不明原因"}`);
   const want = nextNonce(body.account);
   if (body.nonce < want) throw new ApiError("INVALID_PARAM", `nonce 已經用過（下一個是 ${want}）`, { param: "nonce", next: String(want) });
+  // 第二道：查核時會用的規則（不讀歷史狀態）現在就先驗一次，並把公鑰鏡像進帳本。
+  // 兩道不一致的簽章不收——否則收下來的單，查核時會被判無效，網站與承諾就對不上。
+  if (size(signature) !== 65) await checkCafecaAndMirror(body.account, digest, signature, atBlock);
   const { event, receipt } = await ledgerStore().append({ atBlock, kind, ...body, signature } as unknown as NewEvent, { receiptSigner });
   return outcome(event, receipt);
+}
+
+// ── CAFECA 帳戶的公鑰鏡像（簽章模型：查核從事件重建金鑰，不用 archive 節點） ──
+
+const KEY_ADDED = CAFECA_ABI.find((x) => x.type === "event" && x.name === "KeyAdded")!;
+
+async function keyringAddress(): Promise<Address | null> {
+  const k = (await cafecaConfig().catch(() => null))?.contracts.keyring;
+  return k && /^0x[0-9a-fA-F]{40}$/.test(k) ? (k as Address) : null;
+}
+
+/// 找這把金鑰最近一次的 KeyAdded（從現在往回分段找；Boltchain 單次最多 10,000 塊）。
+async function latestKeyAdded(keyring: Address, account: Address, keyId: Hex, toBlock: bigint) {
+  const step = 9_000n;
+  for (let hi = toBlock; hi >= 0n; hi -= step) {
+    const lo = hi >= step ? hi - step + 1n : 0n;
+    const logs = await publicClient.getLogs({ address: keyring, event: KEY_ADDED as never, args: { account, keyId } as never, fromBlock: lo, toBlock: hi });
+    if (logs.length) return logs[logs.length - 1] as unknown as { transactionHash: Hex; blockNumber: bigint; logIndex: number; args: { kind: number } };
+    if (lo === 0n) break;
+  }
+  return null;
+}
+
+async function checkCafecaAndMirror(account: Address, digest: Hex, signature: Hex, atBlock: bigint) {
+  const keyring = await keyringAddress();
+  const sig = decodeCafecaSignature(signature);
+  if (!keyring || !sig) throw new ApiError("SIGNATURE_INVALID", "簽章不是 CAFECA KeyringValidator 的格式，查核時無法驗證");
+  if (sig.validator.toLowerCase() !== keyring.toLowerCase()) {
+    throw new ApiError("SIGNATURE_INVALID", `只收 CAFECA KeyringValidator 的簽章（這筆是 ${sig.validator}）`);
+  }
+  const [qx, qy, rpIdHash, keyKind] = await publicClient.readContract({
+    address: keyring, abi: CAFECA_ABI, functionName: "getKey", args: [account, sig.keyId],
+  }) as readonly [Hex, Hex, Hex, number, bigint];
+  if (keyIdOf(qx, qy).toLowerCase() !== sig.keyId.toLowerCase()) throw new ApiError("SIGNATURE_INVALID", "keyring 查不到這把金鑰（可能已被移除）");
+  const local = verifyWebAuthn(digest, sig, { qx, qy, rpIdHash });
+  if (!local.ok) throw new ApiError("SIGNATURE_INVALID", `簽章沒有通過查核規則：${local.reason}`);
+
+  const added = await latestKeyAdded(keyring, account, sig.keyId, atBlock);
+  if (!added) throw new ApiError("SIGNATURE_INVALID", "鏈上找不到這把金鑰的 KeyAdded 事件");
+  const ref = { txHash: added.transactionHash, block: added.blockNumber, logIndex: added.logIndex };
+  const store = ledgerStore();
+  const same = (e: Event) => e.kind === "userKey" && e.account.toLowerCase() === account.toLowerCase()
+    && e.keyId.toLowerCase() === sig.keyId.toLowerCase() && e.ref.txHash.toLowerCase() === ref.txHash.toLowerCase() && e.ref.logIndex === ref.logIndex;
+  if (ledgerView().events.some(same)) return;
+  await store.appendIf({
+    atBlock, kind: "userKey", ref, account, keyId: sig.keyId, qx, qy, rpIdHash, keyKind: Number(keyKind), validator: keyring,
+  } as unknown as NewEvent, { receiptSigner, skipIf: () => store.read(ledgerView().head.seq + 1n).some(same) });
 }
 
 // ── 開發用登入的簽章 ──

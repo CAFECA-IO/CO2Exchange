@@ -79,6 +79,10 @@ contract Ledger is AccessControl {
     mapping(uint64 => Commitment) internal _commitments;
 
     mapping(bytes32 => mapping(address => bool)) public isAuthority;
+    /// @notice 每個帳本角色的門檻：一筆授權事件要有幾把「同時有效」的金鑰簽章（k-of-n）。0 視同 1。
+    /// @dev 主權、營運、查核角色用 k-of-n，把國家 Safe 的多簽搬進帳本：查核時只需 ecrecover，
+    ///      不必在過去的區塊呼叫 Safe 的 isValidSignature（那需要 archive 節點）。
+    mapping(bytes32 => uint8) public thresholdOf;
 
     bool public withdrawalsEnabled;
     /// @dev 對某一期證據已經領走／登記了多少。累計制：上限是「最新 root 說你有的，減掉對同一個 root 已經用掉的」。
@@ -87,6 +91,7 @@ contract Ledger is AccessControl {
 
     event AuthorityGranted(bytes32 indexed role, address indexed account);
     event AuthorityRevoked(bytes32 indexed role, address indexed account);
+    event ThresholdSet(bytes32 indexed role, uint8 threshold);
     /// @dev 整包承諾內容一起發出來：重播的人不必再逐期呼叫 `commitmentOf`。
     event Committed(uint64 indexed epoch, bytes32 anchor, CommitInput commitment);
     event CashDeposited(address indexed account, uint256 amount);
@@ -99,6 +104,7 @@ contract Ledger is AccessControl {
     event WithdrawalsToggled(bool enabled);
 
     error ZeroAmount();
+    error BadThreshold(uint8 threshold);
     error ZeroAddress();
     error ChainBroken(bytes32 expected, bytes32 got);
     error EpochOutOfOrder(uint64 expected, uint64 got);
@@ -136,6 +142,15 @@ contract Ledger is AccessControl {
         if (!isAuthority[role][account]) return;
         isAuthority[role][account] = false;
         emit AuthorityRevoked(role, account);
+    }
+
+    /// @notice 設定角色門檻。重播以這個事件所在的區塊為生效起點（和授權的增減一樣）。
+    /// @dev 門檻高於目前有效的金鑰數時，這個角色就簽不出任何事件——那是國家單位的選擇，合約不擋，
+    ///      但查核工具與治理頁會標示出來。
+    function setThreshold(bytes32 role, uint8 threshold) external onlyRole(SOVEREIGN_ROLE) {
+        if (threshold == 0) revert BadThreshold(threshold);
+        thresholdOf[role] = threshold;
+        emit ThresholdSet(role, threshold);
     }
 
     // ───────────────────────── 承諾 ─────────────────────────

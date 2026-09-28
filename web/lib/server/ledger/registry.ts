@@ -6,7 +6,7 @@ import { addWorkingDays } from "../bulletin";
 import type { CertData } from "../certpdf";
 import { deployment } from "../chain";
 import { ledgerView } from "./view";
-import { appendAuthority } from "./write";
+import { appendAuthority, appendAuthorityOrPropose } from "./write";
 
 /// 登錄簿與身分的帳本版本（設計 v4 第 3 期）：讀取回傳和鏈上版本相同的形狀，
 /// 寫入改成由本站的服務金鑰簽一筆授權事件。
@@ -148,8 +148,12 @@ export function ledgerFees() {
 /// 營運金鑰設定費率。`country` 空字串 = 預設值。
 ///
 /// 帳本的 fees 事件沒有「取消自訂」：要回到預設值，就把該國設成和預設相同的數字。
-export async function ledgerSetFees(country: string, tradeBps: number, retireFeePerTonne: bigint) {
-  const r = await appendAuthority("fees", { country, tradeBps: BigInt(tradeBps), retireFeePerTonne });
-  mustAccept(r, "費率設定");
-  return { txHash: eventHash(r.event) };
+export async function ledgerSetFees(country: string, tradeBps: number, retireFeePerTonne: bigint, createdBy = "admin") {
+  // 營運角色是 k-of-n（簽章模型方案 B）：門檻大於 1 時建立提案，等營運 Safe 的持有人簽署
+  const r = await appendAuthorityOrPropose("fees", { country, tradeBps: BigInt(tradeBps), retireFeePerTonne }, {
+    createdBy, note: `費率 ${country || "預設"}：交易 ${tradeBps} bps、註銷每噸 ${retireFeePerTonne}`,
+  });
+  if ("proposal" in r) return { proposal: r.proposal.id, required: r.required };
+  mustAccept(r.appended, "費率設定");
+  return { txHash: eventHash(r.appended.event) };
 }

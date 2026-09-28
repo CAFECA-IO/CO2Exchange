@@ -6,6 +6,8 @@ import { requireRole } from "@/lib/server/roles";
 import { handleError, ok } from "@/lib/server/api";
 import { ledgerEnabled } from "@/lib/server/ledger/view";
 import { readAuthorities } from "@/lib/ledger/chain";
+import { thresholdAt } from "@/lib/ledger/authorities";
+import { openProposals } from "@/lib/server/ledger/write";
 
 const ADMIN = "0x0000000000000000000000000000000000000000000000000000000000000000" as const;
 const SOV = keccak256(toBytes("SOVEREIGN_ROLE")); const OP = keccak256(toBytes("OPERATOR_ROLE"));
@@ -43,6 +45,7 @@ export async function GET() {
       const COMMITTER = keccak256(toBytes("COMMITTER_ROLE"));
       const [natOwners, natThreshold, opOwners, opThreshold, delay] = await common();
       const auth = await readAuthorities(publicClient, ledger, { fromBlock: BigInt(d.deployedAtBlock ?? 0) });
+      const head = await publicClient.getBlockNumber({ cacheTime: 0 });
       const tlRoles = { proposer: await has(d.timelock, PROPOSER, d.nationalSafe), executor: await has(d.timelock, EXECUTOR, d.nationalSafe), canceller: await has(d.timelock, CANCELLER, d.nationalSafe) };
       return ok({
         ledger: {
@@ -50,6 +53,8 @@ export async function GET() {
           committer: d.committer ?? null,
           committerOk: d.committer ? await has(ledger, COMMITTER, d.committer) : null,
           authorities: auth.grants.filter((g) => g.until === null).map((g) => ({ role: g.role, account: g.account, since: g.from })),
+          thresholds: Object.fromEntries((["SOVEREIGN", "OPERATOR", "AUDITOR"] as const).map((r) => [r, thresholdAt(auth, r, head)])),
+          proposals: await openProposals(),
         },
         hasV4: false,
         matrix: [{ name: "ledger", address: ledger, admin: await has(ledger, ADMIN, d.timelock), sovereign: await has(ledger, SOV, d.nationalSafe), operator: await has(ledger, OP, d.operatorSafe) }],

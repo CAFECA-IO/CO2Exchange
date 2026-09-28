@@ -258,4 +258,24 @@ contract LedgerTest is Test {
         vm.expectRevert();
         ledger.grantAuthority(role, committer);
     }
+
+    function test_thresholdOnlyBySovereignAndNonZero() public {
+        bytes32 role = ledger.AUTH_SOVEREIGN();
+        assertEq(ledger.thresholdOf(role), 0, "unset reads as 0 (treated as 1 off-chain)");
+        vm.expectRevert();
+        ledger.setThreshold(role, 2);
+        vm.prank(committer);
+        vm.expectRevert();
+        ledger.setThreshold(role, 2);
+
+        vm.expectEmit(true, false, false, true);
+        emit Ledger.ThresholdSet(role, 2);
+        vm.prank(sovereign);
+        ledger.setThreshold(role, 2);
+        assertEq(ledger.thresholdOf(role), 2);
+
+        vm.prank(sovereign);
+        vm.expectRevert(abi.encodeWithSelector(Ledger.BadThreshold.selector, uint8(0)));
+        ledger.setThreshold(role, 0);
+    }
 }

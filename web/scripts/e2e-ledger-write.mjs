@@ -168,10 +168,30 @@ let batchId;
   ok(!g.rows.find((r) => r.country === "TW").custom, "取消自訂 = 設回預設值");
 }
 
+// ── 主權事件 2-of-3：提案 → 兩位持有人簽署 → 寫進帳本（簽章模型方案 B）──
+{
+  const cli = (args, extra = {}) => execSync(`node --experimental-strip-types --no-warnings scripts/ledger-authority.mjs ${args}`, { env: { ...process.env, ...extra }, stdio: "pipe", encoding: "utf8" });
+  const out = cli(`propose jurisdiction '${JSON.stringify({ country: "JP", enabled: true, domestic: false, purposeMask: 3, name: "日本", scheme: "J-Credit", registryName: "J-クレジット登録簿", note: "e2e" })}' --note e2e`);
+  const id = out.match(/建立提案 ([0-9a-f]{16})/)[1];
+  ok(/需要 2 個簽章/.test(out), "主權提案需要 2 個簽章");
+  let refused = false;
+  try { cli(`submit ${id}`); } catch { refused = true; }
+  ok(refused, "簽章不夠時送不進帳本");
+  // anvil 助記詞第 5、6 個帳戶＝本機部署的國家 Safe 持有人（公開的測試金鑰，只在本機鏈）
+  cli(`sign ${id} --key-env E2E_OWNER_A`, { E2E_OWNER_A: "0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba" });
+  const g = await admin.api("/api/governance");
+  ok(g.ledger.proposals.some((p) => p.id === id && p.collected === 1 && p.required === 2), "治理頁顯示提案進度 1/2");
+  cli(`sign ${id} --key-env E2E_OWNER_B`, { E2E_OWNER_B: "0x92db14e403b83dfe3df233f83dfa3a0d7096f21ca9b0d6d6b8d88b2b4ec1564e" });
+  ok(/已寫進帳本/.test(cli(`submit ${id}`)), "兩位持有人簽署後寫進帳本");
+  const f = await admin.api("/api/fees");
+  ok(f.rows.some((r) => r.country === "JP" && r.enabled), "日本轄區生效（費率表出現 JP）");
+}
+
 // ── 治理頁：帳本合約＋授權金鑰清單 ──
 {
   const g = await admin.api("/api/governance");
   ok(g.ledger && g.ledger.authorities.some((a) => a.role === "IDENTITY_VERIFIER"), "治理頁列出鏈上的授權金鑰清單");
+  ok(g.ledger.thresholds.SOVEREIGN === 2, "治理頁顯示主權門檻 2");
 }
 
 // ── 承諾上鏈 → 查核者重播 ──

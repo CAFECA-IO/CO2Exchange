@@ -21,7 +21,25 @@ export type Role = (typeof ROLES)[number];
 /// 一段授權：從 `from` 區塊起生效，到 `until` 區塊（不含）失效；`until` 為 null 代表仍有效。
 export type Grant = { role: Role; account: Address; from: bigint; until: bigint | null };
 
-export type Authorities = { grants: Grant[] };
+/// 角色門檻（k-of-n）的歷史：從 `from` 區塊起，這個角色的授權事件要有 `value` 個不同的有效簽章。
+export type Threshold = { role: Role; value: number; from: bigint };
+
+export type Authorities = { grants: Grant[]; thresholds?: Threshold[] };
+
+/// 某個角色在某一塊的門檻。沒設過＝ 1。
+export function thresholdAt(a: Authorities, role: Role, atBlock: bigint): number {
+  let v = 1;
+  let best = -1n;
+  for (const t of a.thresholds ?? []) {
+    if (t.role !== role || t.from > atBlock) continue;
+    if (t.from >= best) { best = t.from; v = t.value; }
+  }
+  return Math.max(1, v);
+}
+
+/// 某個角色在某一塊有效的金鑰（治理頁與提案工具用）。
+export const activeKeys = (a: Authorities, role: Role, atBlock: bigint): Address[] =>
+  a.grants.filter((g) => g.role === role && g.from <= atBlock && (g.until === null || atBlock < g.until)).map((g) => g.account);
 
 export function isAuthorized(a: Authorities, role: Role, account: Address, atBlock: bigint): boolean {
   const who = account.toLowerCase();

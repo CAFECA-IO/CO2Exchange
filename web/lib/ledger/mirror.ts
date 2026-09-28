@@ -24,7 +24,7 @@ export async function mirrorCash(opts: {
   receiptSigner?: ReceiptSigner;
 }): Promise<{ added: Event[] }> {
   const { store, client, ledger, fromBlock, receiptSigner } = opts;
-  const atBlock = await client.getBlockNumber();
+  const atBlock = await client.getBlockNumber({ cacheTime: 0 });
   const onchain = await readCashEvents(client, ledger, { fromBlock, toBlock: atBlock });
   if (onchain.length === 0) return { added: [] };
 

@@ -7,7 +7,9 @@
 //
 // 送出之前一定先做完整驗證，任何一項不過就不送：
 //   ① 已經上鏈的每一期，重播算出的 anchor 都等於鏈上那一個（否則帳本被動過）
-//   ② 每一筆簽章都在「收單時的區塊高度」重驗過，簽章者在當時有授權
+//   ② 每一筆簽章都重驗過，而且**不讀任何歷史狀態**（不需要 archive 節點）：
+//      授權事件 k-of-n ecrecover、簽章者在收單區塊有授權且達到門檻；
+//      使用者事件 ecrecover 或 CAFECA WebAuthn（公鑰與有效區間來自鏈上事件）；收單區塊落在所屬那一期
 //   ③ 鏈上的每一筆結算幣存入／提領，帳本裡都有而且只有一筆（反之亦然）
 //   ④ 餘額樹的總現金不超過合約持有（合約也會擋，這裡先擋，錯誤訊息比較說得清楚）
 import fs from "node:fs";
@@ -17,13 +19,13 @@ import { privateKeyToAccount } from "viem/accounts";
 import { KeyError, keyring, setting } from "./lib/keys.mjs";
 
 const { openStore } = await import("../lib/ledger/store.ts");
-const { replay, onchainVerifier } = await import("../lib/ledger/replay.ts");
+const { replay } = await import("../lib/ledger/replay.ts");
+const { loadKeyBook } = await import("../lib/ledger/keybook.ts");
 const { readAuthorities, readCommitments, readCashEvents, LEDGER_ABI } = await import("../lib/ledger/chain.ts");
 const { mirrorCash } = await import("../lib/ledger/mirror.ts");
 
 const PLAN = process.argv.includes("--plan");
 const VERIFY = process.argv.includes("--verify");
-const TRUST = process.argv.includes("--trust-missing-state");
 
 const RPC = setting("RPC_URL") ?? "http://127.0.0.1:28545";
 const pub0 = createPublicClient({ transport: http(RPC) });
@@ -50,14 +52,19 @@ if (!VERIFY && !PLAN) {
 }
 const events = store.read();
 const [authorities, committed, cashOnChain, headBlock] = await Promise.all([
-  readAuthorities(pub, D.ledger, range), readCommitments(pub, D.ledger, range), readCashEvents(pub, D.ledger, range), pub.getBlockNumber(),
+  readAuthorities(pub, D.ledger, range), readCommitments(pub, D.ledger, range), readCashEvents(pub, D.ledger, range), pub.getBlockNumber({ cacheTime: 0 }),
 ]);
 console.log(`帳本 ${events.length} 筆；鏈上已提交 ${committed.length} 期；授權 ${authorities.grants.length} 筆`);
 
 const next = !VERIFY && events.length > Number(committed.at(-1)?.lastSeq ?? 0n)
   ? [{ epoch: BigInt(committed.length + 1), lastSeq: BigInt(events.length), upToBlock: headBlock }]
   : [];
-const r = await replay(events, { domains, authorities, verifier: onchainVerifier(pub, { trustOnMissingState: TRUST }), boundaries: [...committed, ...next] });
+// 金鑰簿：CAFECA 帳戶的公鑰與有效區間全部來自事件（帳本的 userKey 鏡像＋鏈上 KeyAdded／KeyRemoved／模組事件），
+// 不讀合約的歷史狀態——不需要 archive 節點。
+const KEYRING = D.cafecaKeyring ?? setting("CAFECA_KEYRING") ?? null;
+const { book, problems: keyProblems } = await loadKeyBook(pub, { keyring: KEYRING, events, toBlock: headBlock });
+if (keyProblems.length) fail(`CAFECA 金鑰鏡像有問題：${keyProblems[0]}${keyProblems.length > 1 ? `（另有 ${keyProblems.length - 1} 筆）` : ""}`);
+const r = await replay(events, { domains, authorities, keys: book, boundaries: [...committed, ...next] });
 
 // ① 既有各期
 for (const [i, c] of committed.entries()) {
@@ -66,9 +73,8 @@ for (const [i, c] of committed.entries()) {
 if (committed.length) console.log(`  ✓ 已上鏈的 ${committed.length} 期 anchor 全部與重播一致`);
 // ② 簽章
 const bad = [...r.sig.entries()].filter(([, v]) => !v.ok);
-const trusted = [...r.sig.entries()].filter(([, v]) => v.trusted);
 if (bad.length) fail(`${bad.length} 筆簽章或授權驗不過，例如第 ${bad[0][0]} 筆：${bad[0][1].reason}`);
-console.log(`  ✓ ${r.sig.size} 筆簽章在收單區塊高度重驗通過${trusted.length ? `（其中 ${trusted.length} 筆因節點沒有歷史狀態而信任收單驗證）` : ""}`);
+console.log(`  ✓ ${r.sig.size} 筆簽章離線重驗通過（授權 k-of-n、CAFECA 金鑰 ${[...book.keys.values()].flat().length} 把、收單區塊都在所屬期別內）`);
 // ③ 存提
 const key = (x) => `${x.kind}|${x.ref.txHash.toLowerCase()}|${x.ref.logIndex}|${x.account.toLowerCase()}|${x.amount}`;
 const upTo = next[0]?.upToBlock ?? committed.at(-1)?.upToBlock ?? headBlock;

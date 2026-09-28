@@ -12,12 +12,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildScenario } from "./lib/ledger-scenario.mjs";
 
-const { replay, ecdsaVerifier } = await import("../lib/ledger/replay.ts");
+const { replay } = await import("../lib/ledger/replay.ts");
 const { rootsOf, TAG } = await import("../lib/ledger/trees.ts");
 
 const { events, domains, authorities, actors } = await buildScenario();
 const boundaries = [{ epoch: 1n, lastSeq: 12n, upToBlock: 112n }, { epoch: 2n, lastSeq: BigInt(events.length), upToBlock: 700n }];
-const r = await replay(events, { domains, authorities, verifier: ecdsaVerifier, boundaries });
+const r = await replay(events, { domains, authorities, boundaries });
 const roots = rootsOf(r.state, 2n);
 
 const who = actors.Y.address;

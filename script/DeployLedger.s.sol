@@ -26,9 +26,13 @@ import {MockTWD} from "../src/mocks/MockTWD.sol";
 ///   SETTLEMENT_TOKEN   外部結算幣（Boltchain：CAFECA 的 TWDC）。沒給就部署 MockTWD
 ///   NATIONAL_OWNERS / NATIONAL_THRESHOLD / OPERATOR_OWNERS / OPERATOR_THRESHOLD / TIMELOCK_DELAY
 ///   COMMITTER          每小時提交承諾的服務金鑰（預設 = relayer）
-///   IDENTITY_VERIFIER / CARBON_VERIFIER / DOCUMENT_SIGNER / AUDITOR / RECEIPT_SIGNER
-///   SOVEREIGN_SIGNER / OPERATOR_SIGNER   可選：除了 Safe 之外，另外授權一把 EOA 代簽主權／營運事件
-///                                        （例如本機展示）。授權是鏈上公開的，任何人都看得到
+///   IDENTITY_VERIFIER / CARBON_VERIFIER / DOCUMENT_SIGNER / RECEIPT_SIGNER   高頻角色，各一把
+///   AUDITORS（逗號分隔，預設 AUDITOR）／AUDITOR_THRESHOLD（預設 1）
+///   SOVEREIGN_THRESHOLD（預設 = NATIONAL_THRESHOLD）／OPERATOR_AUTH_THRESHOLD（預設 = OPERATOR_THRESHOLD）
+///     主權與營運角色登記的是 Safe 持有人的 EOA，門檻 k 與 Safe 相同（簽章模型方案 B）
+///   CAFECA_KEYRING     可選：寫進部署檔，查核工具據此讀 CAFECA 的金鑰事件
+///   SOVEREIGN_SIGNER / OPERATOR_SIGNER   可選：另外登記一把 EOA（例如本機展示用部署者），
+///                                        它和持有人一起算在 n 裡，仍受門檻 k 約束
 contract DeployLedger is Script {
     uint256 internal constant ANVIL_PK0 = 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
 
@@ -47,10 +51,13 @@ contract DeployLedger is Script {
         address identityVerifier;
         address carbonVerifier;
         address documentSigner;
-        address auditor;
+        address[] auditors;
         address receiptSigner;
         address sovereignSigner;
         address operatorSigner;
+        uint256 sovereignThreshold;
+        uint256 operatorAuthThreshold;
+        uint256 auditorThreshold;
     }
 
     Config internal cfg;
@@ -89,16 +96,28 @@ contract DeployLedger is Script {
         _write();
     }
 
+    /// 授權金鑰清單（設計 v4 §一；簽章模型方案 B，2026-09-28）：
+    ///   · 高頻角色（身分驗證、查驗、文件簽章、收單）各一把服務金鑰
+    ///   · 主權、營運、查核角色是 k-of-n：登記的是**持有人自己的 EOA**，門檻與 Safe 相同。
+    ///     Safe 本身不登記——不用 archive 節點，查核時無法在過去的區塊驗 Safe 的 ERC-1271。
+    ///     Safe 仍然是管理這份清單的那一方（SOVEREIGN_ROLE）。
     function _authorities() internal {
-        ledger.grantAuthority(ledger.AUTH_SOVEREIGN(), address(nationalSafe));
-        ledger.grantAuthority(ledger.AUTH_OPERATOR(), address(operatorSafe));
+        bytes32 SOV = ledger.AUTH_SOVEREIGN();
+        bytes32 OPA = ledger.AUTH_OPERATOR();
+        bytes32 AUD = ledger.AUTH_AUDITOR();
+        for (uint256 i = 0; i < cfg.nationalOwners.length; i++) ledger.grantAuthority(SOV, cfg.nationalOwners[i]);
+        for (uint256 i = 0; i < cfg.operatorOwners.length; i++) ledger.grantAuthority(OPA, cfg.operatorOwners[i]);
+        for (uint256 i = 0; i < cfg.auditors.length; i++) ledger.grantAuthority(AUD, cfg.auditors[i]);
+        // 本機展示可以另外登記一把 EOA（例如部署者），好讓展示資料用單一金鑰簽；它仍受門檻約束
+        if (cfg.sovereignSigner != address(0)) ledger.grantAuthority(SOV, cfg.sovereignSigner);
+        if (cfg.operatorSigner != address(0)) ledger.grantAuthority(OPA, cfg.operatorSigner);
+        ledger.setThreshold(SOV, uint8(cfg.sovereignThreshold));
+        ledger.setThreshold(OPA, uint8(cfg.operatorAuthThreshold));
+        ledger.setThreshold(AUD, uint8(cfg.auditorThreshold));
         ledger.grantAuthority(ledger.AUTH_IDENTITY_VERIFIER(), cfg.identityVerifier);
         ledger.grantAuthority(ledger.AUTH_CARBON_VERIFIER(), cfg.carbonVerifier);
         ledger.grantAuthority(ledger.AUTH_DOCUMENT_SIGNER(), cfg.documentSigner);
-        ledger.grantAuthority(ledger.AUTH_AUDITOR(), cfg.auditor);
         ledger.grantAuthority(ledger.AUTH_RECEIPT_SIGNER(), cfg.receiptSigner);
-        if (cfg.sovereignSigner != address(0)) ledger.grantAuthority(ledger.AUTH_SOVEREIGN(), cfg.sovereignSigner);
-        if (cfg.operatorSigner != address(0)) ledger.grantAuthority(ledger.AUTH_OPERATOR(), cfg.operatorSigner);
     }
 
     function _handover() internal {
@@ -138,10 +157,19 @@ contract DeployLedger is Script {
         cfg.identityVerifier = vm.envOr("IDENTITY_VERIFIER", cfg.deployer);
         cfg.carbonVerifier = vm.envOr("CARBON_VERIFIER", cfg.deployer);
         cfg.documentSigner = vm.envOr("DOCUMENT_SIGNER", cfg.deployer);
-        cfg.auditor = vm.envOr("AUDITOR", cfg.carbonVerifier);
+        address[] memory aud = new address[](1);
+        aud[0] = vm.envOr("AUDITOR", cfg.carbonVerifier);
+        cfg.auditors = vm.envOr("AUDITORS", ",", aud);
         cfg.receiptSigner = vm.envOr("RECEIPT_SIGNER", cfg.committer);
         cfg.sovereignSigner = vm.envOr("SOVEREIGN_SIGNER", address(0));
         cfg.operatorSigner = vm.envOr("OPERATOR_SIGNER", address(0));
+        // 帳本裡的 k：預設與各自的 Safe 相同
+        cfg.sovereignThreshold = vm.envOr("SOVEREIGN_THRESHOLD", cfg.nationalThreshold);
+        cfg.operatorAuthThreshold = vm.envOr("OPERATOR_AUTH_THRESHOLD", cfg.operatorThreshold);
+        cfg.auditorThreshold = vm.envOr("AUDITOR_THRESHOLD", uint256(1));
+        require(cfg.sovereignThreshold >= 1 && cfg.sovereignThreshold <= cfg.nationalOwners.length + (cfg.sovereignSigner != address(0) ? 1 : 0), "SOVEREIGN_THRESHOLD out of range");
+        require(cfg.operatorAuthThreshold >= 1 && cfg.operatorAuthThreshold <= cfg.operatorOwners.length + (cfg.operatorSigner != address(0) ? 1 : 0), "OPERATOR_AUTH_THRESHOLD out of range");
+        require(cfg.auditorThreshold >= 1 && cfg.auditorThreshold <= cfg.auditors.length, "AUDITOR_THRESHOLD out of range");
 
         if (block.chainid == 31337 || block.chainid == 1337) return;
         // 公開鏈上不准用 anvil 的公開金鑰擔任任何角色——那些私鑰印在 anvil 的啟動畫面上
@@ -150,7 +178,7 @@ contract DeployLedger is Script {
         _reject("IDENTITY_VERIFIER", cfg.identityVerifier);
         _reject("CARBON_VERIFIER", cfg.carbonVerifier);
         _reject("DOCUMENT_SIGNER", cfg.documentSigner);
-        _reject("AUDITOR", cfg.auditor);
+        for (uint256 i = 0; i < cfg.auditors.length; i++) _reject("AUDITORS", cfg.auditors[i]);
         _reject("RECEIPT_SIGNER", cfg.receiptSigner);
         _reject("SOVEREIGN_SIGNER", cfg.sovereignSigner);
         _reject("OPERATOR_SIGNER", cfg.operatorSigner);
@@ -190,6 +218,9 @@ contract DeployLedger is Script {
         vm.serializeAddress(j, "nationalSafe", address(nationalSafe));
         vm.serializeAddress(j, "operatorSafe", address(operatorSafe));
         vm.serializeUint(j, "timelockDelay", cfg.timelockDelay);
+        // 查核 CAFECA 帳戶簽章時要讀它的 KeyAdded／KeyRemoved（不用 archive 節點）
+        address keyring = vm.envOr("CAFECA_KEYRING", address(0));
+        if (keyring != address(0)) vm.serializeAddress(j, "cafecaKeyring", keyring);
         string memory out = vm.serializeAddress(j, "timelock", address(timelock));
         vm.writeJson(out, string.concat("deployments/", vm.toString(block.chainid), ".json"));
     }

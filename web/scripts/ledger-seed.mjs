@@ -18,7 +18,8 @@ import { ANVIL_MNEMONIC, keyring, setting } from "./lib/keys.mjs";
 const { openStore } = await import("../lib/ledger/store.ts");
 const { apply, genesis } = await import("../lib/ledger/engine.ts");
 const { authTypedData, userTypedData, userMessageOf } = await import("../lib/ledger/typed.ts");
-const { readCashEvents, LEDGER_ABI } = await import("../lib/ledger/chain.ts");
+const { readCashEvents, readAuthorities, LEDGER_ABI } = await import("../lib/ledger/chain.ts");
+const { activeKeys, thresholdAt } = await import("../lib/ledger/authorities.ts");
 
 const arg = (n, d) => { const i = process.argv.indexOf(`--${n}`); return i > -1 ? process.argv[i + 1] : d; };
 const DAYS = Number(arg("days", 60));
@@ -39,7 +40,20 @@ const ring = keyring({ chainId, isLocal: true });
 const op = privateKeyToAccount(ring.require("DEPLOYER_PK", "RELAYER_PK").pk);
 const pick = (...names) => privateKeyToAccount(ring.optional({ pk: ring.require("DEPLOYER_PK").pk }, ...names).pk);
 const idv = pick("IDENTITY_VERIFIER_PK"), cv = pick("CARBON_VERIFIER_PK"), doc = pick("DOCUMENT_SIGNER_PK"), receipt = pick("RELAYER_PK");
-const sovereign = op; // 本機部署以 SOVEREIGN_SIGNER / OPERATOR_SIGNER = 部署者 授權（見 demo-box）
+// 主權與營運角色是 k-of-n（簽章模型方案 B）：本機鏈上用 anvil 助記詞的帳戶湊齊門檻。
+// 部署時登記的是 Safe 持有人的 EOA（DeployLedger 預設 anvil 5、6、7 與 8、9），可能另加 SOVEREIGN_SIGNER／OPERATOR_SIGNER。
+const AUTH = await readAuthorities(pub0, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0) });
+const LOCAL_KEYS = Array.from({ length: 10 }, (_, i) => mnemonicToAccount(ANVIL_MNEMONIC, { addressIndex: i }));
+function signersFor(role) {
+  const at = BigInt(Number.MAX_SAFE_INTEGER);
+  const keys = new Set(activeKeys(AUTH, role, at).map((a) => a.toLowerCase()));
+  const k = thresholdAt(AUTH, role, at);
+  const ss = LOCAL_KEYS.filter((a) => keys.has(a.address.toLowerCase())).slice(0, k);
+  if (ss.length < k) { console.error(`${role} 需要 ${k} 個簽章，但本機只找得到 ${ss.length} 把登記過的 anvil 金鑰`); process.exit(1); }
+  return ss;
+}
+const sovereign = signersFor("SOVEREIGN");
+const operator = signersFor("OPERATOR");
 
 const DATA = process.env.DATA_DIR ?? path.resolve(process.cwd(), "data");
 const store = openStore(process.env.LEDGER_DIR ?? path.join(DATA, "ledger"));
@@ -63,7 +77,7 @@ console.log(`  ${buyers.length} 個買方把結算幣存進帳本合約`);
 
 // ── 事件：一邊寫進帳本、一邊跑引擎，後面的決策才看得到前面的結果 ──
 const state = genesis();
-const atBlock = await pub.getBlockNumber();
+const atBlock = await pub.getBlockNumber({ cacheTime: 0 });
 const t0 = BigInt(Math.floor(Date.now() / 1000) - DAYS * 86400);
 let clock = t0;
 let n = 0, rejected = 0;
@@ -75,9 +89,13 @@ async function put(e) {
   n += 1;
   return event;
 }
+/// `signer` 可以是一把金鑰或一組（k-of-n：每位持有人各簽一次，簽章接在一起）
 async function auth(signer, kind, body) {
-  const draft = { seq: 0n, at: 0n, atBlock, kind, ...body, signer: signer.address, signature: "0x" };
-  draft.signature = await signer.signTypedData(authTypedData(domains, draft));
+  const list = Array.isArray(signer) ? signer : [signer];
+  const draft = { seq: 0n, at: 0n, atBlock, kind, ...body, signer: list[0].address, signature: "0x" };
+  const sigs = [];
+  for (const a of list) sigs.push(await a.signTypedData(authTypedData(domains, draft)));
+  draft.signature = `0x${sigs.map((x) => x.slice(2)).join("")}`;
   const { seq: _s, at: _a, ...rest } = draft; void _s; void _a;
   return put(rest);
 }
@@ -103,7 +121,7 @@ for (const [country, name, scheme, registryName] of [
   ["JP", "日本", "J-Credit", "J-クレジット登録簿"], ["TH", "泰國", "T-VER", "T-VER Registry"],
   ["KR", "韓國", "KOC", "온실가스 종합정보센터"], ["AU", "澳洲", "ACCU", "ANREU"],
 ]) await auth(sovereign, "jurisdiction", { country, enabled: true, domestic: false, purposeMask: 0x03, name, scheme, registryName, note: "國外額度：僅可用於碳費扣除與自願性碳中和" });
-await auth(op, "fees", { country: "", tradeBps: 100n, retireFeePerTonne: 20_000_000n });
+await auth(operator, "fees", { country: "", tradeBps: 100n, retireFeePerTonne: 20_000_000n });
 
 for (const p of personas) {
   await auth(idv, "identity", {

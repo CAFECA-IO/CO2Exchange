@@ -6,7 +6,8 @@
 //   node --experimental-strip-types scripts/e2e-ledger-chain.mjs
 //
 // 走一遍真實的路：授權清單從合約事件讀、結算幣真的存進合約、事件用那些授權金鑰簽、
-// 重播用 onchainVerifier（在收單當時的區塊驗簽）、算出來的承諾送上鏈，
+// 重播**不讀任何歷史狀態**（不用 archive 節點）：授權事件 k-of-n ecrecover、CAFECA 帳戶的 WebAuthn 簽章以
+// keyring 事件重建的公鑰驗；算出來的承諾送上鏈，
 // 最後確認鏈上的 head 就是重播算出來的 anchor，並且用證據登記一筆碳權請求權。
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
@@ -16,7 +17,10 @@ import { createPublicClient, createWalletClient, defineChain, http, keccak256, p
 import { privateKeyToAccount } from "viem/accounts";
 
 const { authTypedData, userTypedData, userMessageOf } = await import("../lib/ledger/typed.ts");
-const { replay, onchainVerifier } = await import("../lib/ledger/replay.ts");
+const { replay } = await import("../lib/ledger/replay.ts");
+const { loadKeyBook } = await import("../lib/ledger/keybook.ts");
+const { encodeCafecaSignature, keyIdOf } = await import("../lib/ledger/signatures.ts");
+const { newPasskey, webauthnSign } = await import("./lib/webauthn.mjs");
 const { readAuthorities, readCommitments, readCashEvents, LEDGER_ABI } = await import("../lib/ledger/chain.ts");
 const { rootsOf, TAG } = await import("../lib/ledger/trees.ts");
 
@@ -29,6 +33,8 @@ const PK = [
   "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a", "0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba",
 ];
 const [deployer, sov, idv, cv, user1, user2] = PK.map((k) => privateKeyToAccount(k));
+// 國家 Safe 的另外兩位持有人（主權事件 2-of-3，簽章模型方案 B）
+const natB = privateKeyToAccount(keccak256(toBytes("co2x-e2e-national-b"))), natC = privateKeyToAccount(keccak256(toBytes("co2x-e2e-national-c")));
 
 const pub0 = createPublicClient({ transport: http(RPC) });
 const chainId = await pub0.getChainId();
@@ -43,7 +49,8 @@ const backup = fs.existsSync(depFile) ? fs.readFileSync(depFile) : null;
 execSync(`forge script script/DeployLedger.s.sol --rpc-url ${RPC} --broadcast`, {
   cwd: ROOT, stdio: "pipe",
   env: { ...process.env, PATH: `${process.env.HOME}/.foundry/bin:${process.env.PATH}`, DEPLOYER_PK: PK[0],
-    SOVEREIGN_SIGNER: sov.address, IDENTITY_VERIFIER: idv.address, CARBON_VERIFIER: cv.address, COMMITTER: deployer.address },
+    NATIONAL_OWNERS: [sov.address, natB.address, natC.address].join(","), NATIONAL_THRESHOLD: "2",
+    IDENTITY_VERIFIER: idv.address, CARBON_VERIFIER: cv.address, COMMITTER: deployer.address },
 });
 const D = JSON.parse(fs.readFileSync(depFile, "utf8"));
 if (backup) fs.writeFileSync(depFile, backup); // 不要蓋掉開發用的部署檔
@@ -62,10 +69,18 @@ for (const u of [user1, user2]) {
 const events = [];
 let seq = 0n;
 const nonces = new Map();
-const base = async () => ({ seq: ++seq, at: BigInt(Math.floor(Date.now() / 1000)) + seq, atBlock: await pub.getBlockNumber() });
+const base = async () => ({ seq: ++seq, at: BigInt(Math.floor(Date.now() / 1000)) + seq, atBlock: await pub.getBlockNumber({ cacheTime: 0 }) });
 async function auth(signer, kind, body) {
   const e = { ...(await base()), kind, ...body, signer: signer.address, signature: "0x" };
   e.signature = await signer.signTypedData(authTypedData(domains, e));
+  events.push(e); return e;
+}
+/// k-of-n：同一則 LedgerEvent 由多位持有人各簽一次，簽章接在一起
+async function authMulti(signers, kind, body) {
+  const e = { ...(await base()), kind, ...body, signer: signers[0].address, signature: "0x" };
+  const sigs = [];
+  for (const a of signers) sigs.push(await a.signTypedData(authTypedData(domains, e)));
+  e.signature = `0x${sigs.map((x) => x.slice(2)).join("")}`;
   events.push(e); return e;
 }
 async function user(a, kind, body) {
@@ -77,7 +92,8 @@ async function user(a, kind, body) {
 const range = { fromBlock: BigInt(D.deployedAtBlock ?? 0) };
 for (const c of await readCashEvents(pub, D.ledger, range)) events.push({ ...(await base()), ...c });
 
-await auth(sov, "policy", { individualTransfer: true, individualRetire: false, treasury: deployer.address });
+const lonePolicy = await auth(sov, "policy", { individualTransfer: false, individualRetire: true, treasury: deployer.address }); // 只有一位持有人：不夠門檻
+await authMulti([sov, natB], "policy", { individualTransfer: true, individualRetire: false, treasury: deployer.address });
 for (const u of [user1, user2]) await auth(idv, "identity", { account: u.address, tier: 2, expiry: 2_000_000_000n, jurisdiction: "TW", identityHash: keccak256(toBytes(u.address)), nonce: 0n, deadline: 2_000_000_000n });
 await user(user1, "project", { name: "台中太陽能", methodology: "AMS-I.D", location: "台中", metadataURI: "" });
 await auth(cv, "issue", { projectId: 1n, monitoringStart: 1_700_000_000n, monitoringEnd: 1_760_000_000n, amountKg: 30_000n, serialHash: keccak256(toBytes("s1")), reportHash: keccak256(toBytes("r1")), attestationId: 1n, deadline: 2_000_000_000n });
@@ -85,14 +101,53 @@ await user(user1, "place", { side: "sell", batchId: 1n, country: "", amountKg: 1
 await user(user2, "place", { side: "buy", batchId: 0n, country: "TW", amountKg: 4_000n, pricePerTonne: 950_000_000n, minFillKg: 0n, expiry: 2_000_000_000n });
 await auth(idv, "issue", { projectId: 1n, monitoringStart: 1n, monitoringEnd: 2n, amountKg: 1n, serialHash: keccak256(toBytes("fake")), reportHash: keccak256(toBytes("fake")), attestationId: 9n, deadline: 2_000_000_000n }); // 身分驗證服務不能核發
 
-// ── 重播：授權清單從鏈上讀、簽章在收單當時的區塊驗 ──
+// ── CAFECA 帳戶：假的 keyring 與帳戶合約（只提供事件與介面），passkey 簽章由重播自己驗 ──
+const art = (name) => JSON.parse(fs.readFileSync(path.join(ROOT, "out", "CafecaMocks.sol", `${name}.json`), "utf8"));
+const deploy = async (name, args = []) => {
+  const a = art(name);
+  const hash = await wallet(deployer).deployContract({ abi: a.abi, bytecode: a.bytecode.object, args });
+  return (await pub.waitForTransactionReceipt({ hash })).contractAddress;
+};
+const keyring = await deploy("MockKeyring");
+const cafeca = await deploy("MockCafecaAccount", [keyring]);
+const pk = newPasskey();
+const keyId = keyIdOf(pk.qx, pk.qy);
+const keyringAbi = art("MockKeyring").abi;
+const addRc = await pub.waitForTransactionReceipt({ hash: await wallet(deployer).writeContract({ address: keyring, abi: keyringAbi, functionName: "addKey", args: [cafeca, pk.qx, pk.qy, pk.rpIdHash] }) });
+const addLog = addRc.logs.find((l) => l.address.toLowerCase() === keyring.toLowerCase());
+// 收單時伺服器會做的事：把公鑰鏡像進帳本（座標＋KeyAdded 的位置）
+events.push({ ...(await base()), kind: "userKey", ref: { txHash: addRc.transactionHash, block: addRc.blockNumber, logIndex: addLog.logIndex },
+  account: cafeca, keyId, qx: pk.qx, qy: pk.qy, rpIdHash: pk.rpIdHash, keyKind: 1, validator: keyring });
+await auth(idv, "identity", { account: cafeca, tier: 2, expiry: 2_000_000_000n, jurisdiction: "TW", identityHash: keccak256(toBytes(cafeca)), nonce: 0n, deadline: 2_000_000_000n });
+const { digestOf } = await import("../lib/ledger/typed.ts");
+async function cafecaUser(kind, body) {
+  const n = (nonces.get(cafeca) ?? 0n) + 1n; nonces.set(cafeca, n);
+  const e = { ...(await base()), kind, account: cafeca, nonce: n, ...body, signature: "0x" };
+  e.signature = encodeCafecaSignature({ validator: keyring, keyId, ...webauthnSign(pk, digestOf(domains, e)) });
+  // 收單第一道：帳戶合約現在認不認（ERC-1271）
+  const magic = await pub.readContract({ address: cafeca, abi: parseAbi(["function isValidSignature(bytes32,bytes) view returns (bytes4)"]), functionName: "isValidSignature", args: [digestOf(domains, e), e.signature] });
+  events.push(e); return { e, magic };
+}
+const cafecaBid = await cafecaUser("place", { side: "buy", batchId: 0n, country: "TW", amountKg: 1_000n, pricePerTonne: 100_000_000n, minFillKg: 0n, expiry: 2_000_000_000n });
+assert.equal(cafecaBid.magic, "0x1626ba7e", "帳戶合約應該認得這個簽章");
+await pub.waitForTransactionReceipt({ hash: await wallet(deployer).writeContract({ address: keyring, abi: keyringAbi, functionName: "removeKey", args: [cafeca, keyId] }) });
+const afterRemoval = await cafecaUser("cancel", { orderSeq: cafecaBid.e.seq });
+assert.notEqual(afterRemoval.magic, "0x1626ba7e", "金鑰移除之後帳戶合約就不認了");
+
+// ── 重播：授權清單與金鑰歷史都從鏈上**事件**讀，不讀任何歷史狀態 ──
 const authorities = await readAuthorities(pub, D.ledger, range);
-const verifier = onchainVerifier(pub);
-const upTo = await pub.getBlockNumber();
-const r = await replay(events, { domains, authorities, verifier, boundaries: [{ epoch: 1n, lastSeq: seq, upToBlock: upTo }] });
+const { book, problems } = await loadKeyBook(pub, { keyring, events });
+assert.deepEqual(problems, [], "金鑰鏡像應該都對得到鏈上的 KeyAdded");
+const upTo = await pub.getBlockNumber({ cacheTime: 0 });
+const r = await replay(events, { domains, authorities, keys: book, boundaries: [{ epoch: 1n, lastSeq: seq, upToBlock: upTo }] });
 const e1 = r.epochs[0];
 assert.equal(r.state.fills.length, 1, "應有一筆成交");
 assert.ok(r.state.rejected.some((x) => x.kind === "issue"), "身分驗證服務的核發應被拒絕");
+assert.match(r.sig.get(String(lonePolicy.seq)).reason, /需要 2 個簽章/, "主權事件只有一個簽章應被拒絕");
+assert.equal(r.state.policy.individualTransfer, true, "兩位持有人簽的政策生效");
+assert.equal(r.sig.get(String(cafecaBid.e.seq)).ok, true, "CAFECA passkey 簽章應以事件重建的公鑰驗過");
+assert.match(r.sig.get(String(afterRemoval.e.seq)).reason, /不是有效狀態/, "金鑰移除之後簽的單應被拒絕");
+console.log("  主權事件 2-of-3、CAFECA passkey 簽章（含金鑰移除）都以鏈上事件離線驗過");
 
 // ── 提交承諾 ──
 const input = { prev: e1.prev, epoch: e1.epoch, logRoot: e1.logRoot, ...e1.roots, upToBlock: e1.upToBlock, lastSeq: e1.lastSeq, rulesVersion: e1.rulesVersion };
@@ -106,7 +161,7 @@ assert.equal(committed.length, 1); assert.equal(committed[0].anchor, e1.anchor);
 console.log(`  第 1 期承諾上鏈：anchor ${e1.anchor.slice(0, 18)}…（${seq} 筆事件、成交 ${r.state.fills.length} 筆、拒絕 ${r.state.rejected.length} 筆）`);
 
 // ── 重播者從鏈上重建：讀承諾邊界 → 重播 → anchor 一致 ──
-const again = await replay(events, { domains, authorities: await readAuthorities(pub, D.ledger, range), verifier, boundaries: committed });
+const again = await replay(events, { domains, authorities: await readAuthorities(pub, D.ledger, range), keys: (await loadKeyBook(pub, { keyring, events })).book, boundaries: committed });
 assert.equal(again.epochs[0].anchor, committed[0].anchor);
 console.log("  重播者依鏈上邊界重算，anchor 一致");
 

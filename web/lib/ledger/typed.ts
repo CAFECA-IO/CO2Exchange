@@ -116,9 +116,9 @@ export function authTypedData(d: Domains, e: Event) {
   };
 }
 
-/// 這一筆事件要驗的 digest。鏈上鏡像事件（存入／提領）回 null：它們由 ChainRef 背書，不是簽章。
+/// 這一筆事件要驗的 digest。鏈上鏡像事件（存入／提領／金鑰）回 null：它們由 ChainRef 背書，不是簽章。
 export function digestOf(d: Domains, e: Event): Hex | null {
-  if (e.kind === "cashDeposit" || e.kind === "cashWithdraw") return null;
+  if (e.kind === "cashDeposit" || e.kind === "cashWithdraw" || e.kind === "userKey") return null;
   if (e.kind === "place" || e.kind === "cancel" || e.kind === "retire" || e.kind === "project") {
     return userDigest(d, e.kind, userMessageOf(e));
   }
