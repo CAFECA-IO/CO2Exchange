@@ -10,7 +10,7 @@ import { all, insert, type WithId } from "./store";
 /// 條文放版控的 markdown，keccak256(檔案內容) 就是版本指紋，
 /// 同意紀錄只存指紋。日後爭執時把檔案拿出來重算即可比對，不必相信平台的資料庫。
 
-const DIR = process.env.AGREEMENTS_DIR ?? path.resolve(process.cwd(), "contracts");
+const DIR = process.env.AGREEMENTS_DIR ?? path.resolve(/* turbopackIgnore: true */ process.cwd(), "contracts");
 
 /// contract = 要簽的定型化契約；policy = 站台的條款與政策，看了就適用，不另行簽署。
 /// 兩者放在同一個資料夾、同一套雜湊機制，但在畫面上要分開——把隱私權政策

@@ -77,7 +77,7 @@ export const relayerClient = createWalletClient({ chain, account: relayer, trans
 let cached: { mtimeMs: number; file: string; value: Deployment } | undefined;
 
 export function deploymentFile(): string {
-  return process.env.DEPLOYMENT_FILE ?? path.resolve(process.cwd(), "..", "deployments", `${CHAIN_ID}.json`);
+  return process.env.DEPLOYMENT_FILE ?? path.resolve(/* turbopackIgnore: true */ process.cwd(), "..", "deployments", `${CHAIN_ID}.json`);
 }
 
 export function deployment(): Deployment {

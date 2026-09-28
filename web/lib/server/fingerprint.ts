@@ -12,7 +12,7 @@ import { CHAIN_ID, deployment } from "./chain";
 /// 這是這一輪第四個同類問題（伺服器快取、錯誤分類、瀏覽器憑證、本機紀錄），
 /// 共通點都是「重新部署後還有東西記著舊地址」。
 
-export const DATA_DIR = process.env.DATA_DIR ?? path.resolve(process.cwd(), "data");
+export const DATA_DIR = process.env.DATA_DIR ?? path.resolve(/* turbopackIgnore: true */ process.cwd(), "data");
 const STAMP = path.join(DATA_DIR, ".deployment.json");
 
 /// 只納入「會決定帳戶或紀錄身分」的合約。參數類的欄位改了不影響舊紀錄，納進來只會製造假警報。

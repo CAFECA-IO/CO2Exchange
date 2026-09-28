@@ -14,8 +14,8 @@ export type CertData = {
   verifier: string; serialHash: Hex; reportHash: Hex;
 };
 
-const DIR = path.join(process.env.DATA_DIR ?? path.resolve(process.cwd(), "data"), "certificates");
-const FONT = process.env.CERT_FONT_PATH ?? path.resolve(process.cwd(), "fonts", "NotoSansTC-Subset.otf");
+const DIR = path.join(process.env.DATA_DIR ?? path.resolve(/* turbopackIgnore: true */ process.cwd(), "data"), "certificates");
+const FONT = process.env.CERT_FONT_PATH ?? path.resolve(/* turbopackIgnore: true */ process.cwd(), "fonts", "NotoSansTC-Subset.otf");
 
 export function pdfPath(certId: number) { return path.join(DIR, `certificate-${certId}.pdf`); }
 export function existingPdf(certId: number) {
