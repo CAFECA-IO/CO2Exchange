@@ -13,3 +13,9 @@ Claude outputs/
 # bootstrap.sh 產生的治理 Safe owner 私鑰。絕對不要提交。
 .governance*.env
 .mm*.env
+
+# 在機器之間搬 commit 用的暫存檔（git bundle），不是專案內容
+*.bundle
+
+# macOS 的資料夾設定檔
+.DS_Store
