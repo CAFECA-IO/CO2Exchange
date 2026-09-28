@@ -121,10 +121,25 @@ async function gasFor(addr) {
   const nonce = await pub.getTransactionCount({ address: op.address, blockTag: "pending" });
   await pub.waitForTransactionReceipt({ hash: await opW.sendTransaction({ to: addr, value: GAS, nonce }) });
 }
+/// 每位人物的入金上限。本站發行的結算幣（本機）照人物設定；外部結算幣（TWDC）不能鑄，
+/// 營運金鑰有多少就只能分多少——預設把它的 80% 平均分給買方，留一點給做市與手續費。
+/// `SIM_BUDGET_TWD` 可以直接指定每人多少元。
+let perPersonaCap = null;
+async function planBudget(buyers) {
+  const fixed = setting("SIM_BUDGET_TWD");
+  if (fixed) perPersonaCap = BigInt(fixed) * 1_000_000n;
+  else if (D.settlementMintable !== true) {
+    const opHas = await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "balanceOf", args: [op.address] });
+    perPersonaCap = (opHas * 8n) / 10n / BigInt(Math.max(1, buyers.length));
+  }
+  if (perPersonaCap !== null) console.log(`  每位買方入金上限 ${Number(perPersonaCap) / 1e6} 元（${fixed ? "SIM_BUDGET_TWD" : "營運金鑰結算幣的 80% 平均分配"}）`);
+}
 /// 帳本裡的現金低於預算的四分之一就補到預算。回傳存了多少。
 async function topUp(p) {
   const s = agent.state();
-  const budget = BigInt(Math.max(30_000, (p.annualNeedTonnes || 50) * 1_500)) * 1_000_000n;
+  let budget = BigInt(Math.max(30_000, (p.annualNeedTonnes || 50) * 1_500)) * 1_000_000n;
+  if (perPersonaCap !== null && budget > perPersonaCap) budget = perPersonaCap;
+  if (budget <= 0n) return 0n;
   const have = (s.cash.get(low(p.address)) ?? 0n) + (s.lockedCash.get(low(p.address)) ?? 0n);
   if (have >= budget / 4n) return 0n;
   const want = budget - have;
@@ -244,7 +259,13 @@ async function tickOnce() {
     let price = P(ref * (0.95 + rng() * 0.15) * p.priceTolerance);
     if (mm.ask !== null && price >= mm.ask) price = mm.ask - TICK * BigInt(1 + Math.floor(rng() * 5));
     if (price <= 0n) continue;
-    const body = { side: "buy", batchId: 0n, country: "TW", amountKg: BigInt(tonnes * 1000), pricePerTonne: price, minFillKg: 0n, expiry: t + ttl };
+    // 買得起多少就下多少：入金有上限時（外部結算幣），預算常常只夠一兩噸，超過的單只會被引擎以「餘額不足」拒絕
+    const cash = agent.state().cash.get(low(p.address)) ?? 0n;
+    let kg = BigInt(tonnes * 1000);
+    const affordable = (cash * 1000n) / price;
+    if (kg > affordable) kg = (affordable / 100n) * 100n;
+    if (kg < 100n) continue;
+    const body = { side: "buy", batchId: 0n, country: "TW", amountKg: kg, pricePerTonne: price, minFillKg: 0n, expiry: t + ttl };
     await user(p, "place", body, clear(p, body));
   }
   // 註銷：法人買方偶爾註銷手上的一部分（受益人與用途照他的角色）
@@ -292,6 +313,7 @@ process.on("SIGINT", () => { stop = true; });
 process.on("SIGTERM", () => { stop = true; });
 console.log(`模擬市場（帳本）：chainId ${chainId}，${USERS} 人，每 ${INTERVAL} 秒一輪${TICKS ? `，共 ${TICKS} 輪` : ""}；迴避 ${[...avoidSet()].join(", ") || "（無）"}`);
 await setup();
+await planBudget(personas.filter((p) => p.role !== "developer"));
 while (!stop) {
   try { await tickOnce(); } catch (e) { console.error(`本輪失敗：${String(e.shortMessage ?? e.message).slice(0, 300)}`); }
   if (TICKS && round >= TICKS) break;
