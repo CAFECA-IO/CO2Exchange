@@ -33,8 +33,8 @@ export const certificateContent = (c: Certificate) => E(
     countryToBytes2(c.country), h(c.scheme), c.fee, c.atSeq, c.documentHash ?? `0x${"0".repeat(64)}`, h(c.officialRef), c.officialAt],
 );
 export const reportContent = (r: ReserveReport) => E(
-  ["uint8", "uint256", "uint32", "uint64", "bytes32", "bytes32", "address", "uint64", "uint8", "address", "bytes32", "bytes32"],
-  [TAG.report, r.id, r.period, r.asOf, r.contentHash, r.documentHash, r.publisher, r.publishedAt, r.status, r.auditor, h(r.auditorName), h(r.note)],
+  ["uint8", "uint256", "uint32", "uint64", "bytes32", "bytes32", "address", "uint64", "uint8", "address", "bytes32", "bytes32", "uint64"],
+  [TAG.report, r.id, r.period, r.asOf, r.contentHash, r.documentHash, r.publisher, r.publishedAt, r.status, r.auditor, h(r.auditorName), h(r.note), r.attestedAt],
 );
 export const policyContent = (s: State) => E(
   ["uint8", "bool", "bool", "address", "uint256", "uint256"],

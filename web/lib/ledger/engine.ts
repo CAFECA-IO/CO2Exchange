@@ -36,7 +36,7 @@ export type Certificate = {
 };
 export type ReserveReport = {
   id: bigint; period: number; asOf: bigint; contentHash: Hex; documentHash: Hex; publisher: Address; publishedAt: bigint; atSeq: bigint;
-  status: number; auditor: Address; auditorName: string; note: string;
+  status: number; auditor: Address; auditorName: string; note: string; attestedAt: bigint;
   credits: EventOf<"reserveReport">["credits"]; cash: EventOf<"reserveReport">["cash"];
 };
 
@@ -257,7 +257,7 @@ function step(s: State, e: Event, ctx: Context): void {
       const id = s.nextReportId++;
       s.reports.set(String(id), {
         id, period: e.period, asOf: e.asOf, contentHash: payloadHash(e), documentHash: e.documentHash,
-        publisher: e.signer, publishedAt: e.at, atSeq: e.seq, status: 0, auditor: ZERO, auditorName: "", note: "",
+        publisher: e.signer, publishedAt: e.at, atSeq: e.seq, status: 0, auditor: ZERO, auditorName: "", note: "", attestedAt: 0n,
         credits: e.credits, cash: e.cash,
       });
       return;
@@ -267,7 +267,7 @@ function step(s: State, e: Event, ctx: Context): void {
       if (!r) return reject(s, e, "找不到這份報告");
       if (r.status !== 0) return reject(s, e, "報告已經簽署過");
       if (e.status !== 1 && e.status !== 2) return reject(s, e, "查核結果只能是相符或有差異");
-      r.status = e.status; r.auditor = e.signer; r.auditorName = e.auditorName; r.note = e.note;
+      r.status = e.status; r.auditor = e.signer; r.auditorName = e.auditorName; r.note = e.note; r.attestedAt = e.at;
       return;
     }
   }

@@ -1,0 +1,96 @@
+#!/usr/bin/env node
+// 帳本 v2 的承諾工具：每小時一期（排程跑它）。
+//
+//   node --experimental-strip-types scripts/ledger-commit.mjs            # 算出下一期並提交
+//   node --experimental-strip-types scripts/ledger-commit.mjs --plan     # 只算、不送
+//   node --experimental-strip-types scripts/ledger-commit.mjs --verify   # 查核者：重播全部，逐期比對鏈上的 anchor
+//
+// 送出之前一定先做完整驗證，任何一項不過就不送：
+//   ① 已經上鏈的每一期，重播算出的 anchor 都等於鏈上那一個（否則帳本被動過）
+//   ② 每一筆簽章都在「收單時的區塊高度」重驗過，簽章者在當時有授權
+//   ③ 鏈上的每一筆結算幣存入／提領，帳本裡都有而且只有一筆（反之亦然）
+//   ④ 餘額樹的總現金不超過合約持有（合約也會擋，這裡先擋，錯誤訊息比較說得清楚）
+import fs from "node:fs";
+import path from "node:path";
+import { createPublicClient, createWalletClient, defineChain, http } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { KeyError, keyring, setting } from "./lib/keys.mjs";
+
+const { openStore } = await import("../lib/ledger/store.ts");
+const { replay, onchainVerifier } = await import("../lib/ledger/replay.ts");
+const { readAuthorities, readCommitments, readCashEvents, LEDGER_ABI } = await import("../lib/ledger/chain.ts");
+
+const PLAN = process.argv.includes("--plan");
+const VERIFY = process.argv.includes("--verify");
+const TRUST = process.argv.includes("--trust-missing-state");
+
+const RPC = setting("RPC_URL") ?? "http://127.0.0.1:28545";
+const pub0 = createPublicClient({ transport: http(RPC) });
+const chainId = await pub0.getChainId();
+const LOCAL = chainId === 31337 || chainId === 1337;
+const chain = defineChain({ id: chainId, name: "c", nativeCurrency: { name: "N", symbol: "N", decimals: 18 }, rpcUrls: { default: { http: [RPC] } } });
+const pub = createPublicClient({ chain, transport: http(RPC), pollingInterval: LOCAL ? 50 : 1000 });
+const D = JSON.parse(fs.readFileSync(process.env.DEPLOYMENT_FILE ?? path.resolve(process.cwd(), "..", "deployments", `${chainId}.json`), "utf8"));
+if (D.ledgerVersion !== 2) { console.error("部署檔不是帳本 v2"); process.exit(1); }
+const range = { fromBlock: BigInt(D.deployedAtBlock ?? 0) };
+const domains = { chainId, ledger: D.ledger };
+const DATA = process.env.DATA_DIR ?? path.resolve(process.cwd(), "data");
+const store = openStore(process.env.LEDGER_DIR ?? path.join(DATA, "ledger"));
+
+const fail = (msg) => { console.error(`\n✗ ${msg}\n不提交。`); process.exit(1); };
+
+const integrity = store.check();
+if (!integrity.ok) fail(`帳本檔案本身不一致：${integrity.problem}`);
+const events = store.read();
+const [authorities, committed, cashOnChain, headBlock] = await Promise.all([
+  readAuthorities(pub, D.ledger, range), readCommitments(pub, D.ledger, range), readCashEvents(pub, D.ledger, range), pub.getBlockNumber(),
+]);
+console.log(`帳本 ${events.length} 筆；鏈上已提交 ${committed.length} 期；授權 ${authorities.grants.length} 筆`);
+
+const next = !VERIFY && events.length > Number(committed.at(-1)?.lastSeq ?? 0n)
+  ? [{ epoch: BigInt(committed.length + 1), lastSeq: BigInt(events.length), upToBlock: headBlock }]
+  : [];
+const r = await replay(events, { domains, authorities, verifier: onchainVerifier(pub, { trustOnMissingState: TRUST }), boundaries: [...committed, ...next] });
+
+// ① 既有各期
+for (const [i, c] of committed.entries()) {
+  if (r.epochs[i].anchor !== c.anchor) fail(`第 ${c.epoch} 期：重播算出 ${r.epochs[i].anchor}，鏈上是 ${c.anchor}`);
+}
+if (committed.length) console.log(`  ✓ 已上鏈的 ${committed.length} 期 anchor 全部與重播一致`);
+// ② 簽章
+const bad = [...r.sig.entries()].filter(([, v]) => !v.ok);
+const trusted = [...r.sig.entries()].filter(([, v]) => v.trusted);
+if (bad.length) fail(`${bad.length} 筆簽章或授權驗不過，例如第 ${bad[0][0]} 筆：${bad[0][1].reason}`);
+console.log(`  ✓ ${r.sig.size} 筆簽章在收單區塊高度重驗通過${trusted.length ? `（其中 ${trusted.length} 筆因節點沒有歷史狀態而信任收單驗證）` : ""}`);
+// ③ 存提
+const key = (x) => `${x.kind}|${x.ref.txHash.toLowerCase()}|${x.ref.logIndex}|${x.account.toLowerCase()}|${x.amount}`;
+const upTo = next[0]?.upToBlock ?? committed.at(-1)?.upToBlock ?? headBlock;
+const chainSet = new Map(cashOnChain.filter((c) => c.ref.block <= upTo).map((c) => [key(c), c]));
+const logSet = new Map(events.filter((e) => e.kind === "cashDeposit" || e.kind === "cashWithdraw").map((e) => [key(e), e]));
+for (const k of chainSet.keys()) if (!logSet.has(k)) fail(`鏈上有一筆存提帳本裡沒有：${k}`);
+for (const k of logSet.keys()) if (!chainSet.has(k)) fail(`帳本宣稱的存提鏈上找不到：${k}`);
+console.log(`  ✓ 結算幣存提 ${chainSet.size} 筆，鏈上與帳本逐筆相符`);
+
+if (VERIFY) { console.log("\n查核完成：帳本與鏈上承諾一致。"); process.exit(0); }
+if (!next.length) { console.log("\n沒有新事件，這一期不必提交。"); process.exit(0); }
+
+const e = r.epochs.at(-1);
+const [, held] = await pub.readContract({ address: D.ledger, abi: LEDGER_ABI, functionName: "solvency" });
+if (e.roots.totalCash > held) fail(`帳本宣稱欠 ${e.roots.totalCash}，合約只持有 ${held}`);
+const input = {
+  prev: e.prev, epoch: e.epoch, logRoot: e.logRoot, balanceRoot: e.roots.balanceRoot, registryRoot: e.roots.registryRoot, identityRoot: e.roots.identityRoot,
+  totalKg: e.roots.totalKg, totalCash: e.roots.totalCash, totalsHash: e.roots.totalsHash, upToBlock: e.upToBlock, lastSeq: e.lastSeq, rulesVersion: e.rulesVersion,
+};
+const onchain = await pub.readContract({ address: D.ledger, abi: LEDGER_ABI, functionName: "anchorOf", args: [input] });
+if (onchain !== e.anchor) fail(`合約算的 anchor ${onchain} 與重播 ${e.anchor} 不同（公式不一致）`);
+console.log(`\n第 ${e.epoch} 期：事件 ${e.firstSeq}–${e.lastSeq}、到區塊 ${e.upToBlock}\n  anchor ${e.anchor}\n  碳權 ${e.roots.totalKg} kg、結算幣 ${e.roots.totalCash}（合約持有 ${held}）`);
+if (PLAN) { console.log("\n（--plan，沒有送出）"); process.exit(0); }
+
+let pk;
+try { pk = keyring({ chainId, isLocal: LOCAL }).require("COMMITTER_PK", "RELAYER_PK", "DEPLOYER_PK").pk; }
+catch (err) { if (err instanceof KeyError) { console.error(err.message); process.exit(1); } throw err; }
+const w = createWalletClient({ account: privateKeyToAccount(pk), chain, transport: http(RPC) });
+const hash = await w.writeContract({ address: D.ledger, abi: LEDGER_ABI, functionName: "commit", args: [input] });
+const rc = await pub.waitForTransactionReceipt({ hash });
+if (rc.status !== "success") fail(`交易失敗 ${hash}`);
+console.log(`已提交第 ${e.epoch} 期，交易 ${hash}`);

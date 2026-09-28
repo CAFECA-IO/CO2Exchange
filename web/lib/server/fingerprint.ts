@@ -25,6 +25,8 @@ const KEYS = [
   "retirementCertificate",
   "settlementToken",
   "listing",
+  // 設計 v4：帳本合約。v4 部署裡上面那幾個都不存在（空字串），這一個才是身分所在
+  "ledger",
 ] as const;
 
 export type Stamp = {

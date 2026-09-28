@@ -35,6 +35,8 @@ import { fetchJson } from "@/lib/client/fetchJson";
 /// 額度在核發國登錄簿、入金在信託專戶。那一層的入金是真的信託。
 
 type Solvency = {
+  /// "ledger" = 設計 v4：碳權不在鏈上，右欄是登錄簿流通量而不是池子餘額
+  mode?: "ledger";
   address: string;
   epoch: string;
   head: string;
@@ -90,15 +92,16 @@ export function BankSolvency() {
   if (!d) return <Card title="平台資產池"><Notice>讀取中…</Notice></Card>;
 
   const s = d.solvency;
+  const period = d.mode === "ledger" ? "每小時" : "每 24 小時";
   return (
     <Card
       title="平台資產池：帳本 vs 池子"
-      action={<span className="text-xs text-ink-300">第 {d.epoch} 期・每 24 小時上鏈</span>}
+      action={<span className="text-xs text-ink-300">第 {d.epoch} 期・{d.mode === "ledger" ? "每小時" : "每 24 小時"}上鏈</span>}
     >
       <div className="grid grid-cols-[1fr_auto_auto] gap-x-4 border-b border-ink-500 pb-1.5 text-[11px] text-ink-300">
         <span />
         <span className="text-right">帳本宣稱欠</span>
-        <span className="text-right">池子裡實際有</span>
+        <span className="text-right">{d.mode === "ledger" ? "登錄簿／合約實際有" : "池子裡實際有"}</span>
       </div>
       <div className="divide-y divide-ink-600 text-sm">
         <Row label="碳權" ledger={kg(s.owedKg)} pool={kg(s.heldKg)} unit="噸"
@@ -138,8 +141,11 @@ export function BankSolvency() {
 
       <p className="mt-3 text-xs leading-6 text-ink-300">
         使用者在交易所期間，資產放在資產池裡，內部買賣是帳本更新——所以鏈上看不到個別持有人。
-        代價用這張表補回來：每 24 小時把「誰有多少」壓成一棵帶總額的 Merkle 樹提交上鏈，
-        總額被 root 蓋住，事後改不掉；池子裡實際有多少則是鏈上餘額，誰都查得到。
+        代價用這張表補回來：{period}把「誰有多少」壓成一棵帶總額的 Merkle 樹提交上鏈，
+        總額被 root 蓋住，事後改不掉；
+        {d.mode === "ledger"
+          ? "結算幣實際有多少是合約的鏈上餘額，碳權流通量則由登錄簿重播得出、同一期的 registry root 蓋住。"
+          : "池子裡實際有多少則是鏈上餘額，誰都查得到。"}
         兩個數字並列，不合併。
       </p>
       <p className="mt-2 text-xs leading-6 text-ink-300">
@@ -149,7 +155,7 @@ export function BankSolvency() {
         三者都不是額度本身的「移轉」，整個過程對一單位額度只發生一次移轉
         （從最初存入的人到最後提領的人）。
         這與信託不同——信託有法定的破產隔離，商業託管沒有同等保障。
-        因此「識別得出哪一份是誰的」由上面那棵每日上鏈的餘額樹負責，
+        因此「識別得出哪一份是誰的」由上面那棵{period}上鏈的餘額樹負責，
         「拿得回來」由提領機制負責（尚未開放，見下）。
         <span className="text-ink-200">這兩項不是附加保障，是這個法律性質下必要的補強。</span>
       </p>
@@ -170,7 +176,7 @@ export function BankSolvency() {
         而那正是逃生門唯一會被用到的時候。
       </p>
       <p className="mt-2 text-xs leading-6 text-ink-300">
-        這串數字不必相信本站：<code className="text-ink-200">npm run bank:verify</code> 會從鏈上事件
+        這串數字不必相信本站：<code className="text-ink-200">{d.mode === "ledger" ? "npm run ledger:verify" : "npm run bank:verify"}</code> 會從{d.mode === "ledger" ? "公開的事件 log 與鏈上承諾" : "鏈上事件"}
         重新推導一次所有人的餘額、重建同一棵樹，對不上就 exit 1。
         每一位使用者也拿得到自己那一份的 Merkle 分支。
       </p>

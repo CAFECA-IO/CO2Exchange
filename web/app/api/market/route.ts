@@ -3,6 +3,8 @@ import { holdings, listBids, listOrders, poolKey, poolSpotPricePerTonne } from "
 import { listingAbi } from "@/lib/abis";
 import { publicClient } from "@/lib/server/chain";
 import { handleError, ok } from "@/lib/server/api";
+import { ledgerEnabled } from "@/lib/server/ledger/view";
+import { ledgerTradeFeeBps } from "@/lib/server/ledger/read";
 
 export async function GET(req: Request) {
   try {
@@ -10,7 +12,7 @@ export async function GET(req: Request) {
     const d = deployment();
     const [orders, bids, spot, feeBps] = await Promise.all([
       listOrders(), listBids(), poolSpotPricePerTonne().catch(() => null),
-      publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "feeBps" }),
+      ledgerEnabled() ? Promise.resolve(BigInt(ledgerTradeFeeBps())) : publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "feeBps" }),
     ]);
     const h = isAddress(account) ? await holdings(account) : null;
     return ok({ orders, bids, spotPricePerTonne: spot, listingFeeBps: Number(feeBps), poolKey: poolKey(), holdings: h });

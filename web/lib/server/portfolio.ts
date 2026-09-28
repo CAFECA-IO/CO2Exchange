@@ -4,6 +4,8 @@ import { creditAbi, erc20Abi, registryAbi } from "@/lib/abis";
 import { countryCode } from "@/lib/deployment";
 import { deployment, publicClient } from "./chain";
 import { readTrades } from "./ticker";
+import { ledgerPortfolio } from "./ledger/read";
+import { ledgerEnabled } from "./ledger/view";
 
 /// 我的資產：持有、成本、市值、賺賠。
 ///
@@ -64,6 +66,7 @@ export type Portfolio = {
 };
 
 export async function portfolio(account: Address): Promise<Portfolio> {
+  if (ledgerEnabled()) return ledgerPortfolio(account);
   const d = deployment();
   const me = account.toLowerCase();
 
@@ -125,7 +128,21 @@ export async function portfolio(account: Address): Promise<Portfolio> {
       kg: Number(l.args.amountKg), pricePerTonne: null, cashDelta: 0, txHash: l.transactionHash!,
     });
   }
-  movements.sort((a, b) => a.ts - b.ts);
+  const batches = await myBatches(account);
+  const cctKg = Number(cctRaw) / 1e15;
+  return computePortfolio({
+    twd: Number(twd), cctKg, batches, movements, issuedKg,
+    marketPricePerTonne: trades.length ? trades[trades.length - 1].pricePerTonne : null,
+  });
+}
+
+/// 損益的算法本身（與資料從哪裡來無關）。鏈上版本與帳本版本（lib/server/ledger/read.ts）共用，
+/// 同一個人在兩種部署上看到的成本與損益才會是同一套規則算的。
+export function computePortfolio(input: {
+  twd: number; cctKg: number; batches: Holding[]; movements: Movement[]; issuedKg: number; marketPricePerTonne: number | null;
+}): Portfolio {
+  const { twd, cctKg, batches, issuedKg, marketPricePerTonne } = input;
+  const movements = [...input.movements].sort((a, b) => a.ts - b.ts);
 
   // 移動加權平均
   let posKg = 0;
@@ -152,16 +169,13 @@ export async function portfolio(account: Address): Promise<Portfolio> {
     equityCurve.push({ t: m.ts, v: cash + (posKg / 1000) * markPrice });
   }
 
-  const batches = await myBatches(account);
-  const cctKg = Number(cctRaw) / 1e15;
   const holdingKg = batches.reduce((s, b) => s + b.kg, 0) + cctKg;
   const avgCostPerTonne = posKg > 0 ? (posCost / posKg) * 1000 : null;
-  const marketPricePerTonne = trades.length ? trades[trades.length - 1].pricePerTonne : null;
   const marketValue = marketPricePerTonne ? (holdingKg / 1000) * marketPricePerTonne : 0;
   const costOfHolding = avgCostPerTonne ? (holdingKg / 1000) * avgCostPerTonne : 0;
 
   return {
-    twd: Number(twd),
+    twd,
     cctKg,
     batches,
     holdingKg,
@@ -171,7 +185,7 @@ export async function portfolio(account: Address): Promise<Portfolio> {
     costOfHolding,
     unrealisedPnl: marketPricePerTonne && avgCostPerTonne ? marketValue - costOfHolding : null,
     realisedPnl,
-    totalValue: Number(twd) + marketValue,
+    totalValue: twd + marketValue,
     movements: movements.slice().reverse(),
     equityCurve,
     issuedKg,

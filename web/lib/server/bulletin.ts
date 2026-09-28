@@ -4,6 +4,8 @@ import { deployment, publicClient } from "./chain";
 import { registryAbi } from "@/lib/abis";
 import { countryCode } from "@/lib/deployment";
 import { tcerSerial } from "../tcer";
+import { ledgerBulletin } from "./ledger/read";
+import { ledgerEnabled } from "./ledger/view";
 
 /// 公告欄。
 ///
@@ -101,6 +103,7 @@ async function blockTimes(blocks: bigint[]): Promise<Map<bigint, number>> {
 }
 
 export async function bulletin(): Promise<Bulletin> {
+  if (ledgerEnabled()) return ledgerBulletin();
   const d = deployment();
   const [issued, listed, filled, retired] = await Promise.all([
     publicClient.getLogs({ address: d.carbonCredit1155, event: ISSUED, fromBlock: 0n }),

@@ -1,6 +1,8 @@
 import "server-only";
 import { EVENTS } from "@/lib/abis";
 import { deployment, publicClient } from "./chain";
+import { ledgerTrades } from "./ledger/read";
+import { ledgerEnabled } from "./ledger/view";
 
 /// 行情全部由鏈上 Listing 的 Filled 事件推導，沒有任何捏造的數字。
 /// Filled(orderId, buyer, amountKg, cost, fee) —— 成交價 = cost / amountKg * 1000（每噸，結算幣最小單位）。
@@ -36,6 +38,7 @@ function bucketFor(rangeHours: number): number {
 }
 
 export async function readTrades(): Promise<Trade[]> {
+  if (ledgerEnabled()) return ledgerTrades();
   const d = deployment();
   const logs = await publicClient.getLogs({ address: d.listing, event: FILLED, fromBlock: 0n });
   if (logs.length === 0) return [];

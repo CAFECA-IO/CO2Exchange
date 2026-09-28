@@ -21,7 +21,7 @@
       "epoch": "2",
       "logRoot": "0xbb726c20aa61c67b6b896839966a6ca8c93425db86dae39b882c22f212fa4071",
       "balanceRoot": "0x92a4d8b08bf2553aa9b5290bd0bbb753b43138a5d4a74faec4fad40be9396bc9",
-      "registryRoot": "0x0857cd4fb9f9e46f07210266e3c2b3536fe10e1b8d8c380a7fc07871f251d22c",
+      "registryRoot": "0x516c0d95b1779e932c484f26aa23950d7706c0f34c339d0dbdb6241f966d5a60",
       "identityRoot": "0x22fba6803772515d698fd5a05ac2215bf5424043cdbe035cebe6dd193fafb06e",
       "totalKg": "68000",
       "totalCash": "1100000000000",
@@ -29,7 +29,7 @@
       "upToBlock": "700",
       "lastSeq": "27",
       "rulesVersion": 2,
-      "anchor": "0x25a68bac03f1532fe6442e76bf2b37c83aaa95b665fd9d7b2cf1ddb996174ed5"
+      "anchor": "0xa3f810957aac41b2d018673f4622ff6a8302ffe8b208e038b8353d0491720362"
     }
   ],
   "claim": {
@@ -73,7 +73,7 @@
     },
     "registrySiblings": [
       "0xf158a93367bea81d9c4ff3b276c83a938781dd981b939a3cd5272a2b42d8f330",
-      "0x67779697fd4dfc24ee1a68fd5acb2b3357751a3ecba80ed16f44353ceb0ac938",
+      "0xa64866d979b5c1bd863ba9261894058f4bae10454d89f6b092563161d4e6f784",
       "0xd6a499f70286c15953f8f73771850057bec835af0052dea1b6c28d73d7f24851",
       "0xb507ef239f8947177bbf3562cde52f18788bb13a813b3e9669a836fad5b7fbd4"
     ],

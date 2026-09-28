@@ -22,7 +22,19 @@ export type Deployment = {
   /// 手續費收款人。資產池模型下它是餘額樹裡的一個帳戶。
   treasury?: Address;
   poolFee: number; tickSpacing: number;
+  /// 設計 v4 的帳本合約。有它（且 ledgerVersion = 2）代表這個部署的登錄簿、身分、市場
+  /// 全部在鏈下帳本，鏈上只有承諾——上面那些合約地址在 v4 部署裡都不存在。
+  ledger?: Address;
+  ledgerVersion?: number;
+  nationalSafe?: Address;
+  operatorSafe?: Address;
+  timelock?: Address;
+  committer?: Address;
 };
+
+/// 這個部署是不是 v4（鏈上只放壓縮證據）。
+export const isLedgerV2 = (d: Partial<Deployment>): d is Deployment & { ledger: Address } =>
+  d.ledgerVersion === 2 && !!d.ledger;
 
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 

@@ -5,6 +5,8 @@ import { errorAbi } from "@/lib/error-abi";
 import { deployment, publicClient } from "./chain";
 import { countryCode, hasV4 } from "@/lib/deployment";
 import { tagOf, type ParticipantTag } from "./mm";
+import { ledgerBids, ledgerHoldings, ledgerOrders } from "./ledger/read";
+import { ledgerEnabled } from "./ledger/view";
 
 /// v4 的價格上下界。方向只看 zeroForOne，與精準輸入／輸出無關。
 const MIN_SQRT = 4295128739n;
@@ -38,6 +40,7 @@ export function poolId() {
 
 /// v4 現貨價：sqrtPriceX96 → mTWD / 噸（6 decimals），不含手續費與滑價
 export async function poolSpotPricePerTonne(): Promise<number | null> {
+  if (ledgerEnabled()) return null; // v4 部署沒有 AMM 池
   const d = deployment();
   const pid = poolId();
   if (!pid) return null; // SKIP_V4 部署：沒有 v4 池，也就沒有現貨價
@@ -60,6 +63,8 @@ export async function poolSpotPricePerTonne(): Promise<number | null> {
 /// 原本是從 1 一路掃到 nextOrderId、每筆三次 contract read。鋪了一年的模擬資料
 /// 之後有上千筆單，這條路要三秒以上。改成往回掃 + 分批平行讀，並限制掃描深度。
 export async function listOrders(limit = 60, maxScan = 400): Promise<Order[]> {
+  // 設計 v4：掛單簿在鏈下帳本，不從鏈上讀
+  if (ledgerEnabled()) return ledgerOrders(limit);
   const d = deployment();
   const next = Number(await publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "nextOrderId" }));
   const ids: number[] = [];
@@ -125,6 +130,7 @@ export type Bid = {
 /// 買單側。比賣單簡單得多——買單只帶核發國，不牽涉批次與專案，
 /// 所以不必像 listOrders 那樣回頭查批次與專案的資料。
 export async function listBids(limit = 60, maxScan = 400): Promise<Bid[]> {
+  if (ledgerEnabled()) return ledgerBids(limit);
   const d = deployment();
   const next = Number(
     await publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "nextBidId" }).catch(() => 1n),
@@ -158,6 +164,7 @@ export async function listBids(limit = 60, maxScan = 400): Promise<Bid[]> {
 }
 
 export async function holdings(account: Address) {
+  if (ledgerEnabled()) return ledgerHoldings(account);
   const d = deployment();
   const [twd, cct, ids] = await Promise.all([
     publicClient.readContract({ address: d.settlementToken, abi: erc20Abi, functionName: "balanceOf", args: [account] }),
@@ -280,6 +287,7 @@ export async function quoteMarket(
   kg: bigint,
   side: "buy" | "sell",
 ): Promise<MarketQuote> {
+  if (ledgerEnabled()) return { ok: false, reason: "no-pool" };
   const d = deployment();
   const key = poolKey();
   if (!key) return { ok: false, reason: "no-pool" }; // SKIP_V4 部署沒有池子

@@ -8,12 +8,14 @@
 import { deployment, publicClient } from "@/lib/server/chain";
 import { EVENTS, listingAbi, registryAbi } from "@/lib/abis";
 import { countryCode } from "@/lib/deployment";
+import { ledgerByCountry } from "./ledger/read";
+import { ledgerEnabled } from "./ledger/view";
 
 const { batchIssued: ISSUED, creditRetired: RETIRED, filled: FILLED } = EVENTS;
 
 /// 地球上放柱子的位置。取各國陸地的視覺重心，不是幾何形心——
 /// 印尼的幾何形心會落在海上，澳洲的會落在無人的內陸，兩者都指不到人看得懂的地方。
-const ANCHOR: Record<string, [number, number]> = {
+export const ANCHOR: Record<string, [number, number]> = {
   TW: [23.8, 121.0], JP: [36.2, 138.3], KR: [36.5, 127.8], TH: [15.2, 100.9],
   ID: [-2.5, 117.5], AU: [-25.0, 133.5], CN: [35.0, 104.0], IN: [22.5, 79.0],
   SG: [1.35, 103.82],
@@ -54,6 +56,8 @@ export async function byCountry(rangeHours = 24 * 365): Promise<{
   asOf: number;
   countries: CountryStat[];
 }> {
+  // 設計 v4：各轄區的量價全部來自鏈下帳本
+  if (ledgerEnabled()) return ledgerByCountry(rangeHours);
   const d = deployment();
   const [issued, retired, filled, nextOrderId, head] = await Promise.all([
     publicClient.getLogs({ address: d.carbonCredit1155, event: ISSUED, fromBlock: 0n }),

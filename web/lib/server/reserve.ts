@@ -2,6 +2,8 @@ import "server-only";
 import { EVENTS, erc20Abi, registryAbi, reserveAbi } from "@/lib/abis";
 import { countryCode } from "@/lib/deployment";
 import { deployment, publicClient } from "./chain";
+import { ledgerCustody } from "./ledger/read";
+import { ledgerEnabled } from "./ledger/view";
 
 /// 託管與準備金揭露。
 ///
@@ -98,6 +100,10 @@ export function nextDisclosureDate(now = new Date()): string {
 
 export async function custody(): Promise<Custody> {
   const d = deployment();
+  if (ledgerEnabled()) {
+    const supply = await publicClient.readContract({ address: d.settlementToken, abi: erc20Abi, functionName: "totalSupply" }).catch(() => 0n);
+    return ledgerCustody(supply);
+  }
   const live = await liveByCountry();
 
   const [codes, supply] = await Promise.all([
