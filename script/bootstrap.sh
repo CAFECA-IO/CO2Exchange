@@ -34,6 +34,12 @@ GOV_FILE=${GOV_FILE:-$ROOT/.governance.env}
 DEPLOY_GAS=${DEPLOY_GAS:-60000000}
 SERVICE_GAS=${SERVICE_GAS:-20000000}
 SAFETY=${SAFETY:-2}
+# 模擬市場的人物帳戶由**平台代付 gas**：外部鏈上沒有 anvil_setBalance，所以
+# simulate.mjs 的 ensureFunded() 會從 DEPLOYER_PK（沒有就 RELAYER_PK）真的轉一筆
+# 過去。所以撥款額要把這一百筆算進去，否則模擬跑到一半平台金鑰就見底，
+# 而症狀是「交易莫名其妙開始失敗」。
+SIM_ACCOUNTS=${SIM_ACCOUNTS:-100}
+SIM_GAS_TOPUP=${SIM_GAS_TOPUP:-1000000000000000}   # 1e15 wei，與 simulate.mjs 的外部鏈預設一致
 export PATH="$HOME/.foundry/bin:$PATH"
 
 command -v cast >/dev/null 2>&1 || { echo "找不到 cast，請先安裝 Foundry（bash setup.sh）"; exit 1; }
@@ -249,6 +255,7 @@ cmd_fund () {
   local short=0
   echo ">> 目標鏈 ${RPC_URL}（chainId ${CHAIN_ID}）"
   echo "   撥款額 = gas 預算 × 目前 gasPrice × ${SAFETY} 倍"
+  echo "   DEPLOYER_PK 另加 ${SIM_ACCOUNTS} × $(fmt_eth "$SIM_GAS_TOPUP")：模擬市場的人物帳戶由平台代付 gas"
   echo
   printf '   %-20s %-44s %12s %14s\n' "金鑰" "地址" "需要" "現有"
   for k in $KEY_NAMES; do
@@ -263,6 +270,8 @@ cmd_fund () {
       continue
     fi
     need=$(wei_needed "$gas")
+    # DEPLOYER_PK 同時是模擬器撥款給人物帳戶的來源（OPERATOR_PK 的第一順位）。
+    [ "$k" = "DEPLOYER_PK" ] && need=$(( need + SIM_ACCOUNTS * SIM_GAS_TOPUP ))
     if enough "$bal" "$need"; then mark="✓"; else mark="✗"; short=1; fi
     printf ' %s %-20s %-44s %12s %14s\n' "$mark" "$k" "$addr" "$(fmt_eth "$need")" "$(fmt_eth "$bal")"
   done
@@ -271,6 +280,7 @@ cmd_fund () {
     [ "$(key_gas "$k")" = "0" ] && printf '   %s 不需要餘額：%s\n' "$k" "$(key_role "$k")"
   done
   echo "   治理 Safe 的 owner 也不需要餘額：簽章是鏈下的，execTransaction 的 gas 由 SENDER_PK 付"
+  echo "   一般使用者也不需要：買賣與註銷走 CAFECA 簽章通道的 sendCalls，gas 由 CAFECA 贊助"
   if [ "$short" = "1" ]; then
     echo
     echo ">> 還沒夠。撥款到上面標 ✗ 的地址，然後再跑一次："

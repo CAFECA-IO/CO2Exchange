@@ -196,7 +196,10 @@ do_seed () {
     # 外部鏈沒有 anvil_setTime，所以劇本的一年會壓縮成「現在這一段時間」。
     # 模擬器自己會說這件事（見 simulate.mjs 的縮時模式提示）。
     echo ">> 縮時鋪資料（外部鏈不能調整區塊時間，所以一年的劇本壓在現在）"
-    echo "   注意：模擬用的一百個帳戶要在這條鏈上有 gas，否則交易會一路失敗。"
+    # 人物帳戶的 gas 由平台出：模擬器的 ensureFunded() 會在餘額不足時從
+    # DEPLOYER_PK（沒有就 RELAYER_PK）真的轉一筆過去。外部鏈沒有 anvil_setBalance，
+    # 只能這樣做。所以要備的是**營運金鑰**的餘額，不是一百個帳戶各自的。
+    echo "   人物帳戶的 gas 由平台金鑰代付（每個 ${SIM_GAS_TOPUP:-0.001} BOLT，最多一百個）。"
     ( cd web && RPC_URL="$RPC_URL" node scripts/simulate.mjs --tick "$TICK" --quiet ) | tail -3
   fi
 }
