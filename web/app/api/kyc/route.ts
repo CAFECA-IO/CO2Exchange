@@ -5,13 +5,17 @@ import { all, insert, patch } from "@/lib/server/store";
 import { attestAndRegister, validateId, type KycRequest } from "@/lib/server/kyc";
 import { requireRole } from "@/lib/server/roles";
 import { ApiError, fail, handleError, ok } from "@/lib/server/api";
+import { ledgerEnabled } from "@/lib/server/ledger/view";
+import { ledgerIdentity } from "@/lib/server/ledger/registry";
 
 /// GET ?account= → 鏈上身分 + 最新申請狀態
 export async function GET(req: Request) {
   const account = new URL(req.url).searchParams.get("account");
   if (!isAddress(account)) return fail("INVALID_ADDRESS", { details: { param: "account" } });
   try {
-  const id = await publicClient.readContract({ address: deployment().kycRegistry, abi: kycRegistryAbi, functionName: "identityOf", args: [account] });
+  const id = ledgerEnabled()
+    ? ledgerIdentity(account)
+    : await publicClient.readContract({ address: deployment().kycRegistry, abi: kycRegistryAbi, functionName: "identityOf", args: [account] });
   const reqs = all<KycRequest>("kyc-requests").filter((r) => r.account.toLowerCase() === account.toLowerCase());
   const latest = reqs.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
   return ok({

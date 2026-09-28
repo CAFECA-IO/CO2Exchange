@@ -1,11 +1,14 @@
 import { registryAbi, registryWriteAbi } from "@/lib/abis";
 import { deployment, isAddress, publicClient } from "@/lib/server/chain";
 import { handleError, ok } from "@/lib/server/api";
+import { ledgerEnabled } from "@/lib/server/ledger/view";
+import { ledgerProjects } from "@/lib/server/ledger/registry";
 
 /// GET [?owner=] → 專案清單（鏈上）
 export async function GET(req: Request) {
   const owner = new URL(req.url).searchParams.get("owner");
   try {
+  if (ledgerEnabled()) return ok({ projects: ledgerProjects(isAddress(owner) ? owner : null) });
   const d = deployment();
   const next = await publicClient.readContract({ address: d.carbonRegistry, abi: registryWriteAbi, functionName: "nextProjectId" });
   const out = [];

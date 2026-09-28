@@ -5,6 +5,8 @@ import { existingPdf } from "@/lib/server/certpdf";
 import { requireRole } from "@/lib/server/roles";
 import { ApiError, handleError, ok } from "@/lib/server/api";
 import { submit } from "@/lib/server/tx";
+import { ledgerEnabled } from "@/lib/server/ledger/view";
+import { ledgerAnchorCertificate } from "@/lib/server/ledger/registry";
 
 /// POST → 把 PDF 的 SHA-256 回寫到鏈上 documentHash（DOCUMENT_ROLE 金鑰；Phase 0 = relayer）
 export async function POST(_req: Request, ctx: RouteContext<"/api/certificates/[id]/anchor">) {
@@ -13,6 +15,8 @@ export async function POST(_req: Request, ctx: RouteContext<"/api/certificates/[
     const { id } = await ctx.params;
     const pdf = existingPdf(Number(id));
     if (!pdf) throw new ApiError("DOCUMENT_NOT_READY", "請先產生 PDF");
+    // 帳本 v2：文件雜湊是帳本裡的一筆 certDocument 事件
+    if (ledgerEnabled()) return ok({ certId: Number(id), documentHash: pdf.sha256, ...(await ledgerAnchorCertificate(Number(id), pdf.sha256)) });
     const d = deployment();
     const current = (await publicClient.readContract({ address: d.retirementCertificate, abi: certificateAbi, functionName: "certificateOf", args: [BigInt(id)] })).documentHash;
     if (!/^0x0+$/.test(current)) throw new ApiError("ALREADY_EXISTS", "鏈上已有 documentHash，不可覆寫");

@@ -11,6 +11,7 @@ import { PURPOSE_LABEL, flagOf, purposeAllowed } from "@/lib/deployment";
 import { type Call } from "@/lib/client/cafeca";
 import { useReload } from "@/lib/client/useReload";
 import { fetchJson } from "@/lib/client/fetchJson";
+import { outcomeText, useLedger } from "@/lib/client/ledger";
 
 /// 註銷並取得憑證。
 ///
@@ -65,6 +66,7 @@ export default function RetirePage() {
 
   const [reloadKey, reload] = useReload();
   const retireGate = useAgreementGate(wallet?.address, ["retirement-mandate"]);
+  const lg = useLedger();
 
   useEffect(() => {
     let ignore = false;
@@ -74,9 +76,10 @@ export default function RetirePage() {
       if (!ignore && j) setM(j);
     })();
     return () => { ignore = true; };
-  }, [wallet, reloadKey]);
+  }, [wallet, reloadKey, lg.me?.head.seq]);
 
-  if (!userId || !wallet || !channelOpen || !config) return <AccountGate />;
+  // 帳本 v2 的開發用登入由伺服器代簽，不需要 CAFECA 通道
+  if (!userId || !wallet || !config || (!channelOpen && !(lg.enabled && lg.devSigning))) return <AccountGate />;
   const d = config.deployment;
 
   async function relay(label: string, calls: Call[]) {
@@ -124,6 +127,24 @@ export default function RetirePage() {
 
   function doRetire() {
     if (!sel) return;
+    // 帳本 v2：註銷是使用者簽的一則 RetireCredits 訊息，憑證是重播帳本產出的衍生資料
+    if (lg.enabled) {
+      const batchId = Number(sel.key.slice(1));
+      const label = `註銷批次 #${batchId} ${fmtKg(kg)}`;
+      setBusy(label); setMsg(null); setConfirm(false);
+      (async () => {
+        try {
+          const r = await lg.submit("retire", {
+            batchId, amountKg: kg, beneficiary, beneficiaryHash: beneficiaryHash(), purpose, memo,
+          }, { title: label, detail: `受益人：${beneficiary}；用途：${PURPOSE_LABEL[purpose]}。註銷不可逆。` });
+          setMsg(outcomeText(r, "註銷"));
+          reload();
+        } catch (e) {
+          setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) });
+        } finally { setBusy(null); }
+      })();
+      return;
+    }
     if (sel.key === "cct") {
       relay(`註銷未指定批次額度 ${fmtKg(kg)}`, [{
         target: d.carbonPool, value: 0n,

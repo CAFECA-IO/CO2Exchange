@@ -5,6 +5,8 @@ import { deployment, identityVerifier, publicClient, relayerClient } from "./cha
 import { TIER } from "@/lib/deployment";
 import { submit } from "./tx";
 import { ApiError } from "./api";
+import { ledgerEnabled } from "./ledger/view";
+import { ledgerRegisterIdentity } from "./ledger/registry";
 
 export type KycRequest = {
   id: string; createdAt: string; updatedAt: string;
@@ -27,8 +29,10 @@ export function identityHashOf(tier: number, idn: string): Hex {
 /// 身分驗證服務簽發 attestation 並由 relayer 送出 register()。
 /// 正式環境：這一步之前要驗證工商憑證 / 自然人憑證 / TW FidO 對 account 的簽章與憑證鏈。
 export async function attestAndRegister(account: Address, tier: number, idn: string) {
-  const d = deployment();
   const identityHash = identityHashOf(tier, idn);
+  // 帳本 v2：身分是帳本裡的一筆 identity 事件，不是鏈上的 register()
+  if (ledgerEnabled()) return ledgerRegisterIdentity(account, tier, identityHash);
+  const d = deployment();
   const nonce = await publicClient.readContract({ address: d.kycRegistry, abi: kycRegistryAbi, functionName: "nonces", args: [account] });
   const now = Math.floor(Date.now() / 1000);
   const attestation = {

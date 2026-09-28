@@ -27,6 +27,7 @@
     "gen:ledger-fixture": "node --experimental-strip-types --no-warnings scripts/gen-ledger-fixture.mjs",
     "test:ledger": "node --experimental-strip-types --no-warnings scripts/test-ledger.mjs",
     "test:ledger-chain": "node --experimental-strip-types --no-warnings scripts/e2e-ledger-chain.mjs",
+    "test:ledger-write": "node --experimental-strip-types --no-warnings scripts/e2e-ledger-write.mjs",
     "ledger:seed": "node --experimental-strip-types --no-warnings scripts/ledger-seed.mjs",
     "ledger:commit": "node --experimental-strip-types --no-warnings scripts/ledger-commit.mjs",
     "ledger:verify": "node --experimental-strip-types --no-warnings scripts/ledger-commit.mjs --verify",

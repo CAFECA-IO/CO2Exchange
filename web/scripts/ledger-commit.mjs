@@ -19,6 +19,7 @@ import { KeyError, keyring, setting } from "./lib/keys.mjs";
 const { openStore } = await import("../lib/ledger/store.ts");
 const { replay, onchainVerifier } = await import("../lib/ledger/replay.ts");
 const { readAuthorities, readCommitments, readCashEvents, LEDGER_ABI } = await import("../lib/ledger/chain.ts");
+const { mirrorCash } = await import("../lib/ledger/mirror.ts");
 
 const PLAN = process.argv.includes("--plan");
 const VERIFY = process.argv.includes("--verify");
@@ -41,6 +42,12 @@ const fail = (msg) => { console.error(`\n✗ ${msg}\n不提交。`); process.exi
 
 const integrity = store.check();
 if (!integrity.ok) fail(`帳本檔案本身不一致：${integrity.problem}`);
+// 提交前先把還沒鏡像的鏈上存提補進帳本：它們由 ChainRef 背書，誰補都一樣，而漏掉的存入會讓③不過。
+// 查核（--verify）與試算（--plan）不寫帳本。
+if (!VERIFY && !PLAN) {
+  const { added } = await mirrorCash({ store, client: pub, ledger: D.ledger, fromBlock: range.fromBlock });
+  if (added.length) console.log(`  補鏡像 ${added.length} 筆鏈上存提`);
+}
 const events = store.read();
 const [authorities, committed, cashOnChain, headBlock] = await Promise.all([
   readAuthorities(pub, D.ledger, range), readCommitments(pub, D.ledger, range), readCashEvents(pub, D.ledger, range), pub.getBlockNumber(),
@@ -65,10 +72,16 @@ console.log(`  ✓ ${r.sig.size} 筆簽章在收單區塊高度重驗通過${tru
 // ③ 存提
 const key = (x) => `${x.kind}|${x.ref.txHash.toLowerCase()}|${x.ref.logIndex}|${x.account.toLowerCase()}|${x.amount}`;
 const upTo = next[0]?.upToBlock ?? committed.at(-1)?.upToBlock ?? headBlock;
+// 兩個方向的強度不同：
+//   · 這一期之內（seq ≤ lastSeq）帳本宣稱的每一筆，鏈上都要有、而且在 upToBlock 之前——否則是憑空入金
+//   · 鏈上 upToBlock 之前的每一筆，帳本裡都要有（可以是之後才鏡像的：那只是晚記，合約那邊多出來的是盈餘）
+const lastSeq = next[0]?.lastSeq ?? committed.at(-1)?.lastSeq ?? BigInt(events.length);
+const isCash = (e) => e.kind === "cashDeposit" || e.kind === "cashWithdraw";
 const chainSet = new Map(cashOnChain.filter((c) => c.ref.block <= upTo).map((c) => [key(c), c]));
-const logSet = new Map(events.filter((e) => e.kind === "cashDeposit" || e.kind === "cashWithdraw").map((e) => [key(e), e]));
-for (const k of chainSet.keys()) if (!logSet.has(k)) fail(`鏈上有一筆存提帳本裡沒有：${k}`);
-for (const k of logSet.keys()) if (!chainSet.has(k)) fail(`帳本宣稱的存提鏈上找不到：${k}`);
+const logAll = new Map(events.filter(isCash).map((e) => [key(e), e]));
+const logEpoch = [...logAll.entries()].filter(([, e]) => e.seq <= lastSeq);
+for (const k of chainSet.keys()) if (!logAll.has(k)) fail(`鏈上有一筆存提帳本裡沒有：${k}`);
+for (const [k] of logEpoch) if (!chainSet.has(k)) fail(`帳本宣稱的存提鏈上找不到：${k}`);
 console.log(`  ✓ 結算幣存提 ${chainSet.size} 筆，鏈上與帳本逐筆相符`);
 
 if (VERIFY) { console.log("\n查核完成：帳本與鏈上承諾一致。"); process.exit(0); }

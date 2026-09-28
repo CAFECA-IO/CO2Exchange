@@ -75,8 +75,24 @@ export function openStore(dir: string) {
   }
 
   /// 追加一筆事件。`at` 由這裡給（牆上時鐘，但**不得早於前一筆**——引擎要求時間單調）。
-  async function append(partial: NewEvent, opts: { receiptSigner?: ReceiptSigner; at?: bigint } = {}): Promise<{ event: Event; receipt: Receipt | null }> {
-    const { event, prev, runningHash } = await withLock(() => {
+  ///
+  /// `skipIf` 在**鎖裡**判斷要不要寫（回 true 就不寫、回傳 null）。鏈上存入的鏡像要靠它去重：
+  /// 兩個行程同時看到同一筆鏈上存入，在鎖外各自檢查都會說「還沒記」，於是記兩次——入金變成兩倍。
+  async function append(
+    partial: NewEvent,
+    opts: { receiptSigner?: ReceiptSigner; at?: bigint; skipIf?: () => boolean } = {},
+  ): Promise<{ event: Event; receipt: Receipt | null }> {
+    const r = await appendIf(partial, opts);
+    if (!r) throw new Error("事件被 skipIf 略過");
+    return r;
+  }
+
+  async function appendIf(
+    partial: NewEvent,
+    opts: { receiptSigner?: ReceiptSigner; at?: bigint; skipIf?: () => boolean } = {},
+  ): Promise<{ event: Event; receipt: Receipt | null } | null> {
+    const done = await withLock(() => {
+      if (opts.skipIf?.()) return null;
       const h = readHead();
       const seq = h.seq + 1n;
       const now = opts.at ?? BigInt(Math.floor(Date.now() / 1000));
@@ -90,6 +106,8 @@ export function openStore(dir: string) {
       fs.renameSync(`${HEAD}.tmp`, HEAD);
       return { event, prev: h.runningHash, runningHash };
     });
+    if (!done) return null;
+    const { event, prev, runningHash } = done;
     if (!opts.receiptSigner) return { event, receipt: null };
     const body = { seq: event.seq, eventHash: eventHash(event), prevRunningHash: prev, runningHash, receivedAt: event.at };
     const signature = await opts.receiptSigner.signMessage({ message: { raw: receiptDigest(body) } });
@@ -110,6 +128,6 @@ export function openStore(dir: string) {
     return { ok: true };
   }
 
-  return { dir, head: readHead, read, append, check, withLock };
+  return { dir, head: readHead, read, append, appendIf, check, withLock };
 }
 export type Store = ReturnType<typeof openStore>;

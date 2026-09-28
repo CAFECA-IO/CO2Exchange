@@ -15,12 +15,12 @@ import { ApiError } from "./api";
 function list(env: string | undefined): string[] {
   return (env ?? "").split(",").map((s) => s.trim().toLowerCase()).filter((s): s is string => isAddress(s));
 }
-/// 開發用登入從代號推出來的那兩個地址（`co2x:dev:admin@example.com` / `…verifier@…`）。
+/// 開發用登入從代號推出來的那兩個地址（私鑰 `keccak256("co2x:dev:admin@example.com")` 的地址，見 lib/server/dev-key.ts）。
 /// 只在非 production 當預設值，讓本機展示與 e2e 零設定就進得去 /admin 與 /verifier。
 /// production 一律以環境變數為準——**沒設就是沒有任何管理員**，這是對的：
 /// 一個寫死在原始碼裡的管理員地址，在公開鏈上就是一把公開的鑰匙。
-const DEV_ADMIN = "0x0a15d29bee2a3883aba3a7a8a30e12dcb261685c";
-const DEV_VERIFIER = "0x9263943d5fad5d33e1393995cbbaedf2676b4578";
+const DEV_ADMIN = "0x026f5d66f503416c3ce22be19190e0d2f9b4dd3c";
+const DEV_VERIFIER = "0x5d84afce29211b06f9c1b4bf97104c8df45745a3";
 const devFallback = (v: string[], dev: string) =>
   v.length === 0 && process.env.NODE_ENV !== "production" ? [dev] : v;
 

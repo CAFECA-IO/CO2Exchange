@@ -1,7 +1,9 @@
 import NextAuth, { type NextAuthConfig } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { cookies } from "next/headers";
-import { getAddress, isAddress, keccak256, toBytes } from "viem";
+import { getAddress, isAddress } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { devKeyOf } from "@/lib/server/dev-key";
 import { verifySignIn, type SignInResponse } from "@/lib/server/cafeca/verify";
 import { NONCE_COOKIE } from "@/app/api/auth/cafeca/nonce/route";
 
@@ -82,7 +84,7 @@ if (process.env.NODE_ENV !== "production") {
         // 同一個代號每次都是同一個帳戶。
         const address = isAddress(raw)
           ? getAddress(raw)
-          : getAddress(`0x${keccak256(toBytes(`co2x:dev:${raw.toLowerCase()}`)).slice(-40)}`);
+          : privateKeyToAccount(devKeyOf(raw)).address;
         return { id: address, name: isAddress(raw) ? `${address.slice(0, 6)}…${address.slice(-4)}` : raw, email: null, kycLevel: 2 } as never;
       },
     }),

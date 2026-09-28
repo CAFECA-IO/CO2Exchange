@@ -5,6 +5,8 @@ import { registryWriteAbi } from "@/lib/abis";
 import { deployment, publicClient, relayerClient, requireOwnKey } from "./chain";
 import { submit } from "./tx";
 import { ApiError } from "./api";
+import { ledgerEnabled } from "./ledger/view";
+import { ledgerIssue } from "./ledger/registry";
 
 export type IssuanceRequest = {
   id: string; createdAt: string; updatedAt: string;
@@ -28,6 +30,11 @@ export async function signAndIssue(r: IssuanceRequest) {
   const serial = `TW-P${r.projectId}-${r.monitoringStart}-${r.monitoringEnd}-${r.amountKg}`;
   const serialHash = keccak256(toBytes(serial));
   const attestationId = BigInt(keccak256(toBytes(r.id))) >> 8n;
+  // 帳本 v2：查驗機構簽一筆 issue 事件，額度記在帳本裡，不鑄 1155
+  if (ledgerEnabled()) {
+    const out = await ledgerIssue({ projectId: BigInt(r.projectId), monitoringStart: start, monitoringEnd: end, amountKg: BigInt(r.amountKg), serialHash, reportHash: r.reportHash, attestationId });
+    return { ...out, serialHash, serial };
+  }
   const a = { projectId: BigInt(r.projectId), monitoringStart: start, monitoringEnd: end, amountKg: BigInt(r.amountKg), serialHash, reportHash: r.reportHash, attestationId, deadline: BigInt(Math.floor(Date.now() / 1000) + 3600) };
   const signature = await carbonVerifier.signTypedData({
     domain: { name: "CO2Exchange CarbonRegistry", version: "1", chainId: d.chainId, verifyingContract: d.carbonRegistry },

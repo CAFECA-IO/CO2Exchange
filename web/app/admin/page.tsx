@@ -10,6 +10,8 @@ import { MarketMakerPanel } from "@/components/admin/MarketMakerPanel";
 type KycReq = { id: string; account: string; tier: number; idNumberMasked: string; name: string; submittedBy: string; status: string; reason?: string; txHash?: string; createdAt: string; decidedBy?: string };
 type Cert = { certId: number; batchId: number; amountKg: number; beneficiary: string; purpose: number; retiredAt: number; owner: string; pdfHash: string | null; onchainHash: string | null; anchored: boolean };
 type Gov = {
+  /// 帳本 v2 才有：鏈上只剩帳本合約，信任根是授權金鑰清單
+  ledger?: { address: string; committer: string | null; committerOk: boolean | null; authorities: { role: string; account: string; since: string }[] };
   matrix: { name: string; address: string; admin: boolean; sovereign: boolean | null; operator: boolean | null }[];
   hasV4: boolean;
   poolManagerOwner: string | null; poolManagerOwnerIsTimelock: boolean; listingPaused: boolean; poolPaused: boolean; trustedRouter: string | null; swapsEnabled: boolean;
@@ -229,13 +231,33 @@ export default function AdminPage() {
                 <tr key={m.name} className="border-t border-ink-500"><td className="py-1">{m.name} <span className="font-mono text-xs text-ink-300">{m.address.slice(0, 8)}…</span></td><td><Bool v={m.admin} /></td><td><Bool v={m.sovereign} /></td><td><Bool v={m.operator} /></td></tr>
               ))}</tbody>
             </table>
-            <p className="mt-2 text-xs">
-              Listing 暫停 {gov.listingPaused ? "是" : "否"} · Pool 暫停 {gov.poolPaused ? "是" : "否"}
-              {gov.hasV4
-                ? <> · PoolManager owner = Timelock <Bool v={gov.poolManagerOwnerIsTimelock} /> · v4 swap {gov.swapsEnabled ? "開啟" : "關閉"}</>
-                : <> · v4 模組未部署（此鏈不支援 EIP-1153，以 SKIP_V4 部署）</>}
-            </p>
+            {gov.ledger ? (
+              <p className="mt-2 text-xs">
+                帳本合約 v2：鏈上只放承諾、授權金鑰清單與結算幣託管。
+                承諾提交者 <span className="font-mono">{gov.ledger.committer ? `${gov.ledger.committer.slice(0, 10)}…` : "—"}</span> <Bool v={gov.ledger.committerOk} />
+              </p>
+            ) : (
+              <p className="mt-2 text-xs">
+                Listing 暫停 {gov.listingPaused ? "是" : "否"} · Pool 暫停 {gov.poolPaused ? "是" : "否"}
+                {gov.hasV4
+                  ? <> · PoolManager owner = Timelock <Bool v={gov.poolManagerOwnerIsTimelock} /> · v4 swap {gov.swapsEnabled ? "開啟" : "關閉"}</>
+                  : <> · v4 模組未部署（此鏈不支援 EIP-1153，以 SKIP_V4 部署）</>}
+              </p>
+            )}
           </Card>
+          {gov.ledger && (
+            <Card title="授權金鑰清單（國家 Safe 管理）" className="md:col-span-2">
+              <table className="w-full text-xs">
+                <thead className="text-left text-ink-300"><tr><th className="py-1">角色</th><th>金鑰</th><th>自區塊</th></tr></thead>
+                <tbody>{gov.ledger.authorities.map((a) => (
+                  <tr key={`${a.role}-${a.account}`} className="border-t border-ink-500"><td className="py-1">{a.role}</td><td className="font-mono">{a.account}</td><td className="tnum">{a.since}</td></tr>
+                ))}</tbody>
+              </table>
+              <p className="mt-2 text-xs leading-6 text-ink-300">
+                帳本裡每一筆授權事件都要由這張清單上、且在收單當時有效的金鑰簽署；查核時依鏈上的授權歷史逐筆重驗。
+              </p>
+            </Card>
+          )}
           <Card title={`國家單位 Safe（${gov.nationalSafe.threshold}-of-${gov.nationalSafe.owners.length}）`}>
             <div className="font-mono text-xs break-all">{gov.nationalSafe.address}</div>
             <ul className="mt-2 font-mono text-xs">{gov.nationalSafe.owners.map((o) => <li key={o}>{o}</li>)}</ul>

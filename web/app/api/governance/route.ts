@@ -4,6 +4,8 @@ import { deployment, publicClient } from "@/lib/server/chain";
 import { hasV4 } from "@/lib/deployment";
 import { requireRole } from "@/lib/server/roles";
 import { handleError, ok } from "@/lib/server/api";
+import { ledgerEnabled } from "@/lib/server/ledger/view";
+import { readAuthorities } from "@/lib/ledger/chain";
 
 const ADMIN = "0x0000000000000000000000000000000000000000000000000000000000000000" as const;
 const SOV = keccak256(toBytes("SOVEREIGN_ROLE")); const OP = keccak256(toBytes("OPERATOR_ROLE"));
@@ -16,6 +18,47 @@ export async function GET() {
     await requireRole("admin");
     const d = deployment() as ReturnType<typeof deployment> & { nationalSafe: Address; operatorSafe: Address; timelock: Address };
     const has = (a: Address, role: `0x${string}`, who: Address) => publicClient.readContract({ address: a, abi: accessControlAbi, functionName: "hasRole", args: [role, who] });
+    const common = () => Promise.all([
+      publicClient.readContract({ address: d.nationalSafe, abi: safeViewAbi, functionName: "getOwners" }),
+      publicClient.readContract({ address: d.nationalSafe, abi: safeViewAbi, functionName: "getThreshold" }),
+      publicClient.readContract({ address: d.operatorSafe, abi: safeViewAbi, functionName: "getOwners" }),
+      publicClient.readContract({ address: d.operatorSafe, abi: safeViewAbi, functionName: "getThreshold" }),
+      publicClient.readContract({ address: d.timelock, abi: timelockAbi, functionName: "getMinDelay" }),
+    ]);
+    const timelockOps = async () => {
+      const scheduled = await publicClient.getLogs({ address: d.timelock, event: timelockAbi[3], fromBlock: BigInt(d.deployedAtBlock ?? 0) });
+      return Promise.all(scheduled.map(async (l) => {
+        const id = l.args.id!;
+        const [st, ts] = await Promise.all([
+          publicClient.readContract({ address: d.timelock, abi: timelockAbi, functionName: "getOperationState", args: [id] }),
+          publicClient.readContract({ address: d.timelock, abi: timelockAbi, functionName: "getTimestamp", args: [id] }),
+        ]);
+        return { id, target: l.args.target, data: l.args.data, state: STATE[st], readyAt: Number(ts), txHash: l.transactionHash };
+      }));
+    };
+
+    // 帳本 v2：鏈上只剩帳本合約＋治理。角色矩陣只有一列，另外列出授權金鑰清單（信任根）
+    if (ledgerEnabled()) {
+      const ledger = d.ledger!;
+      const COMMITTER = keccak256(toBytes("COMMITTER_ROLE"));
+      const [natOwners, natThreshold, opOwners, opThreshold, delay] = await common();
+      const auth = await readAuthorities(publicClient, ledger, { fromBlock: BigInt(d.deployedAtBlock ?? 0) });
+      const tlRoles = { proposer: await has(d.timelock, PROPOSER, d.nationalSafe), executor: await has(d.timelock, EXECUTOR, d.nationalSafe), canceller: await has(d.timelock, CANCELLER, d.nationalSafe) };
+      return ok({
+        ledger: {
+          address: ledger,
+          committer: d.committer ?? null,
+          committerOk: d.committer ? await has(ledger, COMMITTER, d.committer) : null,
+          authorities: auth.grants.filter((g) => g.until === null).map((g) => ({ role: g.role, account: g.account, since: g.from })),
+        },
+        hasV4: false,
+        matrix: [{ name: "ledger", address: ledger, admin: await has(ledger, ADMIN, d.timelock), sovereign: await has(ledger, SOV, d.nationalSafe), operator: await has(ledger, OP, d.operatorSafe) }],
+        poolManagerOwner: null, poolManagerOwnerIsTimelock: false, listingPaused: false, poolPaused: false, trustedRouter: null, swapsEnabled: false,
+        nationalSafe: { address: d.nationalSafe, owners: natOwners, threshold: Number(natThreshold) },
+        operatorSafe: { address: d.operatorSafe, owners: opOwners, threshold: Number(opThreshold) },
+        timelock: { address: d.timelock, delay: Number(delay), ...tlRoles, operations: (await timelockOps()).reverse() },
+      });
+    }
     const v4 = hasV4(d); // SKIP_V4 部署：沒有 PoolManager / hook / router
     const withOp = ([["kycRegistry", d.kycRegistry], ["retirementCertificate", d.retirementCertificate], ["listing", d.listing], ["carbonPool", d.carbonPool], ...(v4 ? [["hook", d.hook]] : [])] as [string, Address][]);
     const sovOnly = [["carbonCredit1155", d.carbonCredit1155], ["carbonRegistry", d.carbonRegistry]] as const;

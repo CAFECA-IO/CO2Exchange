@@ -1,4 +1,6 @@
 import "server-only";
+import { ledgerEnabled } from "../ledger/view";
+import { ledgerCertificates, ledgerFees, ledgerIdentity } from "../ledger/registry";
 import type { FaithTool } from "./provider";
 import { byCountry } from "../by-country";
 import { holdings, listBids, listOrders } from "../market";
@@ -134,9 +136,11 @@ export const TOOLS: { spec: FaithTool; run: Impl; needsLogin?: boolean }[] = [
     },
     needsLogin: true,
     run: async (_a, ctx) => {
-      const id = await publicClient.readContract({
-        address: deployment().kycRegistry, abi: kycRegistryAbi, functionName: "identityOf", args: [ctx.address!],
-      });
+      const id = ledgerEnabled()
+        ? ledgerIdentity(ctx.address!)
+        : await publicClient.readContract({
+          address: deployment().kycRegistry, abi: kycRegistryAbi, functionName: "identityOf", args: [ctx.address!],
+        });
       const latest = all<KycRequest>("kyc-requests")
         .filter((r) => r.account.toLowerCase() === ctx.address!.toLowerCase())
         .sort((x, y) => y.createdAt.localeCompare(x.createdAt))[0] ?? null;
@@ -173,6 +177,12 @@ export const TOOLS: { spec: FaithTool; run: Impl; needsLogin?: boolean }[] = [
     },
     needsLogin: true,
     run: async (_a, ctx) => {
+      if (ledgerEnabled()) {
+        return ledgerCertificates(ctx.address!).slice(0, 30).map((c) => ({
+          certId: c.certId, batchId: c.batchId, amountKg: c.amountKg, purpose: c.purpose, purposeLabel: PURPOSE_LABEL[c.purpose] ?? "未知",
+          retiredAt: c.retiredAt, officialNo: c.officialNo || null, officialAnnouncedAt: c.officialAnnouncedAt || null,
+        }));
+      }
       const d = deployment();
       // 用額度合約的 CreditRetired 而不是憑證合約的事件：兩邊都記得這件事，
       // 但共用的那一個已經在 lib/abis 的 EVENTS 裡，抄第二份遲早會跟它不一致。
@@ -203,6 +213,15 @@ export const TOOLS: { spec: FaithTool; run: Impl; needsLogin?: boolean }[] = [
     run: async (a) => {
       const c = str(a.country).toUpperCase().slice(0, 2);
       if (!/^[A-Z]{2}$/.test(c)) return { error: "country 要是兩碼英文國別，例如 TW。" };
+      if (ledgerEnabled()) {
+        const f = ledgerFees();
+        const row = f.rows.find((r) => r.country === c);
+        return {
+          country: c, overridden: row?.custom ?? false,
+          tradeFeeBps: row?.tradeBps ?? f.defaultTradeBps, retireFeePerTonne: row?.retireFeePerTonne ?? f.defaultRetireFeePerTonne,
+          note: "retireFeePerTonne 單位是結算幣最小單位（1e6 = 1 元），每公噸。overridden=false 代表這一國沿用平台預設值。",
+        };
+      }
       const d = deployment();
       // 各國可以覆寫，沒設就用預設值——回答時這個差別要講出來，
       // 否則「日本的費率是多少」會得到一個看起來是特別設定、其實是預設的數字。

@@ -4,11 +4,14 @@ import { deployment, isAddress, publicClient } from "@/lib/server/chain";
 import { fail, handleError, ok } from "@/lib/server/api";
 import { countryCode } from "@/lib/deployment";
 import { addWorkingDays } from "@/lib/server/bulletin";
+import { ledgerEnabled } from "@/lib/server/ledger/view";
+import { ledgerCertificates } from "@/lib/server/ledger/registry";
 
 export async function GET(req: Request) {
   const account = new URL(req.url).searchParams.get("account");
   if (!isAddress(account)) return fail("INVALID_ADDRESS", { details: { param: "account" } });
   try {
+  if (ledgerEnabled()) return ok({ certificates: ledgerCertificates(account) });
   const d = deployment();
   const logs = await publicClient.getLogs({
     address: d.retirementCertificate,

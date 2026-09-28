@@ -10,6 +10,7 @@ import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/componen
 import { erc1155ApprovalAbi, listingWriteAbi, poolWriteAbi, registryWriteAbi } from "@/lib/abis";
 import { type Call } from "@/lib/client/cafeca";
 import { fetchJson, postJson } from "@/lib/client/fetchJson";
+import { outcomeText, useLedger } from "@/lib/client/ledger";
 
 type Project = { projectId: number; name: string; methodology: string; location: string; active: boolean };
 type Issuance = { id: string; projectId: number; projectName: string; monitoringStart: string; monitoringEnd: string; amountKg: number; reportName: string; reportHash: string; reportFile: string; status: string; reason?: string; batchId?: number; txHash?: string; createdAt: string };
@@ -42,6 +43,7 @@ export default function EnterprisePage() {
   const [depositKg, setDepositKg] = useState<Record<number, string>>({});
 
   const [reloadKey, reload] = useReload();
+  const lg = useLedger();
   // 上架前必須簽代辦費用約定書（每噸減免與追繳）與買賣契約。
   const listGate = useAgreementGate(wallet?.address, ["platform-terms", "service-fee", "trade-agreement"]);
   useEffect(() => {
@@ -63,9 +65,9 @@ export default function EnterprisePage() {
       }
     })();
     return () => { ignore = true; };
-  }, [wallet, reloadKey]);
+  }, [wallet, reloadKey, lg.me?.head.seq]);
 
-  if (!userId || !wallet || !channelOpen || !config) return <AccountGate />;
+  if (!userId || !wallet || !config || (!channelOpen && !(lg.enabled && lg.devSigning))) return <AccountGate />;
   if (tier !== 2) return <Notice>企業功能需要法人身分。請到<Link className="underline" href="/kyc">身分驗證</Link>以工商憑證驗證。</Notice>;
   const d = config.deployment;
 
@@ -82,8 +84,25 @@ export default function EnterprisePage() {
     finally { setBusy(null); }
   }
 
+  /// 帳本 v2：使用者簽一則訊息，不送鏈上交易
+  async function ledgerAct(label: string, kind: "place" | "cancel" | "project", fields: Record<string, unknown>, detail: string, after?: () => Promise<unknown>) {
+    setBusy(label); setMsg(null);
+    try {
+      const r = await lg.submit(kind, fields, { title: label, detail });
+      if (r.accepted && after) await after();
+      setMsg(outcomeText(r, label));
+      reload();
+    } catch (e) { setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) }); }
+    finally { setBusy(null); }
+  }
+
   function registerProject(e: React.FormEvent) {
     e.preventDefault();
+    if (lg.enabled) {
+      ledgerAct(`登錄專案「${pf.name}」`, "project", { name: pf.name, methodology: pf.methodology, location: pf.location, metadataURI: pf.metadataURI },
+        `方法學 ${pf.methodology}；地點 ${pf.location}。專案登錄記進帳本。`);
+      return;
+    }
     relay(`登錄專案「${pf.name}」`, [{ target: d.carbonRegistry, value: 0n, data: encodeFunctionData({ abi: registryWriteAbi, functionName: "registerProject", args: [pf.name, pf.methodology, pf.location, pf.metadataURI] }) }]);
   }
 
@@ -107,6 +126,14 @@ export default function EnterprisePage() {
   function list(h: Holding) {
     const f = listForm[h.batchId] ?? { tonnes: String(h.kg / 1000), price: "800", minFill: "0.1", usageDeadline: "" };
     const kg = BigInt(Math.min(h.kg, Math.max(1, Math.round(Number(f.tonnes) * 1000))));
+    if (lg.enabled) {
+      ledgerAct(`掛單批次 #${h.batchId} ${fmtKg(Number(kg))}`, "place", {
+        side: "sell", batchId: h.batchId, amountKg: kg.toString(), pricePerTonne: Math.round(Number(f.price) * 1e6), minFillKg: Math.max(0, Math.round(Number(f.minFill) * 1000)),
+      }, `每噸 ${f.price} 元。委託單記進帳本。`, () => postJson("/api/listing-meta", {
+        batchId: h.batchId, seller: wallet!.address, usageDeadline: f.usageDeadline, amountKg: Number(kg),
+      }));
+      return;
+    }
     relay(`掛單批次 #${h.batchId} ${fmtKg(Number(kg))}`, [
       { target: d.carbonCredit1155, value: 0n, data: encodeFunctionData({ abi: erc1155ApprovalAbi, functionName: "setApprovalForAll", args: [d.listing, true] }) },
       { target: d.listing, value: 0n, data: encodeFunctionData({ abi: listingWriteAbi, functionName: "list", args: [BigInt(h.batchId), kg, BigInt(Math.round(Number(f.price) * 1e6)), BigInt(Math.max(0, Math.round(Number(f.minFill) * 1000)))] }) },
@@ -124,6 +151,10 @@ export default function EnterprisePage() {
   }
 
   function cancel(o: Order) {
+    if (lg.enabled) {
+      ledgerAct(`取消掛單 #${o.orderId}`, "cancel", { orderSeq: o.orderId }, "未成交的部分退回可動用餘額。");
+      return;
+    }
     relay(`取消掛單 #${o.orderId}`, [{ target: d.listing, value: 0n, data: encodeFunctionData({ abi: listingWriteAbi, functionName: "cancel", args: [BigInt(o.orderId)] }) }]);
   }
 
@@ -185,7 +216,7 @@ export default function EnterprisePage() {
         )}
       </Card>
 
-      <Card title="我的額度批次：掛單或入池">
+      <Card title={lg.enabled ? "我的額度批次：掛單" : "我的額度批次：掛單或入池"}>
         <div className="mb-3 space-y-2">
           <p className="text-xs leading-6 text-ink-300">
             上架本交易所的額度，其代辦服務費適用每噸減免；未上架或不配合官方移轉者不適用，已減免部分將依約定書追繳。
@@ -206,9 +237,12 @@ export default function EnterprisePage() {
                     <Field label="最小成交（噸）"><input className={`${inputCls} w-28`} type="number" step="0.001" value={f.minFill} onChange={(e) => setListForm({ ...listForm, [h.batchId]: { ...f, minFill: e.target.value } })} /></Field>
                     <Field label="使用期限"><input className={`${inputCls} w-36`} type="date" value={f.usageDeadline} onChange={(e) => setListForm({ ...listForm, [h.batchId]: { ...f, usageDeadline: e.target.value } })} /></Field>
                     <Button onClick={async () => { await listGate.accept(`batch:${h.batchId}`); list(h); }} disabled={!!busy || !listGate.ok}>掛單</Button>
-                    <span className="mx-2 text-ink-300">|</span>
-                    <Field label="入池 kg"><input className={`${inputCls} w-28`} type="number" value={depositKg[h.batchId] ?? String(h.kg)} onChange={(e) => setDepositKg({ ...depositKg, [h.batchId]: e.target.value })} /></Field>
-                    <Button variant="secondary" onClick={() => deposit(h)} disabled={!!busy}>入池換 CCT</Button>
+                    {/* 帳本 v2 沒有資產池與 CCT：額度只在帳本裡，交易走掛單簿 */}
+                    {!lg.enabled && <>
+                      <span className="mx-2 text-ink-300">|</span>
+                      <Field label="入池 kg"><input className={`${inputCls} w-28`} type="number" value={depositKg[h.batchId] ?? String(h.kg)} onChange={(e) => setDepositKg({ ...depositKg, [h.batchId]: e.target.value })} /></Field>
+                      <Button variant="secondary" onClick={() => deposit(h)} disabled={!!busy}>入池換 CCT</Button>
+                    </>}
                   </div>
                 </li>
               );

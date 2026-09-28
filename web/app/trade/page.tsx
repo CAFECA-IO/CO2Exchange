@@ -9,9 +9,10 @@ import { AgreementCheck, useAgreementGate } from "@/components/AgreementGate";
 import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/components/ui";
 import { ParticipantBadge } from "@/components/ParticipantBadge";
 import { bidWriteAbi, erc1155ApprovalAbi, erc20Abi, listingAbi, listingWriteAbi, poolAbi, routerAbi } from "@/lib/abis";
-import { flagOf } from "@/lib/deployment";
 import { type Call } from "@/lib/client/cafeca";
 import { fetchJson, postJson } from "@/lib/client/fetchJson";
+import { flagOf, isLedgerV2 } from "@/lib/deployment";
+import { LedgerTrade } from "@/components/ledger/LedgerTrade";
 
 /// 交易頁：買進與賣出同一頁，各自再分限價與市價。
 ///
@@ -65,7 +66,15 @@ function CountryTag({ code, scheme, className = "" }: { code: string; scheme?: s
   );
 }
 
+/// 帳本 v2 的部署走帳本版本（簽委託單，不送鏈上交易）；舊部署維持原樣。
+/// 分成兩個元件而不是在同一個元件裡分支：兩邊的 hooks 完全不同，混在一起違反 hooks 的呼叫順序。
 export default function TradePage() {
+  const { config } = useAccount();
+  if (config && isLedgerV2(config.deployment)) return <LedgerTrade />;
+  return <LegacyTrade />;
+}
+
+function LegacyTrade() {
   const { wallet, channelOpen, config, userId, tier, relay: send } = useAccount();
   const [m, setM] = useState<Market | null>(null);
   // 訊息連同「它講的是哪一個地址」一起存。

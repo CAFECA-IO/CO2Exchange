@@ -3,6 +3,8 @@ import { parseAbiItem, type Address, type Hex } from "viem";
 import { certificateAbi, creditAbi, registryAbi } from "@/lib/abis";
 import { deployment, publicClient } from "./chain";
 import type { CertData } from "./certpdf";
+import { ledgerEnabled } from "./ledger/view";
+import { ledgerCertData } from "./ledger/registry";
 
 const retiredEvent = parseAbiItem("event Retired(uint256 indexed certId, uint256 indexed batchId, address indexed retiredBy, address owner, uint256 amountKg, bytes32 beneficiaryHash, uint8 purpose, bytes2 country)");
 
@@ -11,6 +13,7 @@ export async function retiredLogs() {
 }
 
 export async function certData(certId: number): Promise<CertData> {
+  if (ledgerEnabled()) return ledgerCertData(certId);
   const d = deployment();
   const logs = await retiredLogs();
   const log = logs.find((l) => Number(l.args.certId) === certId);
