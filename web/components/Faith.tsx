@@ -29,7 +29,7 @@ import { outcomeText, useLedger } from "@/lib/client/ledger";
 type Row = { label: string; value: string; emphasis?: boolean };
 type Action = {
   kind: string; title: string; rows: Row[]; warnings: string[];
-  href?: string; calls?: { target: `0x${string}`; value: string; data: `0x${string}` }[];
+  href?: string;
   /// 帳本 v2：要簽的那一筆帳本事件的欄位（/api/ledger 組 typed data，CAFECA 錢包簽）
   ledger?: { kind: "place" | "cancel" | "retire"; fields: Record<string, string | number> };
   /// 帳本 v2 的領水：領到之後存進帳本合約的數量（最小單位）
@@ -75,7 +75,7 @@ export function Faith() {
   const [busy, setBusy] = useState(false);
   const path = usePathname();
   const router = useRouter();
-  const { relay, wallet } = useAccount();
+  const { wallet } = useAccount();
   const ledger = useLedger();
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -130,7 +130,7 @@ export function Faith() {
         return;
       }
 
-      // ③ 執行。兩條路：平台代送的領水，以及要使用者在 CAFECA 錢包確認的那一類。
+      // ③ 執行。兩條路：簽一則帳本事件，以及領水後存進帳本合約。
       //
       // 「凍結錢包」這條路沒有了：金鑰與帳戶的生命週期在 CAFECA 錢包裡，
       // 本站沒有能力、也不該有能力凍結別人的身分。助理改成把人帶過去
@@ -148,26 +148,15 @@ export function Faith() {
         if (!ledger.devSigning) await postJson("/api/faucet", { account: wallet.address });
         await ledger.deposit(BigInt(fresh.deposit));
         note = "已領取測試用 mTWD，並存進帳本合約。";
-      } else if (a.kind === "claim_faucet") {
-        if (!wallet) throw new Error("還沒讀到你的帳戶");
-        await postJson("/api/faucet", { account: wallet.address });
-        note = "已領取測試用 mTWD。";
       } else {
-        if (!fresh.calls?.length) throw new Error("這個動作沒有可執行的內容");
-        const out = await relay(
-          fresh.calls.map((c) => ({ target: c.target, value: BigInt(c.value), data: c.data })),
-          // 說明用助理自己給這個動作的標題與理由：錢包會把它標成「網站說明」，
-          // 並在下面列出它解析出來的實際操作供使用者核對，所以兩者要一致。
-          { title: a.title, detail: a.why },
-        );
-        note = `已送出，交易 ${out.txHash.slice(0, 10)}…`;
+        throw new Error("這個動作沒有可執行的內容");
       }
       setMsgs((m) => m.map((x, i) => (i === idx && x.role === "assistant" ? { ...x, action: undefined, done: note } : x)));
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
       setMsgs((m) => m.map((x, i) => (i === idx && x.role === "assistant" ? { ...x, failed: why } : x)));
     } finally { setBusy(false); }
-  }, [ledger, relay, router, wallet]);
+  }, [ledger, router, wallet]);
 
   const suggestions = SUGGESTIONS[path ?? "/"] ?? DEFAULT_SUGGESTIONS;
 

@@ -152,7 +152,7 @@ const desc = (d: Description) => ({
 
 /// 請使用者簽一筆 EIP-712。
 ///
-/// **typedData 必須是伺服器與前端共用的那一份**（`lib/bank/order-typed.ts`）：
+/// **typedData 必須是伺服器與前端共用的那一份**（`lib/ledger/typed.ts`）：
 /// 兩邊各組一份是這類協定最常見的壞法，欄位順序差一個 digest 就不一樣，
 /// 而錯誤訊息只會說「簽章無效」。
 export async function signTypedDataViaChannel(typedData: unknown, description: Description): Promise<`0x${string}`> {

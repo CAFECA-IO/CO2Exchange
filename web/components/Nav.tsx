@@ -16,8 +16,9 @@ const base = [
   ["/retire", "註銷"],
   ["/registry", "公告欄"],
   ["/custody", "託管揭露"],
+  ["/transparency", "透明度"],
   ["/agreements", "契約"],
-  ["/account", "裝置與安全"],
+  ["/account", "帳戶"],
 ] as const;
 
 /// 點下去到新頁畫出來之間，導覽列上那個連結旁邊亮一個點。

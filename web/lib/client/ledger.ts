@@ -3,7 +3,6 @@ import { useCallback, useEffect, useState } from "react";
 import { encodeFunctionData, parseAbi, type Hex } from "viem";
 import { PROOF_ABI } from "@/lib/ledger/chain";
 import { useAccount } from "@/components/AccountProvider";
-import { isLedgerV2 } from "@/lib/deployment";
 import { fetchJson, postJson } from "./fetchJson";
 import { useReload } from "./useReload";
 
@@ -59,7 +58,7 @@ const LEDGER_CASH_ABI = parseAbi([
 
 export function useLedger() {
   const { config, userId, wallet, signTypedData, relay } = useAccount();
-  const enabled = !!config && isLedgerV2(config.deployment);
+  const enabled = !!config;
   const [me, setMe] = useState<{ key: string; value: LedgerMe } | null>(null);
   const [key, reload] = useReload();
   const who = `${userId ?? ""}|${wallet?.address ?? ""}|${key}`;
@@ -89,8 +88,7 @@ export function useLedger() {
   /// 存入結算幣：鏈上轉帳（使用者自己的帳戶執行），然後請伺服器把那筆存入鏡像進帳本。
   const deposit = useCallback(async (amount: bigint) => {
     if (!config) throw new Error("設定還沒讀到");
-    const d = config.deployment as { settlementToken: `0x${string}`; ledger?: `0x${string}` };
-    if (!d.ledger) throw new Error("部署檔裡沒有帳本合約");
+    const d = config.deployment;
     if (current?.devSigning) {
       await postJson("/api/ledger", { op: "devDeposit", amount: amount.toString() });
     } else {

@@ -20,12 +20,12 @@ import { NONCE_COOKIE } from "@/app/api/auth/cafeca/nonce/route";
 /// 沒有推導、沒有對照表、沒有中間那條黏線。換裝置、換 passkey、以實體卡恢復之後
 /// 地址都不變，因為那是合約地址，不是金鑰的函數。
 ///
-/// 這樣做同時解掉一個舊問題並帶來一個新限制：
-///   · 解掉：`accountRef` 的信箱重配發風險，以及「登入身分」與「錢包身分」是兩套東西。
-///   · 新限制：**CAFECA 的登入通道依設計只簽 SignIn 這一種結構**，不會替本站簽任意訊息。
-///     所以委託單簽章（未完成事項 2.1）並沒有因此補上——反而少了本站自己的 passkey
-///     這條路。要補，需要 CAFECA 開放 dapp 簽章通道。在那之前，
-///     「這張單是這個帳戶下的」靠的仍然是 session，對外文件不要說成簽章驗證。
+/// 這樣做解掉了 `accountRef` 的信箱重配發風險，以及「登入身分」與「錢包身分」是兩套東西。
+///
+/// 登入只證明「你是誰」。委託、撤單、註銷與提領請求另外走 CAFECA 的**簽章通道**
+///（`sign_typed_data`，登入時徵詢使用者是否開啟）：每一筆都是使用者在錢包裡逐欄核對後簽的
+/// EIP-712 訊息，帳本收單時驗簽（lib/ledger/signatures.ts）。session 只決定能不能開那個頁面，
+/// 不能替任何人下單。
 const providers: NextAuthConfig["providers"] = [];
 export const providerIds: string[] = ["cafeca"];
 

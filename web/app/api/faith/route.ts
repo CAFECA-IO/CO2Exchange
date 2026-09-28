@@ -4,8 +4,6 @@ import { systemPrompt } from "@/lib/server/faith/prompt";
 import { buildAction, isActionKind, type ActionKind } from "@/lib/server/faith/actions";
 import { me } from "@/lib/server/roles";
 import { ApiError, handleError, ok } from "@/lib/server/api";
-import { walletOf } from "@/lib/server/wallet";
-import { ledgerEnabled } from "@/lib/server/ledger/view";
 
 /// 費思的對話端點。工具迴圈跑在**伺服器端**，不是前端。
 ///
@@ -64,10 +62,9 @@ export async function POST(req: Request) {
     const recent = history.slice(-12);
 
     const who = await me();
-    const wallet = who && !ledgerEnabled() ? await walletOf(who.address).catch(() => null) : null;
     const ctx: Ctx = {
-      // 帳本版：帳戶就是登入的地址（CAFECA 帳戶或本機的開發帳戶都能簽帳本委託）；舊版要有鏈上錢包合約
-      address: ledgerEnabled() ? who?.address : wallet?.exists ? wallet.address : undefined,
+      // 帳戶就是登入的地址（CAFECA 帳戶或本機的開發帳戶都能簽帳本委託）
+      address: who?.address,
       userId: who?.id,
       path: typeof body.path === "string" ? body.path.slice(0, 120) : undefined,
     };

@@ -14,6 +14,7 @@ const LINKS = [
   ["/agreements/terms-of-service", "服務條款"],
   ["/agreements", "契約與條款"],
   ["/custody", "託管揭露"],
+  ["/transparency", "透明度與驗證"],
   ["/about", "認識碳權"],
 ] as const;
 

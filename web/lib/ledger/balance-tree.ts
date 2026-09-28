@@ -6,7 +6,7 @@ import { encodePacked, keccak256, type Address, type Hex } from "viem";
 /// 在自己的瀏覽器裡驗證自己那份證據——「你不必相信我們」這句話要成立，
 /// 驗證的程式碼就得跑得到使用者手上。
 ///
-/// **這個檔案必須和 `src/bank/MerkleSumTree.sol` 逐位元組一致。**
+/// **這個檔案必須和 `src/ledger/MerkleSumTree.sol` 逐位元組一致。**
 /// 不一致的後果不是「測試紅一條」，是使用者拿著正確的餘額卻領不到錢——
 /// 而且要等到有人真的去提領才會發現。所以有一支跨語言一致性測試
 /// （`test/BankTree.t.sol` 讀 `web/scripts/gen-tree-fixture.mjs` 產生的 fixture），
@@ -149,7 +149,7 @@ export type BalanceProof = {
 export type BalanceTree = {
   root: Node;
   epoch: bigint;
-  /// 逐批次的總額明細。公開檔，讓任何人都能拿去和 Bank 的鏈上持有量逐批對照。
+  /// 逐批次的總額明細。公開檔，讓任何人都能拿去和登錄簿的流通量逐批對照。
   totalsByBatch: { batchId: bigint; kg: bigint }[];
   proofOf: (account: Address) => BalanceProof;
   assetProofOf: (account: Address, batchId: bigint) => { kg: bigint; siblings: Hex[]; path: bigint };

@@ -10,7 +10,7 @@ import { KIND, LOG_VERSION, payloadHash, type Event, type EventOf } from "./even
 /// 所以統一成一個型別：`LedgerEvent(version, kind, payload)`，payload 是事件內容的雜湊。
 /// 統一的好處是查核者只需要一支驗證程式，而且新增事件種類不必新增簽章格式。
 ///
-/// 兩個網域的 `verifyingContract` 都是帳本合約（Bank v2）：換一個部署就是不同的簽章，
+/// 兩個網域的 `verifyingContract` 都是帳本合約：換一個部署就是不同的簽章，
 /// 測試網簽的東西搬不到正式網。CAFECA 錢包拒絕指向使用者帳戶、EntryPoint 或 CAFECA 系統合約的
 /// 網域——帳本合約不是那幾類，語意上也對。
 ///

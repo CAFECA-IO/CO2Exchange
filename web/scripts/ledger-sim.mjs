@@ -46,7 +46,7 @@ if (!SIM_CHAINS.has(chainId)) { console.error(`chainId ${chainId} 不在 SIMULAT
 const chain = defineChain({ id: chainId, name: "co2x", nativeCurrency: { name: "N", symbol: "N", decimals: 18 }, rpcUrls: { default: { http: [RPC] } } });
 const pub = createPublicClient({ chain, transport: http(RPC), pollingInterval: LOCAL ? 50 : 1000 });
 const D = JSON.parse(fs.readFileSync(process.env.DEPLOYMENT_FILE ?? path.resolve(process.cwd(), "..", "deployments", `${chainId}.json`), "utf8"));
-if (D.ledgerVersion !== 2) { console.error("部署檔不是帳本 v2（script/DeployLedger.s.sol）。舊的全合約部署請用 simulate.mjs"); process.exit(1); }
+if (!D.ledger) { console.error("部署檔不是帳本部署（script/DeployLedger.s.sol）。請先 bash script/bootstrap.sh deploy"); process.exit(1); }
 const DATA = process.env.DATA_DIR ?? path.resolve(process.cwd(), "data");
 
 // ── 金鑰 ──

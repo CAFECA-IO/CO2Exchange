@@ -1,7 +1,7 @@
 import { keccak256, toBytes, type Address, type Hex } from "viem";
 import { ApiError, fail, handleError, ok } from "@/lib/server/api";
 import { refuseIfRecovering, requireRole } from "@/lib/server/roles";
-import { ledgerEnabled, ledgerView } from "@/lib/server/ledger/view";
+import { ledgerView } from "@/lib/server/ledger/view";
 import {
   appendUser, devDeposit, devSign, devSignerFor, domains, nextNonce, syncCash, userMessage, type UserBody,
 } from "@/lib/server/ledger/write";
@@ -85,7 +85,6 @@ const KINDS = new Set<UserKind>(["place", "cancel", "retire", "project", "withdr
 
 export async function GET() {
   try {
-    if (!ledgerEnabled()) return fail("DEPLOYMENT_MISMATCH", { message: "這個部署不是帳本 v2" });
     const m = await requireRole("user");
     const a = m.address.toLowerCase();
     const { state, head } = ledgerView();
@@ -115,7 +114,6 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    if (!ledgerEnabled()) return fail("DEPLOYMENT_MISMATCH", { message: "這個部署不是帳本 v2" });
     const m = await requireRole("user");
     const b = (await req.json()) as { op?: string; kind?: UserKind; fields?: Raw; nonce?: string; signature?: Hex };
 

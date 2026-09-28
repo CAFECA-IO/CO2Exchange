@@ -10,16 +10,14 @@ import { MarketMakerPanel } from "@/components/admin/MarketMakerPanel";
 type KycReq = { id: string; account: string; tier: number; idNumberMasked: string; name: string; submittedBy: string; status: string; reason?: string; txHash?: string; createdAt: string; decidedBy?: string };
 type Cert = { certId: number; batchId: number; amountKg: number; beneficiary: string; purpose: number; retiredAt: number; owner: string; pdfHash: string | null; onchainHash: string | null; anchored: boolean };
 type Gov = {
-  /// 帳本 v2 才有：鏈上只剩帳本合約，信任根是授權金鑰清單
-  ledger?: {
+  /// 鏈上只剩帳本合約，信任根是授權金鑰清單
+  ledger: {
     address: string; committer: string | null; committerOk: boolean | null;
     authorities: { role: string; account: string; since: string }[];
     thresholds: Record<string, number>;
     proposals: { id: string; kind: string; role: string; note: string; createdAt: string; required: number; collected: number; pending: string[] }[];
   };
   matrix: { name: string; address: string; admin: boolean; sovereign: boolean | null; operator: boolean | null }[];
-  hasV4: boolean;
-  poolManagerOwner: string | null; poolManagerOwnerIsTimelock: boolean; listingPaused: boolean; poolPaused: boolean; trustedRouter: string | null; swapsEnabled: boolean;
   nationalSafe: { address: string; owners: string[]; threshold: number }; operatorSafe: { address: string; owners: string[]; threshold: number };
   timelock: { address: string; delay: number; proposer: boolean; executor: boolean; canceller: boolean; operations: { id: string; target: string; data: string; state: string; readyAt: number; txHash: string }[] };
 };
@@ -238,59 +236,46 @@ export default function AdminPage() {
                 <tr key={m.name} className="border-t border-ink-500"><td className="py-1">{m.name} <span className="font-mono text-xs text-ink-300">{m.address.slice(0, 8)}…</span></td><td><Bool v={m.admin} /></td><td><Bool v={m.sovereign} /></td><td><Bool v={m.operator} /></td></tr>
               ))}</tbody>
             </table>
-            {gov.ledger ? (
-              <p className="mt-2 text-xs">
-                帳本合約 v2：鏈上只放承諾、授權金鑰清單與結算幣託管。
-                承諾提交者 <span className="font-mono">{gov.ledger.committer ? `${gov.ledger.committer.slice(0, 10)}…` : "—"}</span> <Bool v={gov.ledger.committerOk} />
-              </p>
-            ) : (
-              <p className="mt-2 text-xs">
-                Listing 暫停 {gov.listingPaused ? "是" : "否"} · Pool 暫停 {gov.poolPaused ? "是" : "否"}
-                {gov.hasV4
-                  ? <> · PoolManager owner = Timelock <Bool v={gov.poolManagerOwnerIsTimelock} /> · v4 swap {gov.swapsEnabled ? "開啟" : "關閉"}</>
-                  : <> · v4 模組未部署（此鏈不支援 EIP-1153，以 SKIP_V4 部署）</>}
-              </p>
-            )}
+            <p className="mt-2 text-xs">
+              帳本合約：鏈上只放承諾、授權金鑰清單與結算幣託管。
+              承諾提交者 <span className="font-mono">{gov.ledger.committer ? `${gov.ledger.committer.slice(0, 10)}…` : "—"}</span> <Bool v={gov.ledger.committerOk} />
+            </p>
           </Card>
-          {gov.ledger && (
-            <Card title="授權金鑰清單（國家 Safe 管理）" className="md:col-span-2">
+          <Card title="授權金鑰清單（國家 Safe 管理）" className="md:col-span-2">
+            <table className="w-full text-xs">
+              <thead className="text-left text-ink-300"><tr><th className="py-1">角色</th><th>門檻</th><th>金鑰</th><th>自區塊</th></tr></thead>
+              <tbody>{gov.ledger.authorities.map((a) => (
+                <tr key={`${a.role}-${a.account}`} className="border-t border-ink-500">
+                  <td className="py-1">{a.role}</td>
+                  <td className="tnum">{gov.ledger.thresholds[a.role] ?? 1}-of-{gov.ledger.authorities.filter((x) => x.role === a.role).length}</td>
+                  <td className="font-mono">{a.account}</td><td className="tnum">{a.since}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+            <p className="mt-2 text-xs leading-6 text-ink-300">
+              帳本裡每一筆授權事件都要由這張清單上、且在收單當時有效的金鑰簽署。主權、營運、查核角色是 k-of-n：
+              一筆事件要附上門檻數量的不同持有人簽章。查核時只用 ecrecover 與鏈上的授權歷史重驗，不讀任何歷史狀態。
+            </p>
+          </Card>
+          <Card title={`待簽署的授權事件（${gov.ledger.proposals.length}）`} className="md:col-span-2">
+            {gov.ledger.proposals.length === 0 ? <p className="text-sm text-ink-300">沒有進行中的提案。</p> : (
               <table className="w-full text-xs">
-                <thead className="text-left text-ink-300"><tr><th className="py-1">角色</th><th>門檻</th><th>金鑰</th><th>自區塊</th></tr></thead>
-                <tbody>{gov.ledger.authorities.map((a) => (
-                  <tr key={`${a.role}-${a.account}`} className="border-t border-ink-500">
-                    <td className="py-1">{a.role}</td>
-                    <td className="tnum">{gov.ledger!.thresholds[a.role] ?? 1}-of-{gov.ledger!.authorities.filter((x) => x.role === a.role).length}</td>
-                    <td className="font-mono">{a.account}</td><td className="tnum">{a.since}</td>
+                <thead className="text-left text-ink-300"><tr><th className="py-1">提案</th><th>事件</th><th>角色</th><th>簽署</th><th>還可以簽的持有人</th></tr></thead>
+                <tbody>{gov.ledger.proposals.map((p) => (
+                  <tr key={p.id} className="border-t border-ink-500">
+                    <td className="py-1 font-mono">{p.id}</td><td>{p.kind}<span className="ml-1 text-ink-300">{p.note}</span></td><td>{p.role}</td>
+                    <td className="tnum">{p.collected}/{p.required}</td>
+                    <td className="font-mono">{p.pending.map((a) => `${a.slice(0, 8)}…`).join(" ")}</td>
                   </tr>
                 ))}</tbody>
               </table>
-              <p className="mt-2 text-xs leading-6 text-ink-300">
-                帳本裡每一筆授權事件都要由這張清單上、且在收單當時有效的金鑰簽署。主權、營運、查核角色是 k-of-n：
-                一筆事件要附上門檻數量的不同持有人簽章。查核時只用 ecrecover 與鏈上的授權歷史重驗，不讀任何歷史狀態。
-              </p>
-            </Card>
-          )}
-          {gov.ledger && (
-            <Card title={`待簽署的授權事件（${gov.ledger.proposals.length}）`} className="md:col-span-2">
-              {gov.ledger.proposals.length === 0 ? <p className="text-sm text-ink-300">沒有進行中的提案。</p> : (
-                <table className="w-full text-xs">
-                  <thead className="text-left text-ink-300"><tr><th className="py-1">提案</th><th>事件</th><th>角色</th><th>簽署</th><th>還可以簽的持有人</th></tr></thead>
-                  <tbody>{gov.ledger.proposals.map((p) => (
-                    <tr key={p.id} className="border-t border-ink-500">
-                      <td className="py-1 font-mono">{p.id}</td><td>{p.kind}<span className="ml-1 text-ink-300">{p.note}</span></td><td>{p.role}</td>
-                      <td className="tnum">{p.collected}/{p.required}</td>
-                      <td className="font-mono">{p.pending.map((a) => `${a.slice(0, 8)}…`).join(" ")}</td>
-                    </tr>
-                  ))}</tbody>
-                </table>
-              )}
-              <p className="mt-2 text-xs leading-6 text-ink-300">
-                持有人以自己的錢包簽署（EIP-712）：<code>npm run ledger:authority -- show &lt;提案&gt;</code> 取得要簽的內容，
-                或在自己的 shell 以 <code>sign &lt;提案&gt; --key-env 變數名</code> 簽；收滿門檻後 <code>submit &lt;提案&gt;</code>。
-                持有人的私鑰不放在本站。
-              </p>
-            </Card>
-          )}
+            )}
+            <p className="mt-2 text-xs leading-6 text-ink-300">
+              持有人以自己的錢包簽署（EIP-712）：<code>npm run ledger:authority -- show &lt;提案&gt;</code> 取得要簽的內容，
+              或在自己的 shell 以 <code>sign &lt;提案&gt; --key-env 變數名</code> 簽；收滿門檻後 <code>submit &lt;提案&gt;</code>。
+              持有人的私鑰不放在本站。
+            </p>
+          </Card>
           <Card title={`國家單位 Safe（${gov.nationalSafe.threshold}-of-${gov.nationalSafe.owners.length}）`}>
             <div className="font-mono text-xs break-all">{gov.nationalSafe.address}</div>
             <ul className="mt-2 font-mono text-xs">{gov.nationalSafe.owners.map((o) => <li key={o}>{o}</li>)}</ul>

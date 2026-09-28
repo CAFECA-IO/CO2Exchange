@@ -12,41 +12,14 @@ gas_limit = "300000000"
 fs_permissions = [
   { access = "read", path = "./out" },
   { access = "read-write", path = "./deployments" },
-  # 餘額樹的跨語言一致性 fixture，由 web/scripts/gen-tree-fixture.mjs 產生
+  # 跨語言一致性 fixture，由 web/scripts/gen-tree-fixture.mjs、gen-ledger-fixture.mjs 產生
   { access = "read", path = "./test/fixtures" },
 ]
 
-# v4-core 的 PoolManager 需要 via_ir 才能通過合約大小限制；
-# 測試以 --code-size-limit 放寬，正式部署改用 profile.production。
+# 正式部署：開 via_ir 與高 optimizer_runs（帳本合約每小時被呼叫一次 commit，runtime gas 比部署 gas 重要）
 [profile.production]
 via_ir = true
 optimizer_runs = 44444444
-
-# 目標鏈比 Cancun 舊（缺 EIP-1153 TSTORE / EIP-5656 MCOPY）時使用，例如 iSunCoin（geth 1.12.x）。
-# v4 的編譯期相依已經拆乾淨（Deploy / DemoFlow / Fixture 都不 import v4），所以這裡只要 skip 掉
-# 對 v4 有相依的那幾個檔案。
-#
-# ⚠️ 還差一步 —— 已實測到的狀況：
-#   via_ir = false → Listing / CarbonPool / CarbonRegistry / CarbonCredit1155 /
-#                    RetirementCertificate 五個合約全部 "Stack too deep"。沒有 MCOPY 時
-#                    solc 產出的記憶體搬移碼比較吃堆疊，這是系統性的，不是某個函式區域變數太多。
-#   via_ir = true  → 上面五個全過（實測 Compiler run successful），只剩 Safe v1.4.1 的
-#                    execTransaction 編不過（Safe 的 inline assembly 沒標 memory-safe，
-#                    是 Safe 已知的 via_ir 問題）。
-#
-# 所以唯一的阻塞點是 Safe。解法：不要編譯 Safe，改用 Safe v1.4.1 的 canonical creation
-# bytecode 直接 CREATE（Safe v1.4.1 官方是 solc 0.7.6 編的，本來就不含 Cancun 指令）。
-# 附帶好處：部署出來的 Safe 與已稽核的 canonical 版本位元組完全一致，而不是我們自己重編的版本。
-[profile.shanghai]
-evm_version = "shanghai"
-via_ir = true
-skip = [
-  "src/v4/**",
-  "script/DeployV4.s.sol",
-  "script/DemoFlowV4.s.sol",
-  "test/V4.t.sol",
-  "test/utils/V4Fixture.sol",
-]
 
 [profile.default.fuzz]
 runs = 256

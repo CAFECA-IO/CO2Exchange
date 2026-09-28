@@ -83,11 +83,14 @@ export function deploymentFile(): string {
 export function deployment(): Deployment {
   const file = deploymentFile();
   if (!fs.existsSync(file)) {
-    throw new Error(`找不到部署檔 ${file}，請先執行 forge script script/DeployV4.s.sol --rpc-url anvil --broadcast`);
+    throw new Error(`找不到部署檔 ${file}，請先執行 bash script/bootstrap.sh deploy（或 bash script/demo-box.sh deploy）`);
   }
   const { mtimeMs } = fs.statSync(file);
   if (cached && cached.file === file && cached.mtimeMs === mtimeMs) return cached.value;
   const value = JSON.parse(fs.readFileSync(file, "utf8")) as Deployment;
+  if (!value.ledger) {
+    throw new Error(`${file} 不是帳本部署（沒有 ledger 欄位）。舊的全合約版本已經移除，請重新部署：bash script/bootstrap.sh deploy`);
+  }
   cached = { mtimeMs, file, value };
   return value;
 }

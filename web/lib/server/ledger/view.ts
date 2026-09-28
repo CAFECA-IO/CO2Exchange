@@ -3,7 +3,6 @@ import path from "node:path";
 import { apply, genesis, type State } from "@/lib/ledger/engine";
 import { chainHash, type Event } from "@/lib/ledger/events";
 import { openStore, type Store } from "@/lib/ledger/store";
-import { isLedgerV2 } from "@/lib/deployment";
 import { deployment } from "../chain";
 import { DATA_DIR } from "../fingerprint";
 
@@ -19,10 +18,6 @@ import { DATA_DIR } from "../fingerprint";
 /// ## 增量套用
 ///
 /// 狀態依帳本的 head 快取；有新事件就只套用新的那幾筆。head 倒退（帳本被重建）就從頭來。
-
-export const ledgerEnabled = (): boolean => {
-  try { return isLedgerV2(deployment()); } catch { return false; }
-};
 
 export const LEDGER_DIR = process.env.LEDGER_DIR ?? path.join(DATA_DIR, "ledger");
 

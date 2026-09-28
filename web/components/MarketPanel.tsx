@@ -59,7 +59,7 @@ export function MarketPanel() {
         <div>
           <div className="flex items-center gap-2 text-xs text-ink-300">
             <span className="rounded bg-ink-600 px-1.5 py-0.5 font-display font-medium tracking-wide text-tide">
-              {t?.pair ?? "CCT / mTWD"}
+              {t?.pair ?? "tCO₂e / TWD"}
             </span>
             <span>減量額度成交價 · 每公噸 CO₂e</span>
           </div>
@@ -158,8 +158,8 @@ export function MarketPanel() {
       )}
 
       <p className="text-[11px] leading-5 text-ink-300">
-        行情由鏈上 <code className="text-ink-200">Listing</code> 的成交事件即時推導，沒有任何模擬報價；
-        每一根 K 棒都對應得到實際的交易雜湊。Phase 0 為展示環境，價格不代表任何真實市場。
+        行情由帳本的成交即時推導，沒有任何模擬報價；
+        每一根 K 棒都對應得到帳本裡的事件雜湊，每小時隨承諾上鏈。Phase 0 為展示環境，價格不代表任何真實市場。
       </p>
     </section>
   );

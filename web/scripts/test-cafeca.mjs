@@ -21,7 +21,7 @@ import assert from "node:assert/strict";
 
 const { newNonce, consumeNonce } = await import("../lib/server/cafeca/nonce.ts");
 const { signInDigest } = await import("../lib/server/cafeca/digest.ts");
-const O = await import("../lib/bank/order-typed.ts");
+const T = await import("../lib/ledger/typed.ts");
 const C = await import("../lib/server/cafeca/parse-config.ts");
 
 let n = 0;
@@ -144,9 +144,10 @@ test("channel 進雜湊：空字串和沒有這個欄位（舊版錢包）是不
   assert.notEqual(withEmpty, signInDigest(8018, ACCOUNT, { ...base, channel: "ch_123" }));
 });
 
-console.log("委託單 EIP-712");
+console.log("帳本委託單 EIP-712");
 
-const BANK = "0x3333333333333333333333333333333333333333";
+const LEDGER = "0x3333333333333333333333333333333333333333";
+const D = { chainId: 8018, ledger: LEDGER };
 const order = {
   account: ACCOUNT, side: "sell", batchId: "7", country: "TW",
   amountKg: "1000", pricePerTonne: "800000000", minFillKg: "0",
@@ -154,44 +155,31 @@ const order = {
 };
 
 test("同樣的單每次都得到同樣的 digest", () => {
-  assert.equal(O.placeDigest(8018, BANK, order), O.placeDigest(8018, BANK, { ...order }));
+  assert.equal(T.userDigest(D, "place", order), T.userDigest(D, "place", { ...order }));
 });
 
 test("每一個欄位都進雜湊——少算一個就是可以被改掉的委託單", () => {
-  const ref = O.placeDigest(8018, BANK, order);
+  const ref = T.userDigest(D, "place", order);
   const variants = {
     account: OTHER, side: "buy", batchId: "8", country: "JP",
     amountKg: "1001", pricePerTonne: "800000001", minFillKg: "1",
     expiry: "1800000001", nonce: "4",
   };
   for (const [k, v] of Object.entries(variants)) {
-    assert.notEqual(O.placeDigest(8018, BANK, { ...order, [k]: v }), ref, `${k} 沒有進雜湊`);
+    assert.notEqual(T.userDigest(D, "place", { ...order, [k]: v }), ref, `${k} 沒有進雜湊`);
   }
 });
 
-test("換 Bank 或換鏈就換 digest——這張單是對這個池子、這條鏈下的", () => {
-  const ref = O.placeDigest(8018, BANK, order);
-  assert.notEqual(O.placeDigest(8018, OTHER, order), ref);
-  assert.notEqual(O.placeDigest(8017, BANK, order), ref);
-});
-
-test("十進位字串與 bigint 給出同一個 digest", () => {
-  // 線上傳的是字串（JSON 沒有 bigint，錢包也要求字串），而 log 裡是 bigint。
-  // 兩邊算出來必須一樣，否則收單時驗得過、事後重播時就驗不過了。
-  const fromLog = O.placeMessageOf({
-    account: ACCOUNT, side: "sell", batchId: 7n, country: "TW",
-    amountKg: 1000n, pricePerTonne: 800_000_000n, minFillKg: 0n,
-    expiry: 1_800_000_000n, nonce: 3n,
-  });
-  assert.deepEqual(fromLog, order);
-  assert.equal(O.placeDigest(8018, BANK, fromLog), O.placeDigest(8018, BANK, order));
+test("換帳本合約或換鏈就換 digest——這張單是對這個部署、這條鏈下的", () => {
+  const ref = T.userDigest(D, "place", order);
+  assert.notEqual(T.userDigest({ ...D, ledger: OTHER }, "place", order), ref);
+  assert.notEqual(T.userDigest({ ...D, chainId: 8017 }, "place", order), ref);
 });
 
 test("撤單也是簽過的，而且換一張單就換 digest", () => {
   const c = { account: ACCOUNT, orderSeq: "12", nonce: "4" };
-  assert.equal(O.cancelDigest(8018, BANK, c), O.cancelDigest(8018, BANK, { ...c }));
-  assert.notEqual(O.cancelDigest(8018, BANK, { ...c, orderSeq: "13" }), O.cancelDigest(8018, BANK, c));
-  assert.deepEqual(O.cancelMessageOf({ account: ACCOUNT, orderSeq: 12n, nonce: 4n }), c);
+  assert.equal(T.userDigest(D, "cancel", c), T.userDigest(D, "cancel", { ...c }));
+  assert.notEqual(T.userDigest(D, "cancel", { ...c, orderSeq: "13" }), T.userDigest(D, "cancel", c));
 });
 
 test("網域不能撞上錢包會拒絕的那幾種", () => {
@@ -199,10 +187,12 @@ test("網域不能撞上錢包會拒絕的那幾種", () => {
   // 也會擋下 verifyingContract 指向使用者帳戶、EntryPoint 或 CAFECA 系統合約的。
   // 這一條看起來像廢話，但它守的是「有人為了省事把網域改成登入那一組」——
   // 那樣做的當下功能正常，直到錢包某次更新把它擋下來為止。
-  assert.notEqual(O.ORDER_DOMAIN_NAME, "CAFECA Sign-In");
-  assert.notEqual(O.ORDER_DOMAIN_NAME, "ERC4337");
-  const td = O.placeTypedData(8018, BANK, order);
-  assert.equal(td.domain.verifyingContract, BANK);
+  for (const name of [T.USER_DOMAIN_NAME, T.AUTH_DOMAIN_NAME]) {
+    assert.notEqual(name, "CAFECA Sign-In");
+    assert.notEqual(name, "ERC4337");
+  }
+  const td = T.userTypedData(D, "place", order);
+  assert.equal(td.domain.verifyingContract, LEDGER);
   assert.notEqual(td.domain.verifyingContract.toLowerCase(), order.account.toLowerCase());
 });
 

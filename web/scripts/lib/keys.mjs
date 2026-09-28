@@ -1,4 +1,4 @@
-// 腳本（simulate / commit-epoch）的金鑰來源。
+// 腳本（ledger:commit、ledger:seed、mm、ledger:authority…）的金鑰來源。
 //
 // 為什麼需要這支：bootstrap.sh 把服務金鑰寫進 web/.env.local，但 node 腳本
 // 原本只看 shell 的環境變數。結果是兩種失敗——

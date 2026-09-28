@@ -1,23 +1,23 @@
 # TideBit-DeFi 碳權交易所
 
 國家級減量額度的**登錄、交易與註銷**平台。企業完成 ISO 14064-2 減量、14064-3 第三方查驗後，
-由查驗機構在鏈上簽章核發額度；額度可販售給個人、機構或其他企業，買方註銷後取得可附於申報文件的憑證。
+由查驗機構以自己的金鑰簽章核發額度；額度可販售給個人、機構或其他企業，買方註銷後取得可附於申報文件的憑證。
 
 由卡菲卡金融科技股份有限公司（CAFECA）建置，**設計為控制權可完整移轉給國家單位、由 CAFECA 代運營**。
 目前是 **Phase 0**：功能完整、可以從頭走到尾，但身分驗證與查驗簽章是模擬的。
 
-目標鏈是 **Boltchain 8018**（CAFECA 的身分合約在那裡，交易所要同鏈），結算幣是鏈上既有的
-**TWDC**，登入是**以 CAFECA 登入**（EIP-712 SignIn + ERC-1271）。
-**正式與測試環境都不用 anvil**——它只出現在本機開發與自動測試。
+目標鏈是 **Boltchain 8018**（CAFECA 的身分合約在那裡，交易所要同鏈），結算幣是鏈上既有的 **TWDC**，
+登入是**以 CAFECA 登入**（EIP-712 SignIn + ERC-1271）。anvil 只出現在本機開發與自動測試。
 
 | 你是誰 | 從哪裡開始 |
 |---|---|
-| 想知道這是什麼、為什麼要做 | [一、這是什麼](#一這是什麼)、[二、為什麼要做這個](#二為什麼要做這個) |
-| 要把它跑起來 | [四、怎麼用](#四怎麼用第一次) |
-| 要營運一台展示機 | [五、日常怎麼營運](#五日常怎麼營運) |
-| 要改它、部署到新鏈 | [六、未來怎麼更新](#六未來怎麼更新) |
-| 東西壞了 | [七、出問題怎麼修](#七出問題怎麼修) |
-| 要接手維護 | [設計說明](#設計說明) |
+| 想知道這是什麼 | [一、這是什麼](#一這是什麼) |
+| 要在本機跑起來 | [三、本機開發](#三本機開發) |
+| 要部署到 Boltchain | [四、部署到外部鏈](#四部署到外部鏈boltchain-8018) |
+| 要營運 | [五、日常營運](#五日常營運) |
+| 要驗證本站沒有作弊 | [六、自己驗證](#六自己驗證) |
+| 東西壞了 | [八、出問題怎麼修](#八出問題怎麼修) |
+| 要接手維護 | [九、設計說明](#九設計說明) |
 
 ---
 
@@ -26,1751 +26,394 @@
 一套可以完整走完「額度從哪裡來 → 誰買走了 → 誰用掉了 → 憑證長什麼樣」的系統，
 而且每一步都留下**任何人都能自己驗一次**的紀錄。
 
+### 設計 v4：鏈上只放證據
+
+| 在哪裡 | 放什麼 |
+|---|---|
+| **鏈上**（`src/ledger/Ledger.sol`） | 每小時一期的**承諾**（事件 log root、帶總額的餘額樹 root、登錄簿 root、身分 root、逐批次總量雜湊），前後串連；**授權金鑰清單與門檻**（誰能簽核發、身分、凍結、費率、對帳）；**結算幣託管**；**提領與逃生門**；碳權**請求權登記** |
+| **鏈上治理** | 國家 Safe 2-of-3（授權清單、門檻）、營運 Safe（提領開關、承諾提交者）、Timelock 48h（角色本身的更換）。部署者移轉後沒有任何權限 |
+| **鏈下帳本**（`web/data/ledger/`） | 所有事件：委託、撤單、註銷、提領請求、核發、身分、凍結、費率、轄區、對帳報告……每一筆帶簽章，依序接成雜湊鏈。持有、成交、憑證是**重播的結果**，不另外記 |
+| **官方登錄簿** | 碳權本身。國內額度在專案方的額度帳戶，國外額度在本站於核發國登錄簿的託管帳戶。帳本記的是對它們的請求權 |
+
 **它是**：
 
-- 一個**登錄簿**：專案登錄、查驗機構簽章核發、序號唯一、註銷後發出不可轉讓的憑證。
-- 一個**市場**：企業以專案名義定價掛單，個人與法人買賣；另有同年份池化的即時成交層。
-- 一個**可揭露的託管方**：使用者在交易所期間資產放在合約池裡，每 24 小時把「誰有多少」
-  壓成一棵帶總額的 Merkle 樹提交上鏈，任何人都能驗自己那一份。
-- 一個**可以交出去的系統**：治理角色從第一天就分成「主權」與「營運」兩層，
-  移轉當天只是 `grantRole` / `renounceRole`，不是重寫。
+- 一個**登錄簿**：專案登錄、查驗機構簽章核發、序號唯一、註銷後發出憑證（PDF 雜湊記入帳本）。
+- 一個**市場**：使用者在 CAFECA 錢包簽 EIP-712 委託單，帳本收單、回簽收收據、引擎撮合。不付 gas、不等出塊。
+- 一個**可驗證的託管方**：每小時把「誰有多少」壓成帶總額的 Merkle 樹上鏈；使用者下載自己的證明檔，
+  用任一節點就能驗；合約拒絕宣稱欠的結算幣多於它持有的承諾。
+- 一個**拿得回來的地方**：提領請求 → 下一期承諾 → 憑證據從合約領回；
+  72 小時沒有新承諾就進逃生模式，任何人憑最後一期的證據領回全部，沒有角色關得掉。
+- 一個**可以交出去的系統**：主權與營運兩層角色從第一天就分開，移轉是 `grantRole` / `renounceRole`。
 
 **它不是**：
 
-- 不是一個把既有碳權「橋接」上鏈的工具。本平台自己就是登錄簿，額度在這裡誕生，
-  所以沒有「鏈下那一份是不是被凍結了」這個永遠解不掉的問題。
-- 不是一個投機市場。自然人預設不可轉售（政策開關）、國外額度的用途受法規限縮、
-  一個專案一年核發不出比它實際減下來更多的額度。
-- Phase 0 **不是正式營運**。身分驗證、查驗機構簽章都由平台金鑰模擬，結算幣是測試幣，
-  申請與檔案存在本機 JSON。這些在 [尚未包含](#尚未包含phase-0-後續) 逐項列出。
+- 不是把既有碳權「橋接」上鏈。本平台自己就是登錄簿，額度在這裡誕生。
+- Phase 0 **不是正式營運**。身分驗證、查驗機構簽章由平台金鑰模擬，結算幣是測試幣。見 [十、Phase 0 限制](#十phase-0-限制與後續)。
 
-### 名字可以改，鏈上的識別字串不行
+### 保證的降級（要寫在最前面）
 
-品牌識別（logo、favicon、主色 #29c1e1→#1ae2a0）沿用
-[CAFECA-IO/TideBit-DeFi](https://github.com/CAFECA-IO/TideBit-DeFi)。
+原本由合約在交易當下拒絕的規則——身分與效期、自然人不得註銷、轄區是否開放、國外額度用途、凍結、
+手續費、撮合——現在由帳本引擎（`web/lib/ledger/engine.ts`）執行。保證從「**合約拒絕**」變成「**重播抓得到**」：
+營運方收下一筆違規事件，鏈上不會擋，但任何重播帳本的人都會在同一個位置看到，承諾也對不上。
 
-但鏈上的技術識別字串——EIP-712 domain `CO2Exchange KYCRegistry` /
-`CO2Exchange CarbonRegistry`、repo 名稱——**維持原樣**。那是已部署合約的一部分，
-改動等於換一組簽章網域，所有既有 attestation 立刻失效。
-品牌名與協定識別字串是兩件事，前者可以改，後者不該為了改名而動。
+營運方仍然做不到的：替使用者簽單、改已上鏈的任何一期、宣稱欠的結算幣多於合約持有、阻止逃生提領、
+不經查驗機構金鑰核發。營運方做得到但藏不住的：決定同時到達的事件順序、拒收事件、停止提交承諾。
+**已知缺口**：營運方持續提交承諾、卻只拒收某一人的提領請求時，逃生門不會開啟（見 [十](#十phase-0-限制與後續)）。
+
+這一段也寫在網站的 `/transparency` 與平台使用約定書第五條之一。
 
 ### 延伸文件
 
-架構決策、法規查證、法律性質定案、各期規劃都在 Claude project `CO2Exchange`：
-
 | 文件 | 內容 |
 |---|---|
-| `claude/architecture-decisions.md` | 已定案決策、法規查證原文、分期、風險 |
-| `claude/boltchain-8018.md` | 目標鏈的實測結果與端點 |
-| `claude/identity-cafeca.md` | 身分層改用 CAFECA 的完整紀錄 |
-| `claude/legal-decisions-bank.md` | 資產池的法律性質（商業託管、先到先得、平台補足義務） |
-| `claude/offchain-order-log-plan.md` | 委託單 log 與錨定的設計 |
-| `claude/open-items-2026-09-24.md` | 未完成事項盤點（依實際程式碼，不是憑印象） |
+| [`docs/proof-schemes.md`](docs/proof-schemes.md) | 證明檔與雜湊規則的完整規格（Boltchain Explorer Issue #1 格式） |
+| `web/contracts/*.md` | 七份定型化契約與政策（內容雜湊即版本指紋） |
+| `reports/` | 靜態分析（Slither、Aderyn）與 gas 報告 |
+| Claude project `CO2Exchange` | 架構決策（`claude/design-v4-proofs-only.md`）、簽章模型、法律性質、Boltchain 實測 |
 
 ---
 
 ## 二、為什麼要做這個
 
-### 台灣的碳費制度需要一個額度市場
-
-《氣候變遷因應法》上路後，排放大戶要繳碳費，而**減量額度可以扣除收費排放量**。
-依碳費收費辦法：
+《氣候變遷因應法》上路後，排放大戶要繳碳費，而**減量額度可以扣除收費排放量**：
 
 | 額度來源 | 扣除上限 | 扣除比率 |
 |---|---|---|
-| 國內減量額度 | 收費排放量的 **10%** | 自願減量／抵換專案 **1.2**（1 公噸額度抵 1.2 公噸排放） |
-| 國外減量額度 | **5%** | — |
-| 先期專案額度 | — | 非高碳洩漏 0.3、高碳洩漏 0.1，且**限開徵後前三年** |
+| 國內減量額度 | 收費排放量的 **10%** | 自願減量／抵換專案 **1.2** |
+| 國外減量額度 | **5%**（高碳洩漏風險事業不得使用） | — |
 
-也就是說，一公噸國內自願減量額度對繳費者的價值上限是「費率 × 1.2」，但有 10% 的天花板。
-需求是真的，而且有清楚的上界——這也是為什麼模擬市場裡每個帳戶都有年度採購額度，
-而不是無限買下去。
+碳權市場最常被質疑的不是「不能買賣」，而是：**這張額度是真的嗎？有沒有被用兩次？交易所手上真的有嗎？
+交得出去嗎？** 四個問題的共同答案是可驗證——不是「相信我們」，而是「你自己算一次」。
 
-### 缺的不是交易，是可驗證性與可移交性
+用區塊鏈只為三件別的做法做不到的事：紀錄不可竄改而且不需要相信營運方、控制權可以用密碼學交接、
+第三方可以自己重算。**不需要鏈的部分就不上鏈**：撮合、委託簿、身分明細都在鏈下，只有壓縮後的證據上鏈。
 
-碳權市場最常被質疑的三件事，都不是「不能買賣」：
-
-1. **這張額度是真的嗎？** 誰核發的、依據哪一份查驗報告、序號有沒有重複。
-2. **它有沒有被用兩次？** 註銷紀錄在誰手上、能不能被改。
-3. **交易所手上真的有這些東西嗎？** 使用者看到的餘額，和池子裡實際有的，是同一個數字嗎。
-
-這三件事的共同答案是**可驗證**——不是「相信我們」，而是「你自己算一次」。
-所以：核發要查驗機構的 EIP-712 簽章、註銷憑證是 soulbound ERC-721、
-託管每 24 小時提交一次帶總額的 Merkle root 並與前一期串連，
-而且有一支任何人都跑得動的驗證器（`npm run bank:verify`）。
-
-第四件事比較少被提起，但對一個**國家級**平台最要緊：
-
-4. **如果這個系統要交給主管機關，交得出去嗎？**
-
-大多數平台的答案是「重寫一套」。這裡的答案是治理從第一天就分兩層——
-國家單位 Safe 持主權角色（凍結、認可查驗機構、撤換營運方，即時生效），
-營運方 Safe 只有營運角色（暫停、費率、維運），而且**主權方可以單方面撤銷營運方**。
-移轉當天沒有資料搬遷、沒有重新部署。
-
-### 為什麼用區塊鏈
-
-不是因為它時髦。用它只為了三件別的做法做不到的事：
-
-- **註銷紀錄不可竄改，而且不需要相信營運方。** 這是碳權唯一真正致命的風險（重複計算）。
-- **控制權可以用密碼學交接。** 角色就是鏈上的一組權限，移交是一筆交易，不是一份合約與一次資料匯出。
-- **第三方可以自己重算。** 查核機構、主管機關、甚至一般使用者，拿得到同一份輸入就算得出同一個結果。
-
-反過來，**不需要鏈的部分就不上鏈**：撮合在鏈下（不然每一筆掛單都要付 gas、還會公開委託簿），
-KYC 明細不上鏈（只存雜湊），委託單原文與簽章留在交易所，只有壓縮後的證據定期上鏈。
-
-### 這個專案還沒解決的法規落差
-
-值得在最前面說清楚，因為審查方一定會問（法規原文查證紀錄見
-project 文件 `claude/architecture-decisions.md`）：
-
-| 法規 | 條文要求 | 目前實作 |
-|---|---|---|
-| 交易拍賣及移轉管理辦法 §26 | 每單位減量額度**移轉次數以一次為限** | 平台是二級市場，買到可再上架 |
-| 同 §26 | 移轉作業由**中央主管機關**進行 | `Listing.buy()` 是原子的付款 + 過戶 |
-| 同 §27 | 註銷要**向主管機關申請**，公開後事業才能對外宣告 | 鏈上自助註銷、立即發憑證 |
-
-在「照法規做」與「維持二級市場並標示為需法規調整」之間**尚未決定**。
-這不是疏漏，是需要主管機關一起決定的事。
+**法規落差**（需要主管機關一起決定）：交易拍賣及移轉管理辦法 §26「每單位移轉以一次為限、由主管機關移轉」。
+本平台的做法是帳本裡只轉**請求權**，那唯一一次官方移轉留到最終買方註銷時（專案方帳戶 → 買方帳戶），
+寫在平台使用約定書第三條與服務流程說明書。這個解讀需要主管機關確認。
 
 ---
 
-## 三、它解決什麼問題
+## 三、本機開發
 
-| 問題 | 這個系統怎麼處理 | 在哪裡看 |
+需要 git、Node 20+、curl。Foundry 由 `setup.sh` 裝。
+
+```bash
+git clone https://github.com/CAFECA-IO/CO2Exchange.git
+cd CO2Exchange && bash setup.sh                     # Foundry、釘死版本的 submodule、build、test
+
+cd web && npm install && cp .env.example .env.local && cd ..
+
+bash script/demo-box.sh rebuild                     # 開 anvil、部署帳本合約、回填展示資料、提交第一期
+cd web && npm run dev                               # 另一個終端，http://localhost:10010
+bash script/demo-box.sh commit-loop                 # 再一個終端：每小時一期承諾＋公開檔（COMMIT_EVERY 可調）
+```
+
+依賴（git submodule，已釘版本）：forge-std v1.16.2、openzeppelin-contracts v5.1.0、safe-smart-account v1.4.1。
+
+| | 埠 | 覆蓋方式 |
 |---|---|---|
-| 額度是誰核發的、依據什麼 | 查驗機構 EIP-712 簽章 → `CarbonRegistry.issue()`，序號唯一，專案帶核發國與機制名稱 | `/registry` 公告欄、`/verifier` |
-| 會不會被重複計算 | 註銷即銷毀，憑證是 soulbound ERC-721，帶受益人雜湊、用途、核發國、PDF 雜湊 | `/retire`、`/portfolio` |
-| 國外額度能不能拿來抵環評承諾 | **鏈上直接 revert**，不是介面提示。氣候法 §27 把國外額度限縮到碳費與超額量抵銷 | `CarbonCredit1155.retire` |
-| 交易所手上到底有多少 | 每 24 小時提交帶總額的 Merkle root，並與前一期串連；獨立驗證器任何人可跑 | `/custody`、`npm run bank:verify` |
-| 交易所跑了怎麼辦 | 逃生模式：超過 72 小時沒有提交承諾，任何人憑 Merkle 證據直接從合約池提領 | `Bank.escapeActive()` |
-| 誰在買賣、身分可靠嗎 | 身分是使用者的 CAFECA 身分合約（FIDO2 金鑰為根），KYC tier 決定能做什麼 | `/kyc`、`/account` |
-| 使用者的委託單算不算數 | EIP-712 委託單，使用者在 CAFECA 錢包簽章，後端以 ERC-1271 驗過才寫進 log | [簽章通道](#簽章通道委託單的不可否認性) |
-| 平台自己會不會作弊 | 營運方沒有凍結身分的能力、沒有結算幣鑄幣權；委託單 log 只記輸入，餘額是重播算出來的 | [資產池](#交易所資產池與餘額樹a-期) |
-| 交給國家單位要多久 | 主權／營運兩層角色，移轉是 `grantRole` / `renounceRole` | [治理](#治理safe--timelock) |
+| 前端 | **10010** | `PORT=xxxx npm run dev` |
+| 鏈 | **28545** | `RPC_URL=http://127.0.0.1:xxxx bash script/demo-box.sh rebuild` |
 
----
+刻意避開 3000／8545：那兩個埠上什麼都可能在跑，連到別人的服務而不自知比連不上更難查。
 
-## 四、怎麼用（第一次）
+本機登入用**開發用登入**（首頁的輸入框填代號，例如 `alice`）：伺服器從代號推出一把測試金鑰代簽，
+簽的是真的 EIP-712，最後的 `ledger:verify` 會在收單區塊重驗每一筆。只在 chainId 31337／1337 開放。
 
-### 安裝
+`demo-box.sh` 的其他指令：
 
-第一次（會裝 Foundry、git init、以釘死版本加入依賴、build、test）：
-
-```bash
-bash setup.sh
-```
-
-之後：
-
-```bash
-forge build
-forge test
-```
-
-依賴（git submodule，已釘版本）：
-
-| lib | 版本 |
+| 指令 | 做什麼 |
 |---|---|
-| v4-core | v4.0.0 (`e50237c`) |
-| openzeppelin-contracts | v5.1.0 |
-| openzeppelin-contracts-upgradeable | v5.1.0 |
-| forge-std | v1.16.2 |
-| safe-smart-account | v1.4.1 |
+| `rebuild` | 僅本機鏈：新鏈、部署、回填 `LEDGER_DAYS` 天（預設 60）× `LEDGER_USERS` 人（預設 40）、提交第一期 |
+| `deploy` | 部署到設定的那條鏈（外部鏈 ＝ `bootstrap.sh deploy`） |
+| `seed` | 鋪資料（本機 ＝ 回填；外部鏈 ＝ 模擬人物從現在開始交易 `EXT_TICKS` 輪） |
+| `commit` | 提交一期承諾（先完整查核，不過就不送） |
+| `commit-loop` / `live` | 每 `COMMIT_EVERY` 秒一期，並寫出每期公開檔（前景，Ctrl-C 結束） |
+| `status` | 現在是什麼狀態 |
 
-### 先決定接哪一條鏈
+`.env.local` 至少確認：`RPC_URL` / `CHAIN_ID`（對不上時畫面全空但不報錯）、
+`ADMIN_ADDRESSES` / `VERIFIER_ADDRESSES`（`KYC_AUTO_APPROVE=0` 時要包含你自己登入後的地址；
+非 production 留空時退回開發用登入 `admin` / `verifier` 推出的兩個地址）。
 
-**正式與測試環境都不用 anvil。** anvil 只出現在兩種場合：本機開發，以及跑自動測試。
+---
 
-| | 鏈 | 什麼時候用 | 能不能砍掉重來 |
-|---|---|---|---|
-| **A** | **Boltchain 8018**（`http://211.22.118.149:8545`） | 測試環境、對外展示、任何要給別人看的東西 | 不能。鏈不是我們的 |
-| **B** | 本機 anvil（chainId 31337） | 寫程式、跑 `forge test` / `npm run e2e` | 可以，而且預設就是重來 |
-
-這個分野會一路影響下去，不是只有一個位址的差別：
-
-- **時間**。anvil 可以把鏈的時間調到一年前再回填（`anvil_setTime`），所以首頁那一整年的
-  行情是真的有一年的區塊。外部鏈做不到，劇本的一年只能**壓縮**成現在這一段。
-- **重來**。`demo-box.sh rebuild` 在外部鏈上會直接拒絕——停不掉、重開不了，
-  而且每天重新部署會讓前一次的部署變成孤兒，上面可能有真的餘額。
-- **金鑰**。anvil 的預設帳戶在外部鏈上會被程式在啟動時擋下（`requireOwnKey`）。
-
-腳本一律看 `RPC_URL`（與 `web/.env.local` 同一個變數），沒設才退回本機。
-所以「接哪一條鏈」是一個環境變數的事，不是改程式。
-
-### A. 接上 Boltchain 8018
+## 四、部署到外部鏈（Boltchain 8018）
 
 ```bash
-bash setup.sh                                          # 只有第一次
 export RPC_URL=http://211.22.118.149:8545
 export SETTLEMENT_TOKEN=0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3   # CAFECA 的 TWDC
 
-./script/preflight.sh "$RPC_URL"                       # 這條鏈跑不跑得動這套合約
-bash script/bootstrap.sh                               # 建金鑰 → 等撥款 → 驗餘額 → 部署 → 寫設定
+./script/preflight.sh "$RPC_URL"       # Cancun（MCOPY）、EIP-1559、eth_getLogs 範圍、結算幣、部署者餘額
+bash script/bootstrap.sh               # 建金鑰 → 等撥款 → 驗餘額 → 部署 → 寫回 web/.env.local
 
 cd web && npm install && npm run build && npm start
 ```
 
-`bootstrap.sh` 是這條路的主線，它把四件本來要自己記得的事串起來——見下一節。
+`bootstrap.sh` 分開跑也可以：`keys` / `fund` / `deploy` / `status` / `roles`。
 
-完整步驟、每一個環境變數為什麼要設、以及上去之後會撞到的幾件事，
-見 [六 › 部署到 Boltchain](#部署到-boltchainchainid-8018)。那一節才是這條路的正本，
-這裡只是最短路徑。
-
-#### `bootstrap.sh`：金鑰、撥款、部署、設定檔
-
-分開跑也可以：`keys` / `fund` / `deploy` / `status`。
-
-**一、建金鑰。** 五把金鑰用 `cast wallet new` **在你的機器上**產生，直接寫進
-`web/.env.local`（權限 600，已在 `.gitignore`），順便產生 `AUTH_SECRET`。
-腳本**只印地址，不印私鑰**——私鑰印到終端機就進了 scrollback，進排程就進了 log。
-已經有值的金鑰一律保留不覆寫：覆寫一把還在用的 relayer 金鑰，等於把鏈上那些角色綁定全部丟掉。
-
-**二、要多少。** 不是猜的，是 `gas 預算 × 這條鏈現在的 gasPrice × 安全倍數`，
-三個輸入都印出來（`DEPLOY_GAS` / `SERVICE_GAS` / `SAFETY` 可調）。
+**金鑰在你的機器上產生**（`cast wallet new`），直接寫進 `web/.env.local`（權限 600）。腳本只印地址，不印私鑰；
+已經有值的一律保留不覆寫。
 
 | 金鑰 | 做什麼 | 要餘額嗎 |
 |---|---|---|
-| `DEPLOYER_PK` | 部署整套合約（含 Safe 基礎設施） | 要，最多 |
-| `RELAYER_PK` | 代送交易：KYC 註冊、核發、`retireFor`、承諾上鏈 | 要 |
-| `DOCUMENT_SIGNER_PK` | 憑證雜湊回寫、費率設定 | 要 |
-| `IDENTITY_VERIFIER_PK` | **只簽** EIP-712 身分 attestation，由 relayer 送出 | **不要** |
-| `CARBON_VERIFIER_PK` | **只簽**核發 attestation，由 relayer 送出 | **不要** |
+| `DEPLOYER_PK` | 部署帳本合約與治理（部署完放棄全部權限）；做市與模擬人物的撥款、gas 也從它出 | 要，最多 |
+| `RELAYER_PK` | 每小時提交承諾（COMMITTER）、簽收單回執（RECEIPT_SIGNER） | 要（`COMMIT_DAYS` × 24 × `COMMIT_GAS`） |
+| `IDENTITY_VERIFIER_PK` | 只簽帳本的身分事件 | 不要 |
+| `CARBON_VERIFIER_PK` | 只簽帳本的核發事件、月度查核 | 不要 |
+| `DOCUMENT_SIGNER_PK` | 只簽憑證文件雜湊事件 | 不要 |
 
-> 後兩把不需要餘額——這一點 README 與 `preflight.sh` 以前都寫錯了（說四把都要）。
-> 撥款給它們不會壞掉，但那是白放的錢，而且會讓人以為它們會動鏈。
+**治理 Safe 的 owner 金鑰寫在 `.governance.env`，不是 `web/.env.local`**：網站伺服器持有國家 Safe 的 owner 金鑰，
+等於把主權／營運分權整個抵銷。腳本產生的五把治理金鑰全部落在同一台機器上——展示可以，正式不行。
+正式部署由各持有人自己產生，只把**地址**設成 `NATIONAL_OWNERS` / `OPERATOR_OWNERS`。
 
-**三、驗了才部署。** 餘額不夠就停在這裡並印出差多少，不會部署到一半沒錢。
-夠了才跑 `forge script`。v4 要兩個條件（EIP-1153 **和** CREATE2 deployer），
-缺一個就自動改用不含 v4 的 `Deploy.s.sol`——兩個都事先查，不會跑到一半才撞上。
+外部結算幣（TWDC）本站沒有鑄幣權：做市與模擬人物的撥款要由 `DEPLOYER` 事先持有 TWDC。
+**把 TWDC 轉到帳本合約或 DEPLOYER 的地址——不要轉到 TWDC 代幣合約本身**（那筆錢拿不回來）。
 
-**四、寫回設定檔並印出地址。** `RPC_URL` / `CHAIN_ID` / `SETTLEMENT_TOKEN` 寫進
-`web/.env.local`，合約地址從 `deployments/<chainId>.json` 列出來。
+部署完兩件事要自己做：`SITE_ORIGIN` 與瀏覽器網址列逐字相同；登入一次後把 `/account` 上的地址填進
+`ADMIN_ADDRESSES` 再重啟。
 
-**治理 Safe 的 owner 也會一起產生**（國家 2-of-3、營運 1-of-2），寫在
-`.governance.env`——**不是** `web/.env.local`。這個分野是實質的：讓網站伺服器持有
-國家 Safe 的 owner 金鑰，等於把主權／營運分權整個抵銷掉，攻進網站的人就拿到了
-凍結任何人、撤換營運方、升級合約的能力。
+`web/.env.local` 的 CAFECA 段目前**必須設死**（對方的 `.well-known` 設定檔 `chain.rpc` 指向 Explorer、
+`issuer` 還是 `localhost:10002`）：`CAFECA_CHAIN_ID` / `CAFECA_RPC_URL` / `CAFECA_ATTESTATION` /
+`CAFECA_RECOVERY` / `CAFECA_FACTORY` / `CAFECA_KEYRING`，見 `web/.env.example`。
 
-> ⚠️ 腳本產生的五把治理金鑰**全部落在同一台機器上**。對 Phase 0 展示可以，
-> 對真正的治理不行——2-of-3 的意義在於三把金鑰由三個人、在三台裝置上保管。
-> 正式部署時由各持有人自己產生，只把**地址**設成 `NATIONAL_OWNERS` /
-> `OPERATOR_OWNERS`，腳本就會直接沿用、不另外產生。
+> 規則版本（`RULES_VERSION`）改過就要重新部署帳本合約：舊合約的承諾格式與新的餘額樹葉子不相容。
+> 目前是第 3 版（提領請求事件、葉子帶 requested／settled）。
 
-owner 也不需要餘額：Safe 的簽章是鏈下的，`execTransaction` 的 gas 由 `SENDER_PK`
-（任何有餘額的帳戶）付。
+---
 
-它還順手修掉一個一定會踩的坑：`COMMITTER` 預設等於 `OPERATOR`（也就是 deployer），
-但送出承諾的腳本用的是 `COMMITTER_PK ?? RELAYER_PK`。兩邊對不上，第一次
-`npm run bank:commit` 必定 AccessControl revert，而那個錯誤看不出是這裡設錯。
-`bootstrap.sh` 預設把 `COMMITTER` 指到 relayer 的地址。
+## 五、日常營運
 
-部署完還有兩件事要自己做，腳本會提醒：`SITE_ORIGIN` 要與瀏覽器網址列逐字相同；
-登入一次後把 `/account` 上的地址填進 `ADMIN_ADDRESSES` 再重啟。
+### 三個常駐行程
 
-### B. 本機開發鏈（anvil）：一台全新的機器
-
-> 這條路**只用於開發與跑測試**。要給別人看的東西走 A。
-
-
-需要的東西只有三樣：git、Node 20+、curl。Foundry 由 `setup.sh` 自己裝。
-
-```bash
-# 1. 取得程式碼與依賴。setup.sh 會裝 Foundry、取出釘死版本的 submodule、build、test
-git clone https://github.com/CAFECA-IO/CO2Exchange.git
-cd CO2Exchange && bash setup.sh
-
-# 2. 前端的依賴與設定
-cd web && npm install && cp .env.example .env.local && cd ..
-
-# 3. 鏈 + 部署 + 一年份的市場資料（一道指令，約三到五分鐘）
-#    rebuild 會自己開 anvil、部署、回填。只適用於本機開發鏈（chainId 31337 / 1337）
-bash script/demo-box.sh rebuild
-
-# 4. 前端（另一個終端）
-cd web && npm run dev
-```
-
-開 <http://localhost:10010>，首頁的地球上應該有六個轄區亮著、旁邊清單有數字。
-
-| | 埠 | 覆蓋方式 |
+| 行程 | 指令 | 失敗時的後果 |
 |---|---|---|
-| 前端 | **10010** | `PORT=xxxx npm run dev`（e2e 則是 `BASE_URL`） |
-| 鏈 | **28545** | `RPC_URL=http://127.0.0.1:xxxx bash script/demo-box.sh rebuild`；本機鏈時 `demo-box.sh` 會從這個位址推出 anvil 要開在哪個埠 |
+| 網站 | `cd web && npm start` | 收不了單。帳本與鏈上不受影響 |
+| 承諾 | `bash script/demo-box.sh commit-loop`（或排程 `npm run ledger:commit`＋`npm run ledger:publish`） | **72 小時沒有新承諾就進逃生模式**。沒有新事件時仍會每 `HEARTBEAT_AFTER`（預設 24h）提交一期空的 |
+| 做市 | `bash script/mm-service.sh install`（macOS launchd／Linux systemd） | 掛單簿變薄。控制在 `/admin`「後台做市」 |
 
-前端與鏈都刻意避開預設埠（3000／8545）：那兩個埠上什麼都可能在跑，
-連到別人的服務上而不自知，比連不上更難查。
-
-> 只想把流程跑一次、不需要一年份的資料，第 3 步可以換成手動兩行：
-> `anvil --port 28545 --prune-history`，另一個終端
-> `forge script script/DemoFlowV4.s.sol --rpc-url anvil --broadcast --sig "demo()"`。
-> 差別是行情圖上只有一兩根 K 棒、地球上只有臺灣有柱子。
-
-`.env.local` 至少要確認三件事：
-
-| 變數 | 為什麼非看不可 |
-|---|---|
-| `RPC_URL` / `CHAIN_ID` | 對不上的話前端讀的是另一條鏈，畫面全空但不會報錯 |
-| `ADMIN_ADDRESSES` / `VERIFIER_ADDRESSES` | `KYC_AUTO_APPROVE=0` 時**必須包含你自己登入後拿到的地址**，否則申請會卡在沒有人能核准的佇列裡。地址要登入一次才知道——先啟動、登入、在 `/account` 複製、填回去、重啟。非 production 留空時會退回開發用登入推出來的那兩個地址 |
-| `RELAYER_PK` / `DOCUMENT_SIGNER_PK` | Phase 0 由平台代付 gas。這兩把在該鏈上沒餘額，建帳戶與註銷都會失敗 |
-
-環境還在、只是關掉了（第二天開工）：
+### 承諾
 
 ```bash
-bash script/demo-box.sh rebuild     # 重新鋪一次（約三到五分鐘）
-cd web && npm run dev
-```
-
-> Anvil 一關就忘光，所以預設是重鋪。想留住昨天的鏈，給 `demo-box.sh` 一個
-> `STATE=~/anvil-state.json`，或自己開
-> `anvil --port 28545 --state ~/anvil-state.json --prune-history`（`--state` 是 `--load-state`
-> 與 `--dump-state` 的別名：檔案在就載入、關掉時寫回，第一次跑檔案不存在也不會失敗）。
-> 這樣就不必每天重跑部署，前端 `web/data/` 的申請紀錄也還對得上——
-> 那些紀錄是用**帳戶地址**當鍵的，鏈重開又重新部署就會對不上，
-> 機制與處理方式見「[七、出問題怎麼修](#七出問題怎麼修)」。
-
-**確認真的跑起來了**（三個都該有東西）：
-
-```bash
-./script/govern.sh status                                  # 治理角色是不是都在該在的地方
-curl -s localhost:10010/api/market/ticker?hours=24 | head -c 200   # 行情讀得到鏈
-curl -s localhost:10010/api/market/by-country | head -c 200        # 各轄區統計讀得到鏈
-```
-
-`govern.sh status` 印出來的那張表，每一格都該是 `true`，而且 `admin` 那一欄要指向 Timelock、
-`sov` 指向國家 Safe。有 `false` 就是部署沒完成，不要繼續往下用。
-
-### 建立模擬資料
-
-> 這一節的三個等級**都假設本機鏈**（要回填就要能調整區塊時間）。
-> 外部鏈上只有一種做法：`bash script/demo-box.sh seed`，縮時、從現在開始，
-> 而且那一百個模擬帳戶要在那條鏈上有 gas。見 [六 › 五、驗一次整條路走得通](#五驗一次整條路走得通)。
-
-`demo()` 只鋪一張最小的桌子：幾個專案、幾張掛單，夠把流程走一次，但行情圖上只有一兩根 K 棒、
-首頁的地球只有一個國家有柱子。要讓畫面像個市場，有三個等級：
-
-| 要什麼 | 用什麼 | 花多久 |
-|---|---|---|
-| 只要流程能走一遍 | `DemoFlowV4.s.sol` 的 `demo()` | 十幾秒 |
-| 只要行情圖有 K 棒 | `SeedMarket.s.sol` + `npm run seed:market` | 一兩分鐘 |
-| 要整個市場：多國、掛單簿厚薄、申報季波峰、每月託管報告 | `npm run simulate` | 三到五分鐘（一年份） |
-
-**只要一條像樣的價格曲線**（不需要人物與多國資料）：
-
-```bash
-forge script script/SeedMarket.s.sol --rpc-url anvil --broadcast   # 掛出一批單
-cd web && npm run seed:market -- --days 365 --per-day 3            # 逐筆買掉，每筆推進時間
-```
-
-每筆成交之間會推進區塊時間，K 棒才有時間軸可分；全程一個行程、keep-alive 連線，
-不是每筆開一個 `cast`。
-
-**要完整的市場**（首頁地球、各轄區統計、託管揭露都會有資料）：
-
-```bash
-# 1. 鏈要從一年前開始。回填只能把時間往前推，不能倒退
-anvil --port 28545 --timestamp $(( $(date +%s) - 365*86400 )) --prune-history
-
-# 2. 部署
-forge script script/DemoFlowV4.s.sol --rpc-url anvil --broadcast --sig "demo()"
-
-# 3. 回填。--from 要晚於鏈上現在的時間
 cd web
-npm run simulate -- --dry-run                              # 先看人物名冊，不送任何交易
-npm run simulate -- --from 2025-11-25 --tick 8h --quiet    # 回填到現在，約 3–5 分鐘
+npm run ledger:commit -- --plan     # 只算、不送：這一期會提交什麼
+npm run ledger:commit               # 先完整查核（重播、重驗每一筆簽章、對帳存提），全過才送
+npm run ledger:verify               # 查核者模式：重播全部，逐期比對鏈上的 anchor
 ```
 
-跑完會有：約 3,600 筆交易、十七萬噸核發、十五萬噸成交、九個轄區的掛單簿，以及十一期每月託管對帳報告。
-參數與人物設定見「[模擬市場](#模擬市場100-個有人格的帳戶)」。
+送出前的查核任何一項不過就不送——那代表帳本被動過、或有簽章在收單當時沒有授權。
 
-**這三件事不照做就會踩到：**
-
-1. **`--prune-history` 不是可選的。** anvil 預設把每個區塊的歷史狀態寫到 `~/.foundry/anvil/tmp/`，
-   五千筆交易下來好幾 GB，而且**每次重開 anvil 都留一份**——磁碟會在你還沒發現的時候滿掉。
-   歷史狀態對這裡沒有用：行情、公告欄與託管揭露讀的是事件與區塊標頭，那兩樣 `--prune-history` 都會保留。
-   已經滿了就清掉（anvil 沒在跑的時候）：`rm -rf ~/.foundry/anvil/tmp/*`
-2. **`--from` 必須晚於鏈上現在的時間。** 回填用 `anvil_setTime` 推進時間，而區塊時間只能往前。
-   對不上的時候腳本會直接印出該用的 anvil 指令，不會跑到一半才爆。
-3. **模擬跑的時候不要同時用前端下單。** 模擬器假設自己是鏈上唯一的寫入者，
-   掛單簿與持有量都在記憶體裡跟著更新（這是一年份回填能從「幾萬次 RPC」降到「幾千筆交易」的原因）。
-
-**續跑與重來：**
+### 發布與監理鏡像
 
 ```bash
-npm run simulate -- --from <上次停的日期> --tick 8h   # 接著跑：會從鏈上把狀態全部認回來
-npm run simulate                                      # 持續模式：依真實時間每分鐘一輪
+npm run ledger:publish                          # 每期公開檔 → web/data/public/epochs/<期>.json（已存在的不重寫）
+npm run ledger:publish -- --out /srv/co2x-public
+npm run ledger:publish -- --mirror /path/to/mirror   # 完整帳本＋部署檔＋SHA-256 清單，交給查核機構與主管機關
 ```
 
-續跑會把已註冊的帳戶、持有量、掛單簿、已登錄的專案與已發布的對帳期別認回來，
-參考價由掛單簿的中位數推回——不會把同一個開發者的專案再登錄一次，也不會讓價格跳回起始值。
-要完全重來就重開 anvil，然後回到第 1 步。
+公開檔在寫出前都先和鏈上承諾比對，對不上就不寫。網站也從 `/api/public/epochs` 提供同一份。
 
-### 頁面
+### 授權事件（k-of-n）
 
-跑起來之後，四種角色、十一個頁面可以把整條路走一遍：
+主權、營運、查核角色的事件（費率、轄區、政策、凍結、對帳報告）門檻大於 1 時變成**提案**，
+持有人各自簽，收滿門檻才寫進帳本。持有人的私鑰不放在本站：
 
-| 角色 | 頁面 | 內容 |
+```bash
+npm run ledger:authority -- list
+npm run ledger:authority -- show <id>                        # 要簽的 EIP-712，交給硬體錢包
+npm run ledger:authority -- sign <id> --key-env MY_OWNER_PK  # 用你自己 shell 裡的私鑰（只印地址）
+npm run ledger:authority -- add-signature <id> 0x…
+npm run ledger:authority -- submit <id>
+```
+
+### 鏈上治理（`script/govern.sh`）
+
+```bash
+./script/govern.sh status                                   # 角色、Safe、門檻、提領開關、epoch、逃生倒數
+
+read T D < <(./script/govern.sh build revoke-authority CARBON_VERIFIER 0xABC…)
+H=$(./script/govern.sh safe national hash $T $D)            # 給每位簽章者
+S1=$(./script/govern.sh sign $H --ledger)                   # 各自簽（--private-key / --ledger / --trezor）
+./script/govern.sh safe national exec $T $D 0xOwner1:$S1 0xOwner2:$S2
+```
+
+| 預設 | 由誰 | 即時或延遲 |
 |---|---|---|
-| 自然人 / 法人 | `/`、`/kyc`、`/trade`、`/portfolio`、`/retire`、`/account` | 首頁＝市場現況（地球＋各轄區清單）→ 以 CAFECA 登入（同時開啟簽章通道）→ 身分驗證申請 → 交易（買賣同頁、限價與市價、下單前確認單）→ 我的資產（持有、成本、損益、**註銷憑證**）→ 註銷；`/account` 看帳戶狀態；金鑰、裝置與掛失在 CAFECA 錢包裡做 |
-| 任何人（免登入） | `/about`、`/registry`、`/custody`、`/agreements`、`/agreements/<id>` | 認識碳權（制度說明與行情圖表）、公告欄（TCER 五分頁 + 轄區）、託管與稽核揭露（每月 5 日）、七份契約與條款全文（五份定型化契約 + 網站服務條款 + 隱私權政策，每份一個網址） |
-| 法人 | `/enterprise` | 登錄專案、上傳 ISO 14064-3 查驗報告申請核發、批次掛單 / 入池、取消掛單 |
-| 查驗機構（`VERIFIER_ADDRESSES`） | `/verifier` | 待查驗佇列：檢視報告與雜湊 → 簽署 IssuanceAttestation 核發，或退回 |
-| 管理員（`ADMIN_ADDRESSES`） | `/admin` | KYC 審核佇列（核准 = 簽 attestation 上鏈）、憑證 PDF 產生與 `documentHash` 回寫、**各國費率設定**、治理狀態（角色矩陣、Safe、Timelock 排程） |
+| `grant-authority` / `revoke-authority <角色> <地址>`、`threshold <角色> <k>` | 國家 Safe | 即時；重播以事件所在區塊為起點 |
+| `withdrawals <true\|false>`、`committer-grant` / `committer-revoke` | 營運 Safe | 即時 |
+| `grant-role` / `revoke-role <sovereign\|operator\|admin>` | 國家 Safe 經 Timelock | 48 小時 |
+| `safe-add-owner` / `safe-remove-owner` / `safe-swap-owner` / `safe-threshold` | 各 Safe 自己 | 即時 |
+
+⚠️ Safe 持有人異動時，帳本的 SOVEREIGN／OPERATOR 授權清單要跟著改（`grant/revoke-authority`），
+否則新持有人簽不了帳本事件、舊持有人仍然簽得了。
+
+### 做市與模擬市場
+
+`npm run mm`（或 `mm-service.sh`）讀 `/admin` 寫的設定，做市帳戶的金鑰在 repo 根目錄的 `.mm.env`（第一次跑時產生，權限 600）；
+網站**不持有**做市金鑰。報價是簽名委託單，和使用者同一條撮合與查核路徑；做市只被動報價，絕不與平台控制的帳戶成交。
+模擬模式只在 `SIMULATION_CHAINS` 列出的測試鏈上能開，掛單簿上會標「模擬」，`/custody` 揭露做市帳戶。
+
+### 提領（使用者這一側）
+
+在 `/trade` 的提領區：簽提領請求（金額從可動用轉為待提領）→ 下一期承諾上鏈後按「領回」→ 錢包送出
+`withdrawCash`（透過 CAFECA 簽章通道送出，gas 由平台贊助）。同一頁可以下載自己的證明檔。
+營運方要暫停一般提領用 `govern.sh build withdrawals false`（營運 Safe）；逃生提領不受影響。
 
 ---
 
-## 五、日常怎麼營運
+## 六、自己驗證
 
-### 三種節奏
-
-Phase 0 的營運動作分三種節奏。**誰做**那一欄很重要：營運方做得到的事情是刻意被限縮的，
-凍結、開關轄區、換查驗機構這些都要國家 Safe。
-
-| 節奏 | 做什麼 | 誰 | 在哪 |
-|---|---|---|---|
-| 每天 | 審 KYC 申請（核准＝簽 attestation 上鏈） | 管理員（`ADMIN_ADDRESSES`） | `/admin` › KYC 審核 |
-| 每天 | 審核發申請（檢視 ISO 14064-3 報告與雜湊 → 簽章核發或退回） | 查驗機構（`VERIFIER_ADDRESSES`） | `/verifier` |
-| 每天 | 產生註銷憑證 PDF 並把 SHA-256 回寫鏈上 | 管理員 | `/admin` › 憑證文件 |
-| 每月 5 日 | 發布託管與準備金對帳報告，查核機構簽署 | 報表金鑰 + 查核機構 | **見下方警告** |
-| 不定期 | 調整各轄區交易費（bps）與註銷費（每噸） | 管理員（服務金鑰持 `PRICING_ROLE`） | `/admin` › 費率設定 |
-| 不定期 | 認可／撤銷查驗機構、停用專案 | 國家 Safe | `govern.sh build approve-verifier` / `revoke-verifier` / `set-project-active` |
-| 不定期 | 開啟／關閉轄區 | 國家 Safe | **見下方警告** |
-| 緊急 | 凍結地址或批次、暫停市場、撤換營運方 | 國家 Safe（即時，不等 48h） | `script/govern.sh` |
-| 結構變更 | 升級合約、變更主權歸屬 | 國家 Safe → Timelock 48h | `script/govern.sh` |
-
-> ⚠️ **兩個已知的營運缺口**，不是還沒寫進文件的功能，是真的還沒有人做得了：
->
-> 1. **每月 5 日的託管報告沒有營運端介面。** `/custody` 與 `/api/custody` 都是唯讀的，
->    鏈上真正會呼叫 `ReserveAttestation.publish()` 的只有模擬器（`web/scripts/simulate.mjs`）。
->    Phase 0 的展示資料靠模擬器產生；正式營運前必須補上報表端介面或腳本，
->    否則平台在首頁與契約裡承諾的「每月 5 日公開對帳」沒有人執行得了。
-> 2. **開關轄區沒有進 `govern.sh`。** `CarbonRegistry.setJurisdiction()` 要 `SOVEREIGN_ROLE`，
->    但 `govern.sh build` 沒有對應的子指令，現在得自己用
->    `cast calldata 'setJurisdiction(bytes2,(bool,bool,uint8,string,string,string,string))' 0x<國碼> '(...)'`
->    組出 calldata 再丟給 `safe national hash|exec`。開一個轄區是主權行為，
->    這條路徑應該跟凍結、撤換查驗機構一樣有現成指令。
-
-治理操作一律是「組 calldata → 簽 → 執行」三步，`govern.sh` 把 cast 包起來：
+三種層次，都不需要相信本站：
 
 ```bash
-./script/govern.sh status                                  # 先看現況
-./script/govern.sh build freeze 0x<地址> true              # 組出 target + calldata
-./script/govern.sh safe national hash <target> <calldata>  # 算出要簽的 hash
-./script/govern.sh sign <hash> <私鑰>                      # 各簽章者各自簽
-./script/govern.sh safe national exec <target> <calldata> <簽章串>
+# ① 我的持有：/trade 下載證明檔，任一節點
+node web/scripts/verify-proof.mjs 證明檔.json --rpc <任一節點> [--out 報告.json]
+
+# ② 某一期的公開內容：/transparency 或 /api/public/epochs/<期>，依 docs/proof-schemes.md 重建 root，對照鏈上 Committed 事件
+
+# ③ 整份帳本（查核機構、主管機關）：監理鏡像
+LEDGER_DIR=<鏡像>/ledger DEPLOYMENT_FILE=<鏡像>/deployment.json RPC_URL=<任一節點> npm run ledger:verify
 ```
 
-要走 Timelock 的（升級、主權變更）中間多一段 `timelock schedule` → 等 48 小時 → `timelock execute`，
-`timelock state` 查現在到哪一步。完整 SOP（緊急凍結、升級、簽章者管理、移轉驗收）
-見 project 文件「CO2Exchange 治理操作手冊」。
-
-### 持續運作（本機展示機）
-
-> **這一節從頭到尾都是本機 anvil 的事。** 外部鏈不能每天砍掉重來，
-> 它的資料就是它的歷史。
-
-想讓一台機器一直開著、資料一直看起來是新的，有一件事必須先知道：
-
-> ⚠️ **持續模式跑大約一個小時，一年份的需求就用完了。**
-> 實測每輪成交約 1,590 噸，而非做市商的年度採購額度合計 95,408 噸——
-> 以 `--interval 60` 算，大約 60 輪、一小時就見底。之後買方全部收手
-> （年度預算是刻意設的，見「[模擬市場](#模擬市場100-個有人格的帳戶)」），只剩做市商還在掛單成交，
-> 畫面看起來像市場停了。要等到模擬世界的隔年一月，額度才會重置。
-
-所以展示機的作法**不是「跑一次然後放著」，而是每天重建一次**：
-
-```bash
-# 每天早上六點重鋪一年份的市場（本機 anvil 展示機）
-0 6 * * *  cd /path/to/CO2Exchange && bash script/demo-box.sh rebuild >> /tmp/demo-box.log 2>&1
-```
-
-> **這一招只適用於本機開發鏈。** 外部鏈上 `rebuild` 會直接拒絕——鏈不是我們的，
-> 停不掉也重開不了；時間不是我們的，回填一年份做不到；而且每天重新部署會讓
-> 前一次的部署變成孤兒，上面可能有真的餘額。外部鏈的作法見
-> [部署到 Boltchain › 五](#五驗一次整條路走得通)。
-
-重建是安全的：Anvil 從同一個部署者、同樣的 nonce 順序跑同一支腳本，
-**十七個合約地址一字不差**（只有部署檔裡的 `deployedAt` 會變）。
-前端的設定不用動，使用者的錢包地址也還是同一個——那是 CREATE2 從 accountRef（登入帳號的雜湊）算出來的。
-
-只有 `web/data/` 需要注意：那裡的 KYC 與核發申請是用帳戶地址當鍵的，
-鏈上狀態歸零之後它們對不到任何東西，所以指紋檢查會擋下來並回 `503 DATA_STALE`。
-`demo-box.sh rebuild` 會在部署之後自己跑一次 `data:reset`（搬到 `data.bak-<時間戳>`，不是刪除），
-所以走這條路不用自己記得。手動重新部署才需要自己補那一行。
-展示機另外建議設 `KYC_AUTO_APPROVE=1`（申請直接核准，不留佇列）。
-
-**想在白天看到即時的成交**，重建之後再掛上持續模式：
-
-```bash
-bash script/demo-box.sh live -- --interval 60
-```
-
-它會依真實時間每分鐘跑一輪。跑滿一小時左右買方收手是預期的——
-隔天早上的 rebuild 會把一切重來。不要為了讓它撐久一點而調大 `--interval`：
-那只是把同樣的額度攤在更長的時間裡，市場反而更冷清。
-
-**讓它活過重開機。** 這三個行程要有人看著：anvil、Next.js、（可選的）模擬器。
-macOS 用 launchd，Linux 用 systemd；最省事的是讓 `demo-box.sh rebuild`
-在開機時跑一次，前端用 `npm run build && npm start`（不是 `npm run dev`）。
-
-```ini
-# /etc/systemd/system/co2x-web.service
-[Unit]
-After=network.target
-[Service]
-WorkingDirectory=/path/to/CO2Exchange/web
-Environment=KYC_AUTO_APPROVE=1
-ExecStart=/usr/bin/npm start
-Restart=always
-[Install]
-WantedBy=multi-user.target
-```
-
-**磁碟**：`--prune-history` 已經寫進 `demo-box.sh`，但每次重開 anvil 仍會在
-`~/.foundry/anvil/tmp/` 留一份；`rebuild` 每次都會先清掉那個資料夾，
-所以照這個流程走不會累積。手動開 anvil 的話要自己留意，見「[建立模擬資料](#建立模擬資料)」。
-
-**確認它還活著**：
-
-```bash
-bash script/demo-box.sh status
-```
-
-### 後台做市
-
-市場要有人隨時報價，買方與賣方才找得到對手。平台以自有資金設一個**做市帳戶**，
-在參考價兩側掛買單與賣單；它由一支常駐程式執行，管理員在 **/admin →「後台做市」** 控制。
-
-```bash
-cd web && npm run mm                  # 前景跑，先確認設定沒問題
-bash script/mm-service.sh install     # 裝成常駐服務（macOS launchd／Linux systemd），當掉會自己重啟
-bash script/mm-service.sh logs
-```
-
-**做市的邊界（寫在程式裡，不是靠自律）：**
-
-| 規則 | 為什麼 |
-|---|---|
-| 只被動報價，不主動吃任何人的單 | 做市是提供對手，不是跟使用者搶單 |
-| 不與平台控制的帳戶成交（營運金鑰、模擬人物、其他做市帳戶） | 平台自己跟自己成交是**製造成交量**，在正式市場屬於虛偽交易。被動報價擋不住別人來吃，所以另一半在模擬器那一側：它載入掛單簿時就看不見做市帳戶的單 |
-| 買價低於簿子上最佳賣價、賣價高於最佳買價 | 不製造交叉的簿子 |
-| 參考價只用成交價與**非平台**的報價 | 拿自己的單決定自己的價是自我參照 |
-| 做市與營運金鑰的單在掛單簿上標「平台做市」「平台自營」，揭露頁列出地址與規則 | 市場參與者有權知道對手裡哪些是平台自己 |
-
-**風控參數**（都在 /admin 調，下一輪生效）：撥款上限（累計撥款不超過它；**虧掉的不會自動補**，
-否則停損沒有意義）、持有部位上限、單筆上限、每側檔數、價差與每檔加寬、報價上下限、
-單日停損（台北時間；碰到就撤掉全部報價並停下，要人按「恢復」）。最內層半邊價差要大於
-交易手續費，否則每一次賣出成交都是虧損——狀態區會警告。
-
-**收回資金**：撤掉所有報價，把做市帳戶的結算幣全部轉回營運金鑰；持有的碳權留在做市帳戶。
-
-**金鑰與權限**：做市帳戶的助記詞在 repo 根目錄的 `.mm.env`（第一次跑時產生，權限 600，
-已在 `.gitignore`），**網站不讀它**——網站只寫 `web/data/mm/config.json`、讀 `status.json`，
-不送任何做市交易。撥款與 gas 從 `DEPLOYER_PK`（沒有就 `RELAYER_PK`）出，做市帳戶的身分登錄
-由 `IDENTITY_VERIFIER_PK` 簽（法人、身分雜湊標明是平台做市帳戶）。Boltchain 上 TWDC 鑄不出來，
-所以 `DEPLOYER` 要先有 TWDC，撥款才撥得出去。
-
-**模擬交易（僅測試鏈）**：同一頁可以開「模擬交易」，常駐程式會另起一個模擬器子行程讓虛擬人物
-彼此買賣（持續模式；年度額度改成每「一年份的輪數」重置——預設每輪 6 小時、1,460 輪算一年——不會一小時就把市場跑乾）。只准在
-`SIMULATION_CHAINS`（預設 `31337,1337,8018`）列出的鏈上開，**網站與常駐程式各擋一次**；
-正式鏈不要放進這個清單。開著的時候每一頁頂端有「測試環境」橫幅，模擬人物的單標「模擬」。
-紀錄在 `web/data/mm/simulation.log`。
+`verify-proof.mjs` 只用 viem、不引用本站任何程式碼；它自己回鏈上取承諾，不相信證明檔裡寫的 root。
 
 ---
 
-## 六、未來怎麼更新
-
-這一節有四件事：改了東西之後要補做什麼、發版前檢查、換到別條鏈、以及接下來的分期。
-
-### 改了什麼，就要補做什麼
-
-拉了新版之後要補做什麼，看你改動了什麼：
-
-| 改了什麼 | 要做的事 |
-|---|---|
-| 只有前端（`web/app`、`web/components`） | `npm run dev` 熱更新就好 |
-| 前端依賴（`web/package.json`） | `cd web && npm install` |
-| 合約原始碼（`src/`） | `forge build && forge test` → `forge snapshot`（更新 gas 基準線）→ `cd web && npm run gen:errors`（重產 error 對照表）→ **重新部署** → `npm run data:reset` |
-| 合約的自訂 error | `cd web && npm run gen:errors`。**漏了這步，前端的 revert 會退回顯示 `0x…` 四個位元組**——使用者看不出是沒簽契約還是餘額不足 |
-| 部署腳本或治理參數 | 重新部署 → `./script/govern.sh status` 確認角色都對 |
-| 合約依賴（`lib/`，git submodule） | `git submodule update --init --recursive` → `forge build` |
-| 契約條文（`web/contracts/*.md`） | 不必重部署，但**條文雜湊會變，既有同意紀錄失效、使用者要重簽**——這是預期行為 |
-| 地球的地理資料 | 只有要換底圖或加轄區才需要重跑 `scripts/gen-globe-mask.py`（來源 `scripts/world-land-0.6deg.json.gz` 也在版控裡），產生出來的 `lib/globe-mask.ts` 已經在版控裡 |
-
-合約改了就一定要重新部署，重新部署就一定要處理 `web/data/`。
-
-**本機（開發時）**：
+## 七、測試
 
 ```bash
-forge build && forge test
-bash script/demo-box.sh rebuild     # 重開 anvil、部署、data:reset、回填
-cd web && npm run build && npm run e2e
+forge test                                   # 31：帳本合約、Merkle 樹、治理（真 Safe v1.4.1 ＋ Timelock）
+
+cd web
+npm run check:boundary                       # 前端沒有直接連節點
+npm run check:api-envelope                   # 每支 API 都走制式信封與錯誤碼
+npm run test:ledger                          # 24：引擎規則、重播、雜湊鏈、提領與逃生
+npm run test:cafeca                          # 23：登入 nonce、SignIn digest、委託單 EIP-712、設定檔解析
+npm run test:keys && npm run test:mm         # 金鑰來源、做市策略
+npm run build
+
+# 需要 anvil 的端到端（各自一條鏈）
+anvil --port 38546 & npm run test:ledger-chain    # 帳本 × 合約：承諾、重播、逃生、請求權登記
+anvil --port 38548 & npm run test:ledger-mm       # 11：做市與模擬器
+anvil --port 38549 & npm run test:ledger-proof    # 10：證明檔、公開檔、監理鏡像、提領
+# 55：網站 API → 帳本 → 承諾 → 查核。前置見 scripts/e2e-ledger-write.mjs 開頭
+npm run test:ledger-write
 ```
 
-**Boltchain（測試環境）**：合約改版是一次**新的部署**，舊的那一份仍在鏈上、
-上面可能還有餘額與紀錄。所以這件事不是「重來」，是「搬家」，要先決定舊部署怎麼處理
-（讓使用者提領、或宣告作廢）再動手：
-
-```bash
-export RPC_URL=http://211.22.118.149:8545
-export SETTLEMENT_TOKEN=0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3
-bash script/bootstrap.sh deploy     # 金鑰讀 web/.env.local；寫出新的 deployments/8018.json 並 data:reset
-```
-
-`data:reset` 為什麼跳不過，見「[七、出問題怎麼修 › 重新部署之後](#重新部署之後webdata-的舊紀錄)」。備份裡有使用者上傳的身分文件，
-確認不需要再自行刪除；想把兩個部署的資料分開留著，設 `DATA_DIR` 指到不同資料夾即可。
-
-**發版前的檢查清單：**
-
-```bash
-forge test                          # 171 個合約測試
-forge snapshot --check --no-match-contract "FuzzTest|PoolInvariantTest"   # gas 有沒有非預期的迴歸
-cd web && npm run lint && npm run build
-npm run e2e                         # 三條流程，需 KYC_AUTO_APPROVE=0
-
-# shell 腳本：變數展開後面不可以直接接中文字（見下）
-grep -nP '\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]' ../script/*.sh ../setup.sh
-```
-
-> 最後那一條 grep 要是有輸出就是有問題。**macOS 內建的是 bash 3.2**，它會把緊接在變數
-> 後面的多位元組字元當成識別字的一部分——`"每輪 $TICK）"` 會被解析成變數 `TICK<位元組>`，
-> 在 `set -u` 之下直接 unbound variable 而中斷。在 Linux 的 bash 5 上完全正常，
-> 所以這個 bug 只會在使用者的 Mac 上出現。規則很簡單：**後面接中文就用 `${VAR}`**。
-> 這個坑這個專案已經踩過兩次（`preflight.sh` 檔頭就寫著同一段警告）。
-
-### 四支部署腳本
-
-v4 的編譯期相依已經從核心拆出去，所以「要不要 v4」是選腳本，不是設旗標：
-
-| 腳本 | 內容 | 需要 Cancun |
-|---|---|---|
-| `Deploy.s.sol` | 核心：登錄、身分、Listing、池化、憑證、Safe + Timelock、passkey 帳戶工廠 | 否 |
-| `DeployV4.s.sol` | 核心 + v4（PoolManager / Hook / TrustedRouter） | 是 |
-| `DemoFlow.s.sol` | 核心 demo（沒有 v4 時，做市商直接轉 CCT 給自然人，贖回 / 註銷流程照跑） | 否 |
-| `DemoFlowV4.s.sol` | 核心 demo + v4 流動性與 swap | 是 |
-
-用 `Deploy.s.sol` 時部署檔裡 v4 的三個地址會是 0，前端據此自動隱藏 v4 相關 UI
-（`/trade` 的流動性池卡片、`/admin` 的 PoolManager 狀態）。
-
-`DemoFlowV4` 用 Anvil 預設帳戶：account0 = 國家單位 / 營運 / 身分驗證服務 / 查驗機構（Phase 0 合一），
-account1 = 減量企業，account2 = 做市商，account3 = 自然人。流程：憑證 attestation 註冊 → 專案登錄 →
-查驗簽章核發 100 噸 → 30 噸掛單、60 噸入池、做市商提供 v4 流動性 → 自然人從掛單與 v4 各買一次 → 兩邊註銷取得憑證。
-
-### 換到外部鏈：四件在本機是免費的事
-
-> **目標鏈是 Boltchain 8018**（身分合約在那裡），步驟見
-> [部署到 Boltchain](#部署到-boltchainchainid-8018)。這一節講的是**離開本機 anvil**
-> 之後一定會面對的四件事，Boltchain 與 Base Sepolia 都適用。
->
-> Base Sepolia（chainId 84532）仍然可用，`foundry.toml` 的 `base_sepolia` 端點與
-> `--verify` 的 etherscan 設定都還在——它有現成的區塊瀏覽器，要讓外部單位自己
-> 對照鏈上狀態時比較方便。
-
-換鏈不是只改一個 RPC 位址。下面這幾件事在 Anvil 上是免費的，在公開鏈上不是。
-
-#### 一、金鑰：預設值在公開鏈上會被拒絕
-
-`.env.example` 裡那些 `0xac09…` 是 **Anvil 的公開金鑰**，印在 anvil 的啟動畫面上。
-它在本系統裡同時能凍結任何人的錢包、替任何人簽發身分、核發碳權額度。
-
-所以兩道閘門都會擋：部署腳本（`Deploy.s.sol` 的 `_requireNoWellKnownKeys`）在部署前
-revert，前端（`lib/server/chain.ts` 的 `requireOwnKey`）在啟動時丟例外。
-判斷用白名單——只有 chainId 31337 / 1337 算本機鏈，其餘一律當公開鏈。
-
-```bash
-cast wallet new        # 每個角色各產一把
-```
-
-| 變數 | 用途 | 要有餘額嗎 |
-|---|---|---|
-| `DEPLOYER_PK` | 部署整套合約 | 要（一次性，數千萬 gas） |
-| `RELAYER_PK` | 代送所有使用者的交易 | **要，而且要持續補** |
-| `IDENTITY_VERIFIER_PK` | 簽 KYC attestation | 不用（只簽章） |
-| `CARBON_VERIFIER_PK` | 簽核發 attestation | 不用（只簽章） |
-| `DOCUMENT_SIGNER_PK` | 回寫憑證 hash、設定費率 | 要（少量） |
-| `NATIONAL_OWNERS` / `OPERATOR_OWNERS` | 治理多簽的持有人 | 不用 |
-| `IDENTITY_SALT` | 身分雜湊的鹽 | — |
-
-`IDENTITY_SALT` **一定要換掉**：鏈上存的是 `keccak(身分證號 + salt)`，
-鹽如果是範例裡那個字串，任何人都能把號碼逐一試出來（號碼空間只有幾億）。
-
-relayer 沒錢時每一筆交易都會失敗，錯誤碼是 `RELAYER_UNFUNDED`，訊息會直接說
-是哪個地址。定期看一眼餘額，別等使用者來問。
-
-#### 二、時間：沒有時間旅行
-
-Anvil 上我們用 `anvil_setTime` 把鏈的時間往前推，所以首頁那一整年的行情是
-「回填一年、每 8 小時一輪、五千筆交易」堆出來的。公開鏈上做不到，**而且沒有替代
-方案**——區塊時間由出塊的人決定，我們只是一個送交易的客戶端。
-
-兩個地方因此改了：
-
-- **模擬器**（`npm run simulate`）會自己偵測，切到**縮時模式**：劇本照樣走一年
-  （申報季、每月對帳、人物陸續加入），但交易全部發生在現在。量能分布、各國佔比、
-  掛單結構都對；K 線的橫軸則是真實日期。要讓橫軸拉長，就把 `--pace` 調大讓它跑好幾天。
-
-  ```bash
-  cd web && npm run simulate -- --from 2025-09-25 --tick 8h --pace 60
-  ```
-
-- **復原等待期**從常數變成**部署參數**（`PasskeyAccountFactory` 的建構子）。
-  正式環境 72 小時；公開測試鏈上要能在一次示範裡跑完，就部署成十分鐘：
-
-  ```bash
-  export RECOVERY_DELAY=600
-  ```
-
-  合約端仍然改不了——等待期的全部意義就是治理方不能縮短它。
-
-#### 三、交易：會撞車、會塞車、會沒錢
-
-所有伺服器端送出的交易都走 `lib/server/tx.ts` 的 `submit()`，它做三件本機用不到的事：
-
-1. **同一把金鑰的交易排隊送、序號自己記。** 平台代付 gas 的代價是所有人共用一個
-   nonce 序列；兩個使用者同時按按鈕，在公開鏈上就是其中一筆 `nonce too low`。
-2. **等待有盡頭**（`TX_TIMEOUT_MS`，公開鏈預設 120 秒），逾時回 `TX_TIMEOUT`
-   並附上交易雜湊，而不是把 API 掛在那裡。
-3. **`insufficient funds` 轉成 `RELAYER_UNFUNDED`**，訊息說得出是哪個地址。
-
-另外所有寫入都先 `simulateContract` 再送：公開鏈上一筆注定失敗的交易照樣要付 gas，
-而且 `estimateGas` 的 revert 常常不帶資料，模擬才拿得到真正的原因。
-
-#### 四、步驟
-
-```bash
-# 0. 領測試幣到 DEPLOYER 與 RELAYER 兩個地址（Base Sepolia faucet）
-
-# 1. 部署前檢查：會驗 Cancun、EIP-1559、餘額，以及有沒有人還用著公開金鑰
-./script/preflight.sh https://sepolia.base.org
-
-# 2. 部署（含合約原始碼驗證，需要 BASESCAN_API_KEY）
-# 金鑰與角色地址由 bootstrap.sh 從 web/.env.local 帶入，不要手動 export 私鑰
-export RPC_URL=https://sepolia.base.org RECOVERY_DELAY=600
-FORGE_EXTRA_ARGS=--verify bash script/bootstrap.sh deploy
-
-# 3. 前端指向這條鏈
-cd web && cp .env.example .env.local   # 依上面那張表把每一把金鑰換掉
-#   RPC_URL=https://sepolia.base.org
-#   CHAIN_ID=84532
-
-# 4. 展示資料
-npm run simulate -- --from 2025-09-25 --tick 8h --pace 60
-```
-
-部署檔會寫到 `deployments/84532.json`——按 chainId 分檔，所以本機那份
-`31337.json` 不受影響，兩邊可以並存。
-
-#### 五、還在 Anvil 上的東西
-
-`npm run e2e` 預設仍然跑本機鏈，理由很實際：一整套跑下來幾百筆交易，
-在公開鏈上是幾十分鐘與一把測試幣。要對公開鏈跑就設 `RPC_URL` / `CHAIN_ID`，
-並補上這條鏈的治理金鑰——復原那一支現在走**真的多簽**
-（`script/govern.sh safe national exec`），不再靠 anvil 的 impersonate：
-
-```bash
-RPC_URL=https://sepolia.base.org CHAIN_ID=84532 \
-NATIONAL_OWNER_PKS=0x…,0x… SENDER_PK=0x… \
-  node e2e/recovery.mjs
-```
-
-改成真多簽不只是為了換鏈：以前測的是「如果 Safe 說要，帳戶會照做」，
-現在測的是「要讓 Safe 說要，得幾個人簽字」——後者才是治理。
-
-### 部署到 Boltchain（chainId 8018）
-
-CAFECA 的身分合約在 Boltchain 上，所以交易所也要在同一條鏈——合約發不出跨鏈的
-`eth_call`，分開的話逃生門與委託單爭議都會退化成只能鏈下處理。
-
-#### 〇、RPC 位址與這條鏈的能力
-
-**RPC 不是 `https://boltchain.cafeca.io`** —— 那個網域上跑的是 Explorer，
-它的 HTTP server 只支援 GET，POST JSON-RPC 一律不通（`/`、`/rpc`、`/api/rpc`、
-`/eth` 全試過）。`/.well-known/cafeca-configuration` 的 `chain.rpc` 指向它，
-是設定檔的問題，不是你設錯。
-
-實際的節點：
-
-```bash
-./script/preflight.sh http://211.22.118.149:8545
-```
-
-2026-09-28 實測結果（`boltchain/v0.1.0`，不是 iSunCoin 那條 go-ethereum 1.12.3 血統）：
-
-| 檢查 | 結果 |
-|---|---|
-| chainId | **8018**（`net_version` 一致） |
-| **EIP-1153（TSTORE）** | ✅ 有 |
-| **EIP-5656（MCOPY）** | ✅ 有 —— `evm_version = cancun` 直接可用 |
-| PUSH0、`excessBlobGas` | ✅ 有 —— Cancun 的區塊欄位齊備 |
-| EIP-1559 | ✅ `baseFeePerGas` = 10,000,000 wei（0.01 gwei），不用 `--legacy` |
-| gasLimit / 出塊 | 30,000,000 / 6 秒；5 個 peer，已同步 |
-| **CREATE2 deployer** | ❌ **沒有** —— `0x4e59b448…`、CreateX、Safe Singleton Factory 三個都查過。**v4 因此部署不了** |
-
-**所以 `[profile.shanghai]` 那條路不用走了。** Safe v1.4.1 的 `via_ir` 阻塞點
-在這條鏈上碰不到——整套以 `cancun` 編出來的碼直接跑。
-
-**但 v4 仍然部署不了**，卡在另一件事：這條鏈上沒有 CREATE2 deployer。
-v4 的 hook 位址要把權限旗標挖進低 14 bits，只能用 CREATE2，而 forge script 的
-CREATE2 是透過鏈上那個標準代理做的。`bootstrap.sh` 與 `preflight.sh` 會**事先**查出來
-並自動改用 `Deploy.s.sol`——少掉的只有 v4 展示模組，主市場是 `Listing`，
-而 v4 的 `PoolManager` 是 BUSL-1.1、本來就只能非生產展示。
-
-要補的話是在 Boltchain 上部署一個 CREATE2 工廠（哪一個都行）；之後
-`CREATE2_DEPLOYER=<位址>` 會同時套用到 `HookMiner` 與 `forge --create2-deployer`
-兩邊——這一版把那個常數改成讀環境變數，就是為了兩邊不會各寫一個而對不上。
-README 最後那一節「目標鏈沒有 Cancun 的話」只對 8017 主網與其他舊鏈有意義。
-
-#### 誰付 gas
-
-| 誰 | 做什麼 | gas 由誰出 |
-|---|---|---|
-| 一般使用者 | 買賣、註銷（走 CAFECA 簽章通道的 `sendCalls`） | **CAFECA 贊助**。使用者的帳戶不需要持有 BOLT |
-| 平台 | KYC 註冊、核發、`retireFor`、承諾上鏈 | `RELAYER_PK` |
-| 平台 | 憑證雜湊回寫、費率設定 | `DOCUMENT_SIGNER_PK` |
-| 模擬市場的人物帳戶 | 下單、成交、註銷 | **平台代付**：`ensureGas()` 從 `DEPLOYER_PK`（沒有就 `RELAYER_PK`）轉過去 |
-
-**沒有任何一般使用者需要自己準備 BOLT。** 這是刻意的——一個要求碳權買家先去
-取得原生代幣的平台，實際上等於把大多數人擋在門外。
-
-#### 四件關於這個端點的事
-
-1. **純 HTTP，沒有 TLS**（443 與 8546 都是 connection refused）。RPC 流量
-   在網路上是明文的。測試網展示可以接受，但要知道：任何在路徑上的人看得到
-   查詢內容，也改得動回應。正式環境要 TLS。
-2. **沒有 WebSocket**，所以沒有事件訂閱，只能輪詢。本專案本來就是輪詢，不受影響。
-
-3. **txpool 不收未來 nonce 的交易**，所以部署一定要 `--slow`。forge 預設把整批
-   交易用連續 nonce **一次送出**，依賴節點把還輪不到的那幾筆排進佇列等前面到齊——
-   那是 geth 的行為，不是規範。Boltchain 直接回 `nonce too high` 把整批打掉，
-   而那個訊息看起來像我們算錯 nonce（實測 `latest == pending`，一筆卡住的都沒有）。
-   代價是慢：幾十筆 × 6 秒。`bootstrap.sh` 在外部鏈上會自動加。
-4. **瀏覽器碰不到它，而這是好事。** 站台走 HTTPS 時，瀏覽器不能呼叫 `http://` 的
-   端點（mixed content）。本專案的「前端不直接跟區塊鏈說話」在這裡剛好付清了成本——
-   所有鏈上讀寫都在伺服器端，瀏覽器連節點位址都不知道。
-
-#### 一、金鑰與部署：交給 `bootstrap.sh`
-
-```bash
-export RPC_URL=http://211.22.118.149:8545
-export SETTLEMENT_TOKEN=0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3   # CAFECA 的 TWDC
-bash script/bootstrap.sh          # keys → fund（等你撥款）→ deploy → 角色檢查
-```
-
-**私鑰不要 export 到 shell。** 金鑰由 `bootstrap.sh keys` 產生、寫在 `web/.env.local`
-（權限 600），網站、`simulate.mjs`、`commit-epoch.mjs` 都從那裡讀。shell 裡的同名變數
-會**蓋過**檔案——之前照舊版文件打過 `export DEPLOYER_PK=0x…` 的，那個佔位字會一直蓋著
-真的金鑰，症狀是 `invalid private key … got string`。先 `unset DEPLOYER_PK` 再跑。
-
-| 金鑰 | 鏈上角色 | 要不要餘額 |
-|---|---|---|
-| `DEPLOYER_PK` | 部署；模擬器撥 gas 給人物帳戶 | 要 |
-| `RELAYER_PK` | `COMMITTER_ROLE`：承諾上鏈、`retireFor` | 要 |
-| `DOCUMENT_SIGNER_PK` | `DOCUMENT_ROLE`、`REPORTER_ROLE`、`PRICING_ROLE` | 要 |
-| `IDENTITY_VERIFIER_PK` | `IDENTITY_VERIFIER_ROLE`（只簽 attestation） | 不要 |
-| `CARBON_VERIFIER_PK` | `VERIFIER_ROLE`、`AUDITOR_ROLE` | 不要（對帳查核的 `attest` 要一點，模擬器會從 DEPLOYER 代撥） |
-
-> **使用者的交易不用平台出 gas**：買賣與註銷走 CAFECA 簽章通道的 `sendCalls`，
-> 由使用者自己的帳戶送出、CAFECA 贊助 gas。平台金鑰付的是**平台自己**要做的事。
-
-**角色要授給上表那幾把金鑰，不是 deployer。** `Deploy.s.sol` 的
-`IDENTITY_VERIFIER` / `CARBON_VERIFIER` / `DOCUMENT_SIGNER` 沒給就預設成 deployer——
-部署照樣「成功」，但網站用自己那把金鑰簽的東西全部被合約拒絕（第一筆 KYC 就
-`InvalidAttestation`）；而 deployer 部署完已經放棄 admin，事後補授要走 48 小時的 Timelock。
-`bootstrap.sh deploy` 會從 `web/.env.local` 算出這三個地址傳進去，部署完再逐一 `hasRole`
-檢查。隨時可以重驗：
-
-```bash
-bash script/bootstrap.sh roles    # 每一行都該是 ✓
-```
-
-程式會在啟動時擋下 Anvil 的公開金鑰（`requireOwnKey`；腳本端是 `scripts/lib/keys.mjs`）——
-那把印在 anvil 的啟動畫面上，在這裡同時能凍結錢包、簽發身分、核發額度。
-
-#### 二、部署細節（`bootstrap.sh` 替你做的事）
-
-- Boltchain 沒有 CREATE2 deployer，v4 的 hook 部署不了，自動改用 `Deploy.s.sol`。
-- 外部鏈自動加 `--slow`，理由見上面「四件關於這個端點的事」。
-- `COMMITTER` 預設是 relayer 的地址，`bank:commit` 才送得出去。
-- 國家 Safe 2-of-3、營運 Safe 1-of-2 的 owner 金鑰寫在 `.governance.env`，**不在** `web/.env.local`。
-- `deployments/8018.json` 已存在就是換一次部署：舊合約留在鏈上，`web/data/` 搬到 `data.bak-<時間>`。
-
-#### 結算幣：用 TWDC，不要自己發
-
-`SETTLEMENT_TOKEN` 設了就**不部署 MockTWD**，直接把那個地址接到 `FeeSchedule`、
-`Listing` 與 `Bank`。Boltchain 上的 TWDC 是
-`0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3`——
-`CAFECA TWD Test Coin`、symbol `TWDC`、**6 decimals**（與 MockTWD 相同，
-所以價格與所有既有的數字都不必換算）。
-
-這不只是省事，它是這個系統想要的終局：**平台自己發儲值憑證會碰電支執照**，
-而一個能憑空生出結算幣的交易所，它的資產池揭露也就沒有意義了。
-MockTWD 從頭到尾只是一個站得住的替代品。
-
-跟著改變的兩件事：
-
-- **demo faucet 不能用了。** 本站沒有 TWDC 的鑄幣權。部署檔多了一個
-  `settlementMintable` 旗標，`/api/faucet` 據此直接回一句說得清楚的話，
-  前端也不會畫出那顆按鈕——一顆按下去必定失敗的按鈕，比沒有那顆按鈕更糟。
-  測試幣要向發行方取得。
-- **畫面上的幣別字樣跟著部署走**（`useCash()`）。結算幣是 TWDC 卻還寫 mTWD，
-  使用者會以為那是兩種不同的東西，而在一個要給主管機關看的系統裡那是會被問的。
-
-沒有區塊瀏覽器的驗證 API，所以 `--verify` 不適用；要讓外部單位自己對照
-「鏈上跑的位元組碼」與 repo 裡的原始碼，得另外提供建置步驟與 `forge build` 的輸出。
-
-`demo-box.sh` 也認得這條鏈——它看 `RPC_URL`（shell 沒設就讀 `web/.env.local`），不是寫死 anvil：
-
-```bash
-bash script/demo-box.sh deploy    # 外部鏈上 = bootstrap.sh deploy
-bash script/demo-box.sh seed      # 縮時鋪資料：預設 30 人 × 30 天、每天一輪，約一小時
-bash script/demo-box.sh status    # chainId、是不是本機鏈、部署檔在不在
-```
-
-`seed` 在外部鏈上刻意縮小規模（`SIM_USERS` / `EXT_DAYS` / `EXT_TICK` 可調）：每筆交易
-都要等一次出塊，本機那種一百人 × 一年的劇本在這裡要跑好幾天。模擬器的人物帳戶用
-**這條鏈專用的助記詞**（第一次跑時產生、寫進 `web/.env.local` 的 `SIM_MNEMONIC`）——
-anvil 那組 `test … junk` 是公開的，用在這裡等於平台撥過去的 gas 誰都能拿走。
-
-TWDC 本站鑄不出來，所以人物帳戶的入金是從 `DEPLOYER` 的 TWDC 餘額**轉**過去的。
-`DEPLOYER` 沒有 TWDC 的話，模擬出來的市場只有核發與掛單、沒有成交；
-要有成交，先向 CAFECA 取得測試用 TWDC 轉到 `DEPLOYER` 的地址。
-
-**`rebuild` 在外部鏈上會直接拒絕**，而且應該拒絕：鏈不是我們的（停不掉、重開不了）、
-時間不是我們的（沒有 `anvil_setTime`，回填一年份做不到）、每天重新部署會讓前一次的
-部署變成孤兒而上面可能有真的餘額。外部鏈只有「部署一次」與「從現在開始鋪資料」。
-
-部署檔會寫到 `deployments/8018.json`。按 chainId 分檔，所以本機那份 `31337.json`
-不受影響，兩邊可以並存。
-
-#### 三、前端設定（`web/.env.local`）
-
-```bash
-RPC_URL=http://211.22.118.149:8545
-CHAIN_ID=8018
-
-# ── 以 CAFECA 登入 ────────────────────────────────────────
-# SITE_ORIGIN 是防仿冒的全部：錢包簽的訊息帶著要登入的網域，後端**逐字**比對。
-# 它必須與瀏覽器網址列完全相同（含 scheme 與 port）。這是最容易設錯的一行，
-# 而設錯的症狀是「登入一直說驗證沒有通過」，看不出是網域的問題。
-SITE_ORIGIN=https://你的網域
-AUTH_URL=https://你的網域
-AUTH_SECRET=<openssl rand -base64 32>     # 同時是 nonce 的 HMAC 金鑰，production 沒設會起不來
-CAFECA_WALLET=https://cafeca.io
-NEXT_PUBLIC_CAFECA_WALLET=https://cafeca.io
-# 把這幾個設死，就完全不去讀對方的 .well-known。**目前必須設**：
-# 那份設定檔的 chain.rpc 指向 Explorer（不服務 JSON-RPC），而且 issuer 還是
-# http://localhost:10002（開發版錢包沒設 PUBLIC_ORIGIN）。
-CAFECA_CHAIN_ID=8018
-CAFECA_RPC_URL=http://211.22.118.149:8545
-CAFECA_ATTESTATION=0x4b08B5063eE773C084dD9E67E09690aF8cb2A880
-CAFECA_RECOVERY=0xA199a3f7afd81bDBC6CE697400Fa44d5b6a16594
-CAFECA_FACTORY=0x075e377D1096089aE2D44fbD23156BF900b8bd24
-CAFECA_KEYRING=0x367a9E8a6E8bA108F4cC4B863d03dD618aD7893b
-
-# 服務金鑰（第一節那幾把）
-# RELAYER_PK / IDENTITY_VERIFIER_PK / CARBON_VERIFIER_PK / DOCUMENT_SIGNER_PK / DEPLOYER_PK
-# 由 bash script/bootstrap.sh keys 產生並寫在這裡。不要手寫、不要貼到任何地方。
-IDENTITY_SALT=<換掉>   # 鏈上存 keccak(身分證號 + salt)，用範例值等於沒有雜湊
-
-# 角色（地址，不是 email 了）
-ADMIN_ADDRESSES=
-VERIFIER_ADDRESSES=
-```
-
-**`ADMIN_ADDRESSES` 有一個先有雞還是先有蛋**：你的地址是 CAFECA 身分合約地址，
-要登入一次才知道。所以順序是 —— 先啟動、以 CAFECA 登入、在 `/account` 複製地址、
-填進 `.env.local`、重啟。沒做這一步的話 `/admin` 與 `/verifier` 進不去，
-而 `KYC_AUTO_APPROVE=0` 時申請會卡在沒有人能核准的佇列裡。
-
-#### 四、清掉屬於舊鏈的資料
-
-```bash
-cd web && npm install && npm run data:reset
-```
-
-KYC 申請、憑證紀錄、委託單 log 都綁在**上一個部署**上（檔案裡有部署指紋）。
-不清的話前端會回 `DATA_STALE`。`data:reset` 是**搬**不是刪——舊資料進
-`data.bak-<時間戳>`，裡面有明文身分證號，確認不需要要自己刪掉。
-
-`npm install` 不能省：這一輪多了 `server-only` 這個 devDependency。
-
-#### 五、驗一次整條路走得通
-
-```bash
-npm run build && npm start
-# 另一個終端
-npm run bank:seed     # 鏡像鏈上事件 + 一組示範委託單 → log（僅限本機鏈，會拒絕在 8018 執行）
-npm run bank:plan     # 看這一期會提交什麼
-npm run bank:commit   # 承諾上鏈
-npm run bank:verify   # 用鏈上的 root 獨立驗一次
-npm run bank:proofs   # 匯出每個帳戶的提領證據
-```
-
-> `bank:seed` 只在 chainId 31337 / 1337 執行（它直接寫 log 檔，正式環境寫 log 的
-> 唯一入口是收單 API）。在 8018 上要用真的下單流程產生 log。
-
-要在這條鏈上鋪市場資料：
-
-```bash
-bash script/demo-box.sh seed      # 縮時，不是回填
-```
-
-外部鏈沒有 `anvil_setTime`，所以劇本的一年會**壓縮成現在這一段時間**——K 線的橫軸
-是真實日期，不會有一年的歷史。
-
-**人物帳戶的 gas 由平台出**，不需要你逐一撥款：外部鏈上沒有 `anvil_setBalance`，
-所以模擬器的 `ensureFunded()` 會在餘額不足時從平台金鑰（`DEPLOYER_PK`，
-沒有就 `RELAYER_PK`）真的轉一筆過去，每個帳戶 `SIM_GAS_TOPUP`（外部鏈預設
-0.001、本機 10）。要備的是**那把平台金鑰**的餘額：一百個帳戶約 0.1 BOLT。
-
-#### 六、上去之後會撞到的幾件事
-
-1. **委託單簽章在公開鏈自動開啟**（`ORDERS_REQUIRE_SIGNATURE` 沒設時跟著鏈走）。
-   前端下單要先走 CAFECA 簽章通道拿簽章，`expiry` 也必須由呼叫端帶——
-   伺服器不能套預設值，否則必然對不上 digest。
-2. **`kyc_level` → tier 的映射還沒實作。** 使用者在 CAFECA 有實名等級，
-   但本站的 `KYCRegistry` tier 仍走人工審核流程。
-3. **19 處 `fromBlock: 0n`。** Boltchain 現在才一萬多個區塊，還撐得住，
-   但它會隨時間單調惡化。Bank 那幾支已經改用 `deployedAtBlock` 了，其餘還沒。
-4. **e2e 會紅。** 六支需要 CAFECA 錢包的測試替身，見「錢包」那一節。
-5. **時間**：6 秒出塊，不是本機的即時。回填模擬資料要算進去。
-6. **CAFECA 錢包本身還沒對外**：`.well-known` 的 `issuer` 與所有端點都是
-   `http://localhost:10002`，所以「以 CAFECA 登入」在部署站台上還不會通。
-   合約地址是對的（在鏈上），要等對方把 `PUBLIC_ORIGIN` 設成正式網址。
-
-#### 目標鏈沒有 Cancun 的話
-
-比 Cancun 舊的鏈（例如 geth 1.12.x）連核心合約都跑不了，不只是少掉 v4：
-`evm_version = cancun` 編出來的碼會用到 MCOPY。要降到 `evm_version = shanghai`
-重編，而那條路卡在一個點上（`foundry.toml` 的 `[profile.shanghai]` 有完整紀錄）：
-
-- `via_ir = false` → `Listing`、`CarbonPool`、`CarbonRegistry`、`CarbonCredit1155`、
-  `RetirementCertificate` 五個全部 stack too deep。沒有 MCOPY 時 solc 的記憶體搬移碼
-  比較吃堆疊，這是系統性的，不是某個函式區域變數太多。
-- `via_ir = true` → 上面五個都過，**只剩 Safe v1.4.1 的 `execTransaction` 編不過**
-  （Safe 的 inline assembly 沒標 memory-safe，是 Safe 已知的 via_ir 問題）。
-  2026-09-27 實測：把四個相依 Safe 的檔案 skip 掉之後，其餘全部編譯成功，
-  包含 A/B/C 期整套資產池。
-
-所以唯一的阻塞點是 Safe。解法是不要編譯 Safe，改用 Safe v1.4.1 的 canonical
-creation bytecode 直接 CREATE —— 官方版本是 solc 0.7.6 編的，本來就不含 Cancun 指令，
-而且部署出來的 Safe 會與已稽核的版本位元組完全一致。**尚未實作。**
-
-最省事的另一條路：把 Boltchain 的節點升級到有 Cancun（EIP-1153 + EIP-5656）的版本。
-
-### 分期：接下來是什麼
-
-| | 內容 | 鏈 |
-|---|---|---|
-| **Phase 0**（現在） | 提案展示。功能完整、可以從頭走到尾；身分驗證與查驗簽章是模擬的 | **Boltchain 8018**（anvil 僅開發與測試） |
-| **Phase 1** | 試點。真實憑證整合、查驗機構自行簽章、ERC-4337、索引器與監控、金鑰移交 HSM | Besu + QBFT 四節點（genesis 必須啟用 Cancun） |
-| **Phase 2** | 正式。結算幣落地、指定做市商、第三方稽核、法遵定案、控制權移轉演練 | — |
-
-
-### 尚未包含（Phase 0 後續）
-
-- ERC-4337 EntryPoint + paymaster（目前為 relayer 代送）
-- 查驗機構自行簽章（目前簽章金鑰在本站 `CARBON_VERIFIER_PK`）
-- 身分驗證服務：工商憑證 / 自然人憑證 / TW FidO 驗證後端（目前以簽章金鑰模擬）
-- Besu + QBFT 四節點測試網（需啟用 Cancun / EIP-1153）
+`npm run gen:ledger-fixture` / `gen:tree-fixture` 產生 `test/fixtures/` 給 forge 用，確保 TypeScript 與 Solidity 兩份雜湊逐位元組一致。
 
 ---
 
-## 七、出問題怎麼修
-
-先看對照表。三個最常見的個案（部署最後一筆失敗、重新部署後資料對不上、登入驗不過）在表格下面各有一段。
-
-### 症狀對照表
+## 八、出問題怎麼修
 
 | 症狀 | 多半是 |
 |---|---|
 | 畫面全空、沒有錯誤訊息 | `.env.local` 的 `RPC_URL` / `CHAIN_ID` 對到另一條鏈 |
-| 建帳戶或註銷失敗 | `RELAYER_PK` / `DOCUMENT_SIGNER_PK` 在該鏈上沒餘額（Phase 0 平台代付 gas） |
-| KYC 申請卡住沒人能核准 | `KYC_AUTO_APPROVE=0` 但 `ADMIN_ADDRESSES` 沒有你登入後拿到的地址 |
-| 登入一直說「驗證沒有通過」 | `SITE_ORIGIN` 與瀏覽器網址列不是**逐字**相同（含 scheme 與 port） |
+| 啟動就報「不是帳本部署（沒有 ledger 欄位）」 | `deployments/<chainId>.json` 是舊的全合約版本。重新部署：`bash script/bootstrap.sh deploy`（本機 `demo-box.sh rebuild`） |
+| 登入一直說「驗證沒有通過」 | `SITE_ORIGIN` 與瀏覽器網址列不是**逐字**相同（含 scheme 與 port）。真正原因在伺服器 console 的 `[cafeca] 登入驗證失敗：…` |
+| 「nonce 格式錯誤」 | CAFECA 錢包要求 `[A-Za-z0-9_-]{8,128}`；本站發的是固定 61 字元。瀏覽器快取了舊版前端就重新整理 |
 | 登入了但每個按鈕按下去都失敗 | 沒有開啟 CAFECA 簽章通道。回首頁重新登入一次 |
-| 下單被擋，說簽章沒有通過驗證 | 公開鏈上委託單一定要簽。前端要先走簽章通道，`expiry` 也必須由呼叫端帶 |
-| 「領取測試幣」按鈕不見了 | 結算幣是外部代幣（TWDC），本站沒有鑄幣權。這是對的，測試幣要向發行方取得 |
-| 部署腳本最後一筆 `AttestationExpired` | anvil 閒置太久，見下 |
-| 重跑部署時 `nonce too low` / `replacement transaction underpriced` | 上一次部署中途被中斷，鏈上留下做到一半的狀態。本機鏈重開就好；外部鏈先看 `broadcast/<script>/<chainId>/run-latest.json` 送到哪裡 |
-| 部署被 `PublicKeyOnPublicChain` 擋下 | 有一個角色還用著 anvil 的預設帳戶（常見的是 `NATIONAL_OWNERS`）。`bash script/bootstrap.sh keys` 會一併產生治理 owner |
-| 部署到一半 `missing CREATE2 deployer` | 這條鏈沒有那個標準代理，v4 的 hook 位址挖不出來。`bootstrap.sh` 與 `preflight.sh` 現在會**事先**查並自動改用 `Deploy.s.sol` |
-| 部署一開始就 `nonce too high`，而 `latest == pending`（沒有卡住的交易） | 節點的 txpool 不收未來 nonce 的交易，而 forge 預設整批一次送。加 `--slow`；`bootstrap.sh` 在外部鏈上會自動加 |
-| `seed` / `simulate` 報 `invalid private key, expected hex or 32 bytes, got string` | shell 裡有一個不是私鑰的同名變數（常見是照舊文件 `export DEPLOYER_PK=0x…` 留下的佔位字），蓋過了 `web/.env.local`。`unset DEPLOYER_PK RELAYER_PK` 再跑；新版會直接說是哪一個變數 |
-| 登入後第一筆 KYC 註冊 `InvalidAttestation`；核發、憑證文件雜湊也失敗 | 角色授給了 deployer 而不是 `web/.env.local` 裡那幾把服務金鑰。`bash script/bootstrap.sh roles` 看哪一行 ✗。部署完 deployer 已放棄 admin，補授要走 Timelock；還沒有資料的話重跑 `bootstrap.sh deploy` 最快 |
-| 外部鏈 `seed` 跑完只有核發與掛單、沒有成交 | TWDC 本站鑄不出來，人物帳戶的入金是從 `DEPLOYER` 的 TWDC 餘額轉的。先把測試用 TWDC 轉到 `DEPLOYER` 地址 |
-| /admin「後台做市」顯示「常駐程式沒有回應」 | `npm run mm` 沒在跑或當掉了。`bash script/mm-service.sh status` / `logs`。狀態檔不會自己變舊，所以畫面以心跳判斷 |
-| 做市「已停止報價」 | 碰到單日停損，或按過「收回資金」。原因寫在狀態區；確認後按「恢復」 |
-| 做市一直只有買單、沒有賣單 | 正常：一開始只有現金，要等有人賣給它的買單、有了庫存才會掛賣單 |
-| 撥款失敗「營運金鑰的結算幣不夠」 | TWDC 鑄不出來，要先轉到 `DEPLOYER` 地址 |
-| 開不了模擬交易（FORBIDDEN） | 這條鏈不在 `SIMULATION_CHAINS`。這是刻意的：正式市場不可以有平台自己的虛擬成交 |
-| `govern.sh status` 印出 `does not have any code` | 這個部署沒有 v4（hook / poolManager / router 是 0），屬正常。已修成跳過並標示「v4=未部署」 |
-| 重新部署後畫面有資料但對不上鏈 | `web/data/` 的舊紀錄，見下 |
-| 磁碟莫名其妙滿了 | `~/.foundry/anvil/tmp/` 的歷史狀態，見[建立模擬資料](#建立模擬資料) |
-| 首頁地球轉但沒有柱子 | 鏈上還沒有核發資料，跑 `bash script/demo-box.sh rebuild` |
-| 前端報 `0x` 開頭的八位十六進位、看不出原因 | `web/lib/error-abi.ts` 沒跟上合約，`cd web && npm run gen:errors` |
-| 市場突然安靜、只剩零星成交 | 持續模式把年度需求跑完了，見[持續運作](#持續運作本機展示機) |
+| 下單說「被帳本規則拒絕」 | 事件已簽收但不生效（身分、餘額、轄區、用途……），理由寫在訊息裡 |
+| 存入後帳本餘額沒變 | 鏡像是下一次同步才入帳；`/trade` 的存入卡會顯示錢包餘額、帳本合約與結算幣地址供核對 |
+| 領回說「證據不是最新一期」／`NotLatestEpoch` | 剛換期。重新整理提領狀態再送 |
+| 承諾送不出去 `ChainBroken` / `EpochOutOfOrder` | 承諾程式讀到的帳本和上一期不是同一份，或上一期沒上鏈。`npm run ledger:verify` 會指出哪一期 |
+| 承諾送不出去 `Insolvent` | 帳本宣稱欠的結算幣比合約持有的多。**立刻查**：多半是有一筆存入沒在鏈上發生 |
+| 承諾送不出去 AccessControl revert | `COMMITTER` 不是 `RELAYER_PK` 的地址。`bash script/bootstrap.sh roles` |
+| 部署被 `PublicKeyOnPublicChain` 擋下 | 有角色還用著 anvil 的預設帳戶（常見是 `NATIONAL_OWNERS`）。`bash script/bootstrap.sh keys` |
+| 部署一開始就 `nonce too high` | 節點的 txpool 不收未來 nonce，而 forge 預設整批送。`bootstrap.sh` 在外部鏈上會自動加 `--slow` |
+| 腳本報 `invalid private key` | shell 裡有同名的佔位變數蓋過了 `web/.env.local`。`unset DEPLOYER_PK RELAYER_PK` |
+| `/admin` 做市顯示「常駐程式沒有回應」 | `npm run mm` 沒在跑。`bash script/mm-service.sh status` / `logs` |
+| 做市撥款失敗「營運金鑰的結算幣不夠」 | TWDC 鑄不出來，要先轉到 `DEPLOYER` 地址 |
+| 開不了模擬交易（FORBIDDEN） | 這條鏈不在 `SIMULATION_CHAINS`。刻意的：正式市場不可以有平台自己的虛擬成交 |
+| 前端報 `0x` 開頭的八位十六進位 | `web/lib/error-abi.ts` 沒跟上合約：`cd web && npm run gen:errors` |
+| 重新部署後畫面有資料但對不上 | `web/data/` 是舊部署的。`cd web && npm run data:reset`（搬到 `data.bak-<時間戳>`，不是刪除） |
 
-#### 登入一直說「驗證沒有通過」
-
-這是換到 CAFECA 登入之後最容易踩、也最難從訊息看出原因的一個。後端刻意把
-網域不符、nonce 重用、nonce 過期、合約不承認簽章**全部收斂到同一個錯誤碼**
-（`SIGNIN_REJECTED`）——對外分辨得出是哪一項，攻擊者就多一條逐項試探的路。
-真正的原因在**伺服器的 console**，一行 `[cafeca] 登入驗證失敗：…`。
-
-照這個順序查：
-
-1. **`SITE_ORIGIN` 與瀏覽器網址列逐字相同嗎**（含 scheme 與 port）。
-   `https://x.example` 與 `https://x.example:443`、`http://localhost:10010` 與
-   `http://127.0.0.1:10010` 都算不同。這條佔了大半。
-2. **`AUTH_SECRET` 有沒有在兩次請求之間換過。** nonce 的 HMAC 用它簽；
-   重啟時換了值，發出去的 nonce 就全部驗不過。
-3. **CAFECA 錢包對外了嗎。** 目前 `https://cafeca.io/.well-known/cafeca-configuration`
-   的 `issuer` 還是 `http://localhost:10002`（開發版錢包沒設 `PUBLIC_ORIGIN`），
-   所以部署在正式網域的站台還登不進去。啟動時 console 會喊一句。
-4. **身分合約所在的鏈連得到嗎。** 驗證是一次 `eth_call`；讀不到一律當作驗證失敗
-   （這是刻意的——「我不知道」被當成「有效」的分支，就是一扇任何人都能走進來的門）。
-   把 `CAFECA_CHAIN_ID` / `CAFECA_RPC_URL` 設死可以跳過讀取對方設定檔那一步。
-
-#### `AttestationExpired`：部署腳本最後一筆交易失敗
-
-症狀：`forge script ... --broadcast` 模擬成功、前面上百筆交易都 ✅，然後在
-`kyc.register` 那筆 ❌，只花三萬 gas。原因是 **anvil 閒置太久**：
-
-forge 模擬時讀到的是鏈上**最後一個區塊**的時間戳，而 anvil 沒有新交易就不產生新區塊；
-等到真的送出交易，anvil 才用**現在的真實時間**打上時間戳。中間這段閒置如果超過簽章的
-有效期，attestation 送到鏈上就已經過期了，而錯誤訊息只有一句 `AttestationExpired`。
-
-解法：**重開 anvil**。demo 與種子腳本的簽章有效期已放寬到一年（`DEMO_SIG_TTL`），
-正常不會再遇到；正式環境的 attestation 由簽章服務即時簽發，短效期才是對的。
-
-#### 重新部署之後：`web/data/` 的舊紀錄
-
-`web/data/` 裡的 KYC 申請、核發申請、passkey 對照都是用**帳戶地址**當鍵的，而地址是合約部署的產物
-（`accountRef` 不變，但 factory 換了地址就換了）。
-鏈重開、換鏈、或 factory 重新部署之後，那些鍵在新鏈上對不到任何東西——資料讀得出來、畫面也畫得出來，錯得無聲無息。
-
-所以資料夾裡壓了一張 `.deployment.json` 戳記，記下這批資料屬於哪一**次**部署：chainId、七個決定身分的合約地址的雜湊，
-再加上部署檔裡的 `deployedAt`（`vm.unixTime()`，主機時鐘毫秒）。`poolFee` 這種不影響舊紀錄的參數不計入。
-
-`deployedAt` 不是多餘的——**Anvil 重開後重新部署會產生一模一樣的地址**（同一個部署者、同樣的 nonce 順序，實測七個全同）。
-只比對地址的話，鏈重開這件事完全看不出來，但鏈上狀態已經歸零：本機寫著「已核准」的 KYC 紀錄，
-對應帳戶在新鏈上 `identityOf` 回 tier 0。加上 `deployedAt` 之後這種情況才擋得到。對不上時：
-
-- **申請與憑證紀錄**（`kyc-requests`、`issuance-requests`）直接擋下，API 回 `503 DATA_STALE`，訊息說明怎麼處理。
-  這些是證據，不該悄悄拿舊的來用。
-- **`accounts.json`**（credentialId → keyId / 帳戶地址）不擋。那個地址是 CREATE2 從 factory + accountRef 算出來的，
-  **可以重算**，舊對照當作不存在，使用者重新建立一次就拿到新地址。硬擋反而會讓這件事變成死結。
-  這份檔案存的是鏈上沒有、而瀏覽器需要的那一塊：`keyId ↔ credentialId`（WebAuthn 要 credentialId，它不上鏈）。
-  **哪些金鑰現在有效，一律以鏈上的 `keys()` 為準。**
-
-確認舊資料不用了：
-
-```bash
-cd web && npm run data:reset   # 搬到 data.bak-<時間戳>，不是刪除
-```
-
-備份裡有上傳的身分文件，確認不需要再自行刪除。想把兩個部署的資料分開留著，設 `DATA_DIR` 指到不同資料夾即可。
+**shell 腳本的坑**：變數展開後面接中文字一定要用 `${VAR}`——macOS 內建的 bash 3.2 會把後面的多位元組字元當成識別字的一部分，
+在 `set -u` 下直接 unbound variable。
 
 ---
 
-## 設計說明
+## 九、設計說明
 
-給要接手改這個系統的人。上面七節回答「怎麼用」，這一節回答「為什麼是這樣」。
-
-### 分層
+### 目錄
 
 ```
-身分／帳戶         （不在本 repo）        使用者的 CAFECA 身分合約（ERC-4337 + ERC-7579，FIDO2 金鑰為根）。
-                                             登入以 EIP-712 SignIn + ERC-1271 驗證；金鑰與裝置生命週期在 CAFECA 錢包裡，本站碰不到
-                   PasskeyAccount / Factory  ⚠️ 前端已不使用（見「錢包」一節），仍留在 repo 與部署腳本供舊鏈與測試
-身分層（UUPS）     KYCRegistry            政府憑證 attestation → tier / expiry / frozen / recover
-登錄層（不可升級） CarbonRegistry         查驗機構 EIP-712 簽章核發、序號唯一、專案登錄、**轄區（國別）政策**
-                   CarbonCredit1155       額度本體，白名單主防線在 _update；retire → 用途 × 轄區檢查 → 憑證
-                   RetirementCertificate  ERC-721 註銷憑證（soulbound，含受益人 hash、用途、核發國、PDF hash）
-                   ReserveAttestation     每月 5 日的託管與準備金對帳報告；查核機構簽署後不可修改
-市場層（UUPS）     Listing                企業以專案名義定價掛單（Phase 1 主市場）
-                   CarbonPool + CCT       同年份池化 ERC-20（只收國內額度）；即時市價買賣的交割層
-市場層（不可升級） FeeSchedule            **各國**交易手續費（bps）與註銷手續費（每噸固定金額）
-v4 模組（展示）    CarbonKYCHook          只接受 TrustedRouter、建池需 OPERATOR、每日限額以實際 delta 計
-                   TrustedRouter          把 msg.sender 編進 hookData，直接在使用者與 PoolManager 間結算
-mock               MockTWD                6 decimals 結算幣；正式由金融機構存款代幣化取代
+src/ledger/Ledger.sol          帳本合約：承諾鏈、授權清單、結算幣託管、提領、逃生、請求權登記
+src/ledger/MerkleSumTree.sol   帶總額的餘額樹（葉子 v2：kg、cash、requested、settled）
+src/ledger/LedgerMerkle.sol    事件、登錄簿、身分樹
+src/governance/GovernanceLib.sol  Safe v1.4.1 基礎設施與 Timelock
+script/DeployLedger.s.sol      部署（含治理移轉；部署者移轉後沒有任何權限）
+script/{bootstrap,preflight,demo-box,govern,mm-service}.sh
+web/lib/ledger/                引擎、事件、簽章、樹、證據、公開檔、儲存——不依賴 Next，查核工具直接用
+web/lib/server/ledger/         網站的讀寫面（收單、檢視、證據）
+web/scripts/                   承諾、發布、查核、授權提案、做市、模擬、端到端測試
+web/contracts/*.md             定型化契約與政策
 ```
 
-白名單規則：持有與註銷永遠允許；轉帳需雙方有效且未凍結；自然人預設不可轉出（政策開關）；KYC 到期只擋交易不鎖資產。
+### 事件（`web/lib/ledger/events.ts`）
 
-**轄區規則**：每個專案帶一個核發國（ISO 3166-1 alpha-2）與機制名稱，額度與憑證都繼承。
-國內額度（TW）四種註銷用途全開；國外額度只允許「扣除碳費排放量」與「自願性碳中和」——
-氣候變遷因應法第 27 條把國外額度限縮到碳費與超額量抵銷，增量抵換（第 24 條）與環評承諾都做不到，
-所以 `CarbonCredit1155.retire` 直接 revert，不是只在介面提示。轄區可由主權角色開啟／關閉；
-關閉後不能再上架，但既有持有不受影響（流動性可以停，持有不能沒收）。
-Phase 0 已開放：TW、JP（J-Credit）、KR（KOC）、TH（T-VER）、ID（SPE-GRK）、AU（ACCU）；
-CN（CCER）與 IN（CCC）因跨境使用規定尚未訂定而關閉；SG 為買方框架，不核發額度。
+20 種：存入／提領鏡像（1、2）、轄區、政策、費率（3–5）、身分、凍結（6、7）、專案、匯入專案、專案狀態（8–10）、
+核發（11）、掛單、撤單、註銷（12–14）、憑證文件、官方註銷（15、16）、對帳報告與查核（17、18）、金鑰鏡像（19）、
+提領請求（20）。**只記輸入，不記結果**：成交、憑證、批次餘額都是引擎算出來的。
 
-### 治理（Safe + Timelock）
+每一筆帶序號、邏輯時間與收單區塊高度。收單區塊決定用哪一份授權清單驗簽——查核時只用 ecrecover
+與鏈上的授權歷史，**不讀任何歷史狀態**（Boltchain 只保留最近 128 個區塊，archive 節點不是前提）。
 
-```
-國家單位 Safe（2-of-3）──提案/執行──▶ TimelockController（48h）──DEFAULT_ADMIN──▶ 所有合約（升級、角色結構）
-        │                                                  └── owner ──▶ PoolManager
-        └──── SOVEREIGN_ROLE（即時）──▶ 凍結地址/批次、暫停、認可/撤銷查驗機構與身分驗證服務、撤換營運
-營運 Safe（CAFECA）── OPERATOR_ROLE ──▶ 暫停/恢復、手續費、recover、hook 設定
-```
+### 簽章
 
-角色階層：`OPERATOR_ROLE` 的 admin 是 `SOVEREIGN_ROLE`（國家 Safe 可即時撤換營運方，不用等 48 小時）；
-`SOVEREIGN_ROLE` 的 admin 是 `DEFAULT_ADMIN_ROLE`（只有 Timelock 能變更主權歸屬）。緊急權即時、結構權延遲。
-
-`Deploy.s.sol` 會部署 Safe v1.4.1（singleton / factory / fallback handler）、兩個 Safe、Timelock，佈線完成後把所有治理角色交給
-Safe / Timelock 並由部署者 `renounceRole` —— 部署結束時沒有任何 EOA 持有治理角色。保留的服務角色：身分驗證服務簽章、查驗機構簽章、
-MockTWD 鑄幣（demo faucet）。
-
-操作工具 `script/govern.sh`（cast 包裝）：`status` 檢查權限狀態、`build <preset>` 組 calldata、`timelock schedule|execute|cancel|state`、
-`safe national|operator hash|exec`、`sign`、Safe owner 管理。完整 SOP（緊急凍結、升級、簽章者管理、移轉驗收）見 project 文件「CO2Exchange 治理操作手冊」。
-
-環境變數：`NATIONAL_SAFE` / `OPERATOR_SAFE`（既有 Safe 地址）或 `NATIONAL_OWNERS`（逗號分隔）/ `NATIONAL_THRESHOLD`、
-`OPERATOR_OWNERS` / `OPERATOR_THRESHOLD`、`TIMELOCK_DELAY`（秒）。Phase 0 預設：國家 Safe = Anvil 帳戶 5,6,7（2-of-3），營運 Safe = 帳戶 8,9（1-of-2）。
-
-### 前端（web/，Next.js 16 + React 19）
-
-#### 前端不直接跟區塊鏈說話
-
-瀏覽器裡**沒有**任何一條連到節點的 RPC 連線。所有鏈上讀寫都經過 `web/app/api/*`，
-由伺服器端的 `publicClient`（`lib/server/chain.ts`）執行。`/api/config` 也不回傳
-RPC 位址——前端根本不知道節點在哪。
-
-這條界線的實際差別：
-
-- **節點不必公開。** 位址一旦發給瀏覽器就等於公開，任何人都能拿它對節點發請求。
-- **只有一條鏈。** 瀏覽器連得到的節點與伺服器連得到的節點不一定是同一個（內網節點、
-  IP 白名單、公司防火牆），兩邊各讀一次就會各看到一份狀態，而畫面不會告訴你這件事。
-- **ABI 只有一份。** 合約改版時不必擔心某個使用者的瀏覽器還快取著舊的那一份。
-
-簽章也不在我們的頁面裡發生——它在 CAFECA 錢包（另一個 origin）。我們這一側只組出
-「要簽什麼」，而那份 EIP-712 結構由前後端共用的 `lib/bank/order-typed.ts` 產生，
-它是純雜湊，不碰網路。
-
-改用 Boltchain 之後這條界線從「好習慣」變成**不這樣做就不能上線**：節點是 `http://`
-（沒有 TLS），而 HTTPS 頁面的瀏覽器根本呼叫不到 http:// 端點。任何把節點位址發到前端的路，
-在 localhost 完全正常、在正式站台直接壞掉。
-
-`npm run check:boundary`（已併進 `npm run e2e`）會掃過所有會進瀏覽器的檔案，
-擋下 `createPublicClient`、指向節點的 `http()`、`rpcUrl`、`NEXT_PUBLIC_*RPC`、寫死的節點位址、
-`@/lib/server/*` 的值匯入，以及**把 `RPC_URL` 放進回應的 API**——最後那條擋的是更安靜的一條路。
-這條規則很容易在某次「先動起來再說」的修改裡被破掉，而破掉時不會有任何測試變紅。
-
-#### API 只有一種形狀
-
-每一支 `web/app/api/*` 都用 `lib/server/api.ts` 回應，回的一定是這兩種之一：
-
-```jsonc
-{ "ok": true,  "data": { … } }
-{ "ok": false, "error": { "code": "WALLET_NOT_DEPLOYED", "message": "還沒有鏈上錢包", "details": {…}, "retriable": false } }
-```
-
-`code` 取自 `lib/error-codes.ts` 的一張固定清單（37 個），每一個碼綁定它的 HTTP 狀態與
-預設人話訊息。伺服器端要讓某件事失敗，就 `throw new ApiError("KYC_REQUIRED")` 或
-`return fail("ORDER_INACTIVE")`；未預期的例外由 `handleError` 收尾，並在收尾時判讀
-viem 的連線錯誤（→ `CHAIN_UNREACHABLE`，`retriable: true`）與部署檔不符（→ `DEPLOYMENT_MISMATCH`）。
-
-**為什麼值得做一次。** 原本每支 API 各回各的形狀：有的 `{error:"…"}`、有的 `{message:…}`、
-有的乾脆只給狀態碼。前端於是只能比對訊息字串來分辨情況——而訊息是給人看的，
-改一個字就會讓一段邏輯悄悄失效。`retriable` 也一樣：前端本來自己維護一張「哪些該重試」的表，
-那張表跟伺服器的實際行為必然會漂移。現在這兩件事都由伺服器說了算。
-
-前端只有一個入口 `lib/client/fetchJson.ts`：它拆信封、把 `{ok:false}` 丟成帶 `code` 的
-`ApiClientError`、並依伺服器的 `retriable` 退避重試（0.4s → 1.2s）。
-呼叫端判斷情況一律看 `e.code`，不看訊息。
-
-> 讀取預設重試兩次，**寫入（`postJson`）預設不重試**。`/api/bank/orders` 會寫進委託單 log、
-> `/api/faucet` 會撥款——連線斷掉時伺服器很可能已經做完了，重試一次就是做第二次。
-
-`npm run check:api-envelope`（已併進 `npm run e2e`）擋下 `route.ts` 裡的
-`Response.json` / `NextResponse.json` / `new Response`，並檢查每一個 `fail("…")`、
-`new ApiError("…")` 用的碼都真的存在。少數本來就不回 JSON 的端點（PDF、檔案下載、
-NextAuth handler）用 `@api-envelope-exempt: <理由>` 標註豁免。
-
-#### 交易所資產池與餘額樹（A 期）
-
-使用者在交易所期間，碳權與結算幣放在 `Bank` 合約池，內部買賣是帳本更新——
-不上鏈、不等出塊、不付 gas，委託單簿也不公開。每 24 小時把「誰有多少」
-壓成一棵**帶總額的 Merkle 樹**，root 提交上鏈並與前一期串連。
-
-代價要講清楚：**鏈上看不到個別持有人**，只看得到「池子裡有多少」。
-使用者持有的是對交易所的請求權，不是登錄在自己名下的額度。
-
-法律性質已定案（2026-09-24）：
-
-- **資產池是商業託管，不是信託。** 信託有法定的破產隔離，商業託管沒有同等保障。
-  所以「識別得出哪一份是誰的」與「拿得回來」不能靠法律地位撐，只能靠機制撐——
-  餘額樹負責前者，逃生門負責後者。**這兩項不是附加保障，是這個法律性質下的必要條件。**
-- **存入、池內成交、提領，三者都不構成交易拍賣及移轉管理辦法 §26 的「移轉」。**
-  - 存入 = 交付託管，成立**約定移轉權利**，額度的權利人沒有改變
-  - 池內成交 = 那個約定移轉權利的讓與
-  - 提領 = 返還託管物
-
-  所以整個資產池的生命週期加起來，對一單位額度而言**只發生一次移轉**：
-  從最初存入的人，到最後提領的人。§26 的「每單位限移轉一次」因此是滿足的，
-  而不是被繞過。
-
-  這有一個工程後果，而且是法律層級的：**鏈上的 `Withdrawn` 事件加上委託單 log，
-  合起來才是那一次移轉的完整憑據。** log 從「營運上有用」升格成「法律上必要」——
-  它證明了提領的人為什麼有資格領（那條約定移轉權利的讓與鏈），
-  所以它的保存期限與可得性是義務，不是良好習慣。
-
-所以 `src/bank/` 的每一個設計都在補回那個性質帶走的東西：
-
-| 補回什麼 | 怎麼補 |
-|---|---|
-| 「交易所說你有多少」不能事後改 | 餘額樹 root 每 24 小時上鏈，而且與前一期串連（`require(prev == head)`） |
-| 外界算得出總負債 | **Merkle Sum Tree**：每個節點帶子樹總額。普通 Merkle 樹擋不住「把某些使用者排除在樹外」——排掉幾個人，樹仍然自洽，而總負債看起來變小了 |
-| 償付能力查得到 | `solvency()` 同時回「帳本宣稱欠」與「池子裡實際有」。`commit()` 會擋下宣稱超過持有的 root |
-| 註銷仍然記名 | `retireFor()`：Bank 用自己的持有 burn，但**憑證發給真正的受益人**，`checkRetire` / `checkRetirePurpose` 照常在鏈上驗。碳費扣抵要的那張憑證不受影響 |
-| 提領不必交易所點頭 | `withdraw()` 憑 Merkle 分支提領。Phase 0 **關著**，但完整實作、完整測試——沒被跑過的提領路徑等於沒有提領路徑 |
-| 任何人都能重算一次 | `npm run bank:verify` |
-
-#### 「任何人都能重算」是可執行的，不是形容詞
-
-```bash
-cd web
-npm run bank:verify                    # 驗最新一期
-npm run bank:verify -- --epoch 3 --account 0x…
-```
-
-驗證器不經過交易所的任何 API，只要 RPC 與部署檔：讀第 N 期的承諾 →
-從鏈上事件重新推導所有人的餘額 → 重建樹 → 比對 root、總額、逐批次明細 →
-對照池子裡實際持有。對不上就 exit 1 並印出差在哪裡。
-
-A 期的餘額**完全由鏈上事件推導**（`Deposited` / `CashDeposited` / `RetiredFor` /
-`Withdrawn`），所以這個驗證是完整的。B 期接上委託單 log 之後，
-不變式會擴充成「重播 log 得到同一棵樹」，而這一份會變成它的邊界條件。
-先做可驗證的那一半，再做需要信任的那一半——順序反過來的話，第一期交出去的東西沒有人能檢查。
-
-#### upToBlock 為什麼要上鏈
-
-每一期的承諾都記「這棵樹算到哪一個區塊為止」。少了它，「任何人都能重算同一棵樹」
-就是空話：重算的人不知道該讀到哪裡，多讀或少讀一個區塊都會得到不同的 root，
-而他無法判斷是自己讀錯還是交易所報錯。
-
-#### 兩份實作，一份規格
-
-樹有兩份實作：`web/lib/bank/tree.ts` 建樹與出證據，`src/bank/MerkleSumTree.sol`
-在提領時驗證。不一致的後果不是「測試紅一條」，是**使用者拿著完全正確的餘額卻領不到錢**，
-而且要等到有人真的去提領才會發現。
-
-所以 `npm run gen:tree-fixture` 產生一組樹與證據，`test/BankTree.t.sol` 用 Solidity
-重算一次。改動任何一邊的雜湊格式、排序規則或落單節點的處理，那支測試立刻紅。
-
-#### B 期：委託單 log 與重播
-
-A 期的餘額完全由鏈上事件推導，所以誰都算得出來。B 期把買賣搬到鏈下之後，
-餘額不再是鏈上事件的加總——那正是需要被驗證的地方。要驗的不變式只有一條：
-
-```
-replay( orderLog_1 … orderLog_k )  ==  balanceTree_k
-```
-
-左邊任何人都能自己算（拿到 log 就能跑），右邊的 root 在鏈上。對不上，
-就是交易所提交的餘額不是從它自己記錄的那些委託單算出來的。
-這句話不需要信任任何一方就成立。
-
-**log 只記輸入。** 裡面只有外部事件（存入、註銷、提領，鏡像自鏈上）與使用者
-簽名的意思表示（掛單、撤單）。成交**不記在 log 裡**——它是撮合引擎從輸入算出來的。
-記了結果就有兩份真相，哪天對不上時沒有人說得出哪一份算數，而交易所會傾向於說
-對自己有利的那一份。成交清單仍然發布，但標明是算出來的。
-
-**兩道獨立的檢查**，缺一不可：
-
-| 檢查 | 擋掉什麼 |
-|---|---|
-| 重播對得上 | 餘額不是從 log 算出來的 |
-| log 的外部事件對得到鏈上 | log 裡有憑空多出來的存入——這一類重播完全自洽，前一道抓不到 |
-
-**撮合引擎是純函式**（`web/lib/bank/engine.ts`）。不讀時鐘（時間只能來自事件的
-`at` 欄位）、不用亂數、不依賴 Map 迭代順序（明確排序：價格優先、序號其次）、
-整數運算、規則版本化。`npm run test:engine` 守著這些：同一串事件跑兩次得到同一個
-root、換順序就換結果、撮合前後碳權與現金守恆、被拒絕的事件與理由也是決定性的。
-
-```bash
-cd web
-npm run bank:seed      # 本機：把鏈上事件與示範委託單寫進 log
-npm run bank:commit    # 重播 → 餘額樹 → 連同 orderLogRoot 一起上鏈
-npm run bank:verify    # 獨立重播，對照鏈上的兩個 root
-```
-
-`lastSeq` 和 `upToBlock` 一樣要上鏈：少了它，重播的人不知道哪些事件屬於這一期。
-兩個邊界——鏈上事件讀到哪、log 讀到哪——都必須是承諾的一部分。
-
-#### 每天的作業
-
-```bash
-cd web
-npm run bank:plan      # 看要提交什麼（含「帳本說欠多少 / 池子裡有多少」）
-npm run bank:commit    # 送出
-```
-
-`plan` / `commit` 分兩步是刻意的：每天自動跑的東西要有可以先 dry-run 的形狀。
-提交需要 `COMMITTER_ROLE` 的服務金鑰（與營運 Safe 分開——提交是每天的例行動作，
-不該動用治理鑰匙，而它能做的也只有提交，關不掉提領、動不了資產）。
-
-#### 還沒做的那一半
-
-C 期已經做完，見下。
-
-#### C 期：逃生門
-
-超過 **72 小時**沒有新的承諾上鏈，資產池自動進入逃生模式：任何人都能憑最後一期的
-Merkle 分支提領，**不需要營運方同意，營運方也關不掉**——`escapeActive()` 只看
-「最後一次提交到現在過了多久」，沒有任何角色有開關。
-
-在商業託管的法律性質下這一項不能省：破產隔離不是法律給的，是機制給的。
-
-**先到先得，不足由平台補足。** 池子不夠時不 revert，能領多少領多少，差額以
-`Shortfall` 事件記在鏈上。這一點是刻意的——「不足由平台補足」只有在領不到的人
-**拿得到一份可證明的欠款紀錄**時才追得回來；如果那時候只是交易失敗，
-後到的人手上什麼都沒有，義務存在而證據不存在。
-
-正常模式下不做部分給付：`commit()` 已經擋掉「宣稱的比持有的多」，所以正常模式下
-池子不夠一定是別的地方出錯了，那時候應該大聲失敗。
-
-**證據要先送出去。**
-
-```bash
-cd web && npm run bank:proofs      # 每個帳戶一份自足的證據檔
-```
-
-匯出的每一份都帶著鏈、合約地址、epoch、葉子與路徑——拿著它加一個 RPC 端點就能
-呼叫 `withdraw`，不需要這個網站還活著。這是逃生門三個要件裡最容易被省略的那一個：
-合約端做得再好，如果產生證據的唯一途徑是交易所的 API，那麼營運方消失的那一刻
-證據也跟著消失。
-
-#### 順手修掉的兩個地雷
-
-**身分到期不能鎖住你拿回自己的東西。** 「到期只擋交易、不鎖資產」本來就是政策層
-定下來的原則，但實作上 `checkTransfer` 對到期一律 revert。資產在自己錢包裡的時候
-看不出落差；換成綜合帳戶託管之後，「拿回自己的東西」變成一次轉移，於是到期就等於
-鎖住資產——而營運方消失之後沒有人會再簽發 attestation，所有人遲早到期，
-**逃生門會在它唯一會被用到的那一天失效**。
-
-所以 `KYCRegistry.checkTransfer` 放行一種情況：從系統合約轉回一個「有身分、未凍結、
-只是過期」的帳戶。凍結仍然擋、從來沒有身分的仍然擋、過期的人拿回去之後仍然不能交易。
-
-**本地 nonce 快取是錯的。** `lib/server/tx.ts` 原本記住上次用到的 nonce 並取
-「它與鏈上 pending 的較大值」。鏈重開之後本地號碼遠高於鏈上，每一筆交易都用過高的
-nonce 送出去、掛在節點佇列裡等永遠不會來的前序——症狀是每筆都等到逾時，而鏈完全正常。
-`demo-box.sh rebuild` 每跑一次就重現一次。而且同一把 relayer 金鑰還有別的使用者
-（模擬器、`cast send`）。改成每次都問鏈：`submit()` 本來就在序列化區段裡等到收據，
-同一把金鑰永遠只有一筆在途，鏈上的 pending 在那一刻就是正確答案。
-
-#### 首頁的地球
-
-首頁是**市場現況**：一顆會轉的點陣地球，柱子的高度是各轄區的核發量（或交易量、成交均價，
-可以切換），旁邊是同一份資料的清單。
-
-第三個量原本是「掛單量」——掛單簿上現在有幾噸。那個數字不回答任何人真正想問的問題：
-它隨著誰剛好在掛單而跳動，多不代表便宜，少也不代表搶手。換成**成交均價**（近一年、
-以成交量加權）：同樣一噸碳在哪一國要花多少錢，這才是把六個轄區並排比較的理由。
-加權而不是取最後一筆，是因為最後一筆可能是某個人買 0.1 噸留下的。
-
-點開一個轄區，明細卡上方是那一國的**價格走勢**（`components/PriceSpark.tsx`）：
-26 個等寬時間桶，每桶一個加權均價，漸層面積 + 2px 線。沒有成交的桶不補點——
-補一個假的會在圖上長出一段沒發生過的行情。它回答「在漲還是在跌」，不回答
-「三月十七號多少錢」；後者去 `/about` 的 K 線，那裡有完整的軸與明細表。
-最新價、區間漲跌、最高與最低都是**文字**，不是只有 hover 才讀得到，`aria-label`
-也把這四個數字說完——圖是補充，不是唯一的入口。制度說明——什麼是自願減量專案、巴黎協定第六條、
-ISO 14064、額度能用在哪——連同 K 線與市場概況全部在 `/about`。
-那些是進場前讀一次的東西，不是每天回來要看的東西。
-
-**地球不負責讓人讀出數字。** 球面會把靠近邊緣的柱子壓短，透視也會讓正對鏡頭的那一根
-看起來比較長；要比較量就看旁邊清單裡的水平長條，那裡沒有曲面。地球回答的是
-「在哪裡、大概多少」，清單回答「精確是多少」。同理，一次只畫一個量——
-三個量的性質差很遠（核發是累計、交易是區間、價格是比率），疊在同一顆球上就得畫兩把尺，
-而讀者無法從一根柱子判斷它用的是哪一把。
-
-清單才是可近用的那一份：畫布掛 `aria-hidden`，每一國在清單裡都是一個真的按鈕，
-鍵盤與螢幕報讀器走那條路。`prefers-reduced-motion` 之下地球不自轉。
-
-實作是**零依賴的 Canvas 2D**，沒有 three.js、沒有 WebGL：正交投影下地球的輪廓永遠是正圓，
-每個點的縮放係數都一樣，柱子的長度才有可比性。深淺兩色都能上色（`--globe-ocean`／
-`--globe-land` 兩個變數），沒有 WebGL 的裝置照常運作。
-
-地理資料壓在 `web/lib/globe-mask.ts` 裡，約 18KB，由 `web/scripts/gen-globe-mask.py` 產生：
-
-```bash
-npm pack world-atlas@2 && tar xzf world-atlas-*.tgz
-pip install matplotlib numpy
-python3 scripts/gen-globe-mask.py ./package > lib/globe-mask.ts
-```
-
-分成兩層是有原因的。均勻取樣的球面點陣畫得出澳洲，畫不出臺灣——要讓臺灣拿到看得出
-形狀的點數，全球得鋪到六位數個點，那既跑不動也送不動。所以底圖只負責陸地輪廓，
-九個轄區另外用各自的密度取樣：大國疏、小國密，每一國都是看得出形狀的一塊，
-而不是一個圓點。
-
-底圖是 **0.6 度的經緯格點**（`web/scripts/world-land-0.6deg.json.gz`，59,443 格陸地），
-一格一個位元、列優先做 RLE + deflate，289×600 格只花 5,740 個字元；座標不存，前端從索引
-算回經緯度。格線的好處是可以拿一份地圖逐格核對——換成「算出點的位置、再問程式庫那裡是不是
-陸地」的做法，畫出來的海岸線就是那個程式庫的解析度，對不對只能用看的。
-
-畫面上不會把 59,443 格全部畫出來：`lib/globe.ts` 以 2×2 為一塊抽稀成約 9,500 個點
-（赤道間距約 133 公里），經度方向再除以 `cos(緯度)`，點在**地表上**才是等距的。抽稀是
-「整塊裡有一格是陸地就留一個點，位置取塊內離中心最近的那一格陸地」——只取每塊的固定
-那一格的話，日本、中美洲、島鏈這種一格寬的地形會整段消失。要更密或更疏改 `BASE_POOL`
-一個常數，資料不用重產。
-
-來源是 0.6 度陸地格點與 Natural Earth 1:50m 國界，皆為公有領域。
-
-`/trade` 的買進與賣出共用同一個下單面板，使用者只處理**數量**與**單價**；最小成交量與使用期限有預設值、收在「進階」裡。
-送出前一律跳出確認單，把成交條件、費用、對方與待簽的定型化契約攤開，按下去就是簽章上鏈。
-註銷另開 `/retire`——註銷是「用掉」不是「賣掉」，而且自然人做不了，混在下單頁裡會讓人以為買完就該註銷。
-`/portfolio` 以**移動加權平均成本**算持有成本，已實現與未實現損益分開列；核發取得的部位成本以 0 計並在介面標示。
-註銷憑證併在同一頁——憑證是「已經用掉的那一部分」的收據，跟資產是同一件事的兩面。
-
-**限價與市價**：限價是掛單簿（指定專案與價格）；市價是即時成交，只填數量。
-市價買進在同一筆 passkey 簽章裡做完「換到額度」與「**立刻拆解成具體批次**」兩件事——
-使用者的持有清單裡只會有帶專案、年份、核發國的碳權批次，不會出現中介代幣。
-技術上走 v4 池（精準輸出換入 + FIFO 贖回），但那是實作細節，介面上不出現「池」這個概念。
-
-**託管與揭露**：碳權託管在各國政府的官方登錄簿帳戶（國內＝專案方於環境部開立的額度帳戶，
-國外＝本站於該國登錄簿的託管帳戶），入金託管在信託專戶。每月 5 日發布對帳報告、查核機構簽署上鏈，
-公開於 `/custody`；該頁同時顯示**本頁自己從鏈上事件算出來的**流通量，兩欄並列，看得出報告有沒有對上事實。
-
-**費率**：`/admin` 的「費率設定」可逐一轄區設定交易手續費（bps，上限 5%）與註銷手續費（每噸固定金額），
-未設定者走預設值。兩者單位不同是刻意的——註銷是代辦一次官方移轉與註銷申請，成本按件與按量算，與市價無關。
-
-`KYC_AUTO_APPROVE=1` 時申請直接核准（demo）；`0` 時進管理後台佇列——**這時 `ADMIN_ADDRESSES` 必須包含你自己登入後拿到的地址**，
-否則申請會卡在沒有人能核准的佇列裡（要走查驗核發那條線同理，`VERIFIER_ADDRESSES` 也要加）。憑證 PDF 用 `fonts/NotoSansTC-Subset.otf`（Big5 常用字子集），
-檔案 SHA-256 由 `DOCUMENT_SIGNER_PK`（`DOCUMENT_ROLE`）回寫鏈上，任何人可重算比對。
-
-#### 身分：以 CAFECA 登入
-
-登入 = **證明你控制一個 CAFECA 身分合約**。那個合約地址就是使用者在本站的唯一 ID。
-
-協定是 EIP-712 的 `SignIn` 結構加 ERC-1271：後端發一個一次性 nonce，錢包讓使用者以 Passkey 簽下
-「要登入哪個網域、用哪個 nonce、同意提供哪些資料」，後端再以一次 `eth_call` 問那個身分合約
-`isValidSignature` ——回 `0x1626ba7e` 就代表這個人確實控制它。不需要向 CAFECA 註冊、
-不需要 client ID，驗證過程也不經過 CAFECA 的伺服器。
-
-三道檢查，缺一不可（`web/lib/server/cafeca/verify.ts`）：
-
-| 檢查 | 擋掉什麼 | 要點 |
-| --- | --- | --- |
-| `message.domain` 與 `SITE_ORIGIN` **逐字**相同 | 仿冒網站 | 在假網站上簽的訊息帶的是假網站的網域。**不能用 `endsWith` 或只比主機名**——那樣 `shop.example.attacker.com` 會過關 |
-| nonce 是本站發的、沒用過、沒過期 | 重送 | nonce 帶 HMAC（所以不必存狀態就知道是不是自己發的），另存一份用過清單；並綁在一個 httpOnly cookie 上，所以別的瀏覽器送不進來 |
-| 身分合約自己承認這個簽章 | 冒充 | ERC-1271。合約不存在、鏈連不上、回錯 magic value——三種都當作驗證失敗 |
-
-`kyc_level`（0 未實名 / 2 證件＋臉部）與 `handle` 是使用者可以**逐項取消**的。
-`kyc_level` 決定 `KYCRegistry` 的 tier；`handle` 純顯示，而且要向錢包查一次才採信——
-回應裡自稱的那一個不進簽章，改了也不會讓驗證失敗。
-
-> **AI 子錢包是獨立地址，也能產生有效簽章，但不會有實名等級。**
-> 所以「只接受本人」的操作一律要求 `kyc_level ≥ 2`，這道門順帶把子錢包擋在外面。
-
-#### 簽章通道：委託單的不可否認性
-
-登入時帶 `channel: true`，使用者同意之後網站就能請他簽 `signMessage` / `signTypedData`，
-或執行 `sendCalls`。**通道不是授權**：每一筆都會在 CAFECA 錢包顯示我們寫的說明，
-以及錢包自己解析出來的實際內容，由使用者按下去才簽。介面上也要這樣講，
-不要寫成「授權本站」。
-
-委託單因此**真的簽了、也真的驗了**（未完成事項 2.1 已補上）。結構在
-`web/lib/bank/order-typed.ts`，前後端共用同一個函式產生——兩邊各組一份是這類協定
-最常見的壞法：欄位順序差一個、型別寫成 uint128，digest 就不一樣，
-而錯誤訊息只會說「簽章無效」。
-
-| | |
-| --- | --- |
-| 網域 | `TideBit-DeFi Carbon Exchange` / v1 / chainId / `verifyingContract = Bank` |
-| 簽的欄位 | account、side、batchId、country、amountKg、pricePerTonne、minFillKg、expiry、nonce |
-| **沒簽的** | 序號（seq）與收單時間（at）——那是交易所給的，使用者下單當下還不知道 |
-| 驗法 | ERC-1271：算 digest → 問帳戶合約 `isValidSignature` → 要回 `0x1626ba7e` |
-
-`verifyingContract` 指向 **Bank** 有兩個理由：語意上這張單是對這個資產池下的（換池子就是
-不同的簽章），而且錢包會**拒絕** `verifyingContract` 指向使用者帳戶、EntryPoint 或
-CAFECA 系統合約的 EIP-712，也拒絕網域名稱是 `CAFECA Sign-In` / `ERC4337` 的——
-那是防止網站借通道偽造登入或帳戶操作。測試裡有一條專門守著這件事。
-
-數值一律用**十進位字串**（JSON 沒有 bigint，錢包也明確要求）。log 裡是 bigint，
-兩邊必須算出同一個 digest，否則收單時驗得過、事後重播時就驗不過了——測試有守。
-
-驗證在公開鏈上一律開啟；本機鏈預設關閉（模擬市場那一百個帳戶不是真的 CAFECA 身分，
-簽不出東西來），`ORDERS_REQUIRE_SIGNATURE=1` 可強制開啟。
-
-`/trade`、`/retire`、`/enterprise` 的買賣與註銷走 `sendCalls`：由使用者自己的帳戶
-送出，不經過本站的任何錢包。過渡期的 `accountRef` 推導層已經拆掉了。
-
-#### 錢包：使用者的 CAFECA 帳戶，本站不再保管任何金鑰
-
-交易由**使用者自己的 CAFECA 帳戶**送出（簽章通道的 `sendCalls`），gas 由平台贊助。
-鏈上的 `msg.sender` 因此是使用者本人，不是我們替他保管的合約錢包——
-對一次移轉（§26）那條論證來說，這個差別是實質的。
-
-這一版把整個 `PasskeyAccount` 層從前端與 API 拿掉了。跟著消失的有：
-
-| 拿掉的 | 為什麼 |
-| --- | --- |
-| `/api/relay`、`/api/relay/prepare` | 交易不再是「本站錢包簽字 → relayer 代送」 |
-| `/api/account` 的 POST、`/pending`、`/freeze` | 加金鑰、核准新裝置、掛失凍結 —— 全部在 CAFECA 錢包裡做 |
-| `lib/client/passkey.ts`、`lib/server/accounts.ts` | 本站不再需要知道哪一把 credentialId 屬於誰 |
-| `lib/server/account-ref.ts` | 沒有推導了。地址就是身分合約地址 |
-| `data/accounts.json` | 連同它那份「哪台裝置屬於哪個人」的個資一起消失 |
-
-**這不是功能退步，是邊界劃對了。** 那些操作決定的是「誰控制這個身分」。
-一個交易所如果做得到，那它就做得到——對誰都一樣，不管它怎麼承諾。
-本站現在連凍結使用者帳戶的能力都沒有，這是刻意的。
-
-`/account` 因此從「裝置與安全」縮成三件事：這裡認得的你是誰、你現在能不能交易、
-出事時該去哪裡。最後一項最重要——出事的當下沒有人會回來讀說明書，所以那個連結一直在。
-
-Solidity 那一側 `PasskeyAccount` / `PasskeyAccountFactory` 仍在 repo 與部署腳本裡
-（`test/` 還在測它們），但 Phase 0 的前端已經不走那條路。要不要一併從部署中移除，
-等 Boltchain 的 EVM 版本確認之後再決定——那會影響部署腳本要不要拆。
-
-#### 三個狀態，三句不同的話
-
-「登入」與「能不能簽字」是兩件事。把它們講成一件，就會得到那種最讓人火大的畫面：
-已登入，但每個按鈕按下去都失敗，沒有一句話說得出為什麼。
-
-| 狀態 | 使用者看得到 | 下一步 |
-| --- | --- | --- |
-| 沒登入 | 公開頁 | 以 CAFECA 登入 |
-| 登入了，通道沒開 | 自己的持倉與紀錄 | 重新登入以開啟通道 |
-| 恢復中 | 自己的持倉 | 到 CAFECA 否決（不是你發起的話） |
-| 都有了 | 全部 | — |
-
-#### e2e 目前是紅的，而且是刻意的
-
-會動用到交易的那幾支（`flow` / `bids` / `enterprise` / `recovery` / `faith` / `shots`）
-用 Chrome 的虛擬 authenticator 模擬 WebAuthn 來簽字。那模擬得出 passkey，
-模擬不出 CAFECA 錢包。`createPasskeyAccount()` 現在會直接丟一個說明為什麼的例外，
-而不是讓測試在某個 selector 上逾時——一個說不出原因的紅燈，跟沒有測試差不多。
-
-要重寫它們需要一個 CAFECA 錢包的測試替身（一個假的 `/sdk/cafeca-connect.js`
-加一個會用測試金鑰簽 EIP-712 的假帳戶合約）。**尚未做。**
-
-#### 費思（站內 AI 助理）
-
-全站常駐的對話面板（`components/Faith.tsx`，掛在 layout，⌘K 開關）。三件事：解說畫面、
-查真實資料回答問題、以及**代為操作**。沒設 `FAITH_API_KEY` 時它會明白地說未啟用並退場，
-其餘功能完全不受影響。
-
-```
-FAITH_API_KEY=…                       # Anthropic Messages API
-FAITH_API_KEY=… FAITH_BASE_URL=…/v1   # 或任何 OpenAI 相容端點（自架閘道器多半是這個形狀）
-```
-
-工具迴圈跑在伺服器端（`app/api/faith`）。工具（`lib/server/faith/tools.ts`）一律轉呼叫
-畫面本來就在用的那些函式——自己另寫一套查詢，遲早會出現「費思說有 12 張單、畫面上只有 9 張」，
-而使用者無從判斷哪一邊是對的。
-
-**代操的設計重點不在模型，在確認那一關。** 作業系統的 passkey 視窗上**看不到金額與對手**，
-它只問「要用 Face ID 確認嗎」。所以如果簽章是唯一的關卡，那個關卡實際上在問
-「你信不信任剛才那段對話」。真正有意義的是簽章**之前**那張確認卡：
-
-| 規則 | 為什麼 |
-| --- | --- |
-| 模型只能給**動作名稱＋純量參數**，不產生 calldata 也不產生地址 | 被注入時，它能表達的最壞情況是「用錯的數字買一張真實存在的單」，而不是「把錢轉到某個地址」 |
-| 白名單裡**沒有轉帳**，也沒有金鑰管理 | 註冊了轉帳，上一條就沒有意義；金鑰管理不該由代理人代按 |
-| 清單以外的 `kind` **不重試**、記 log、照實告訴使用者 | 參數錯了值得重試；不存在的動作代表模型想做產品沒提供的事，重試只是給它第二次機會繞過白名單 |
-| 按下確認時**重算一次**（`/api/faith/act`），數字變了就換一張卡重新確認 | 從提議到確認之間，掛單會被別人吃掉、餘額會變 |
-| 確認卡上的數字由伺服器算，並標明這件事 | 卡上的數字不是費思說的 |
-
-`e2e/faith.mjs` 用一個假的 OpenAI 相容端點（`e2e/faith-stub.mjs`）跑完整條路，**不需要金鑰**：
-工具迴圈有沒有跑、沒按確認會不會送出、按了確認才成交、白名單擋不擋得住、
-`navigate` 能不能被導到站外、金額是不是伺服器算的。那幾件事跟模型是誰無關，
-所以不該把它們的測試綁在一把金鑰上。
-
-隱私：開了費思，使用者的提問與工具查到的資料（含持倉與身分等級）會送到設定的模型端點。
-隱私權政策 v1.2.0 第八條之三已據此揭露——**換端點時要一併更新那一條**。
-
-端到端測試（Chromium 虛擬 passkey，需 `npx playwright install chromium`）：`npm run e2e` 跑六條流程 ——
-`e2e/flow.mjs`（自然人：KYC 人工核准 → 購買 → 註銷 → 管理員產生 PDF 並回寫 → 下載）、
-`e2e/enterprise.mjs`（法人 KYC → 專案登錄 → 上傳報告 → 查驗核發 → 掛單 + 入池 → 另一自然人購買並註銷）與
-`e2e/globe.mjs`（首頁地球與各轄區清單、`/about` 的章節與**章節導覽**：側邊目錄、捲到哪標到哪、全文搜尋跳段、手機收合與不橫捲）、
-`e2e/faith.mjs`（費思，見上）與
-`e2e/recovery.mjs`（錢包：換裝置看得到同一個地址、新裝置要現有裝置核准、撤銷、凍結與解凍，
-以及全部裝置遺失時的復原——只有治理方提得了案、等待期未過執行不了、現存金鑰可否決、期滿後地址不變）。
-`recovery.mjs` 要把鏈的時鐘往前推 72 小時（等待期），而 `evm_increaseTime` 只有一個方向——
-鏈上時間領先真實時間之後，伺服器簽的 attestation 會全部「過期」，下一個跑 KYC 的人看到 `register` revert
-卻找不到原因。所以它在推時間之前 `evm_snapshot`、測完 `evm_revert` 回來，並排在最後一支。
-需 anvil + DemoFlowV4 + `KYC_AUTO_APPROVE=0` 的伺服器。
-
-e2e 等的是 `data-testid` 標記的**狀態**，不是畫面上的某一句話。之前帳戶建好與否是等
-「帳戶已就緒」四個字，於是改一次文案就有三個測試掛掉——掛的不是功能，是字串。
-
-### 模擬市場（100 個有人格的帳戶）
-
-怎麼跑見「[四、怎麼用 › 建立模擬資料](#建立模擬資料)」，這一節講的是**裡面是什麼**：參數、人物模型，
-以及為什麼要這麼做。要看見「市場的樣子」——申報季的量能、掛單簿的厚薄、價格的走勢——
-需要一批**會照自己的理由行動**的人，而不是一批亂數。
-
-| 參數 | 預設 | 說明 |
+| 誰簽 | 格式 | 驗法 |
 |---|---|---|
-| `--users N` | 100 | 帳戶數。錢包由 anvil 助記詞的 index 100 起推導，避開預設十個帳戶 |
-| `--from DATE` | — | 回填起點（`YYYY-MM-DD`）。不給就是持續模式 |
-| `--tick DUR` | `6h` | 回填時每一輪代表多久（`30m` / `8h` / `1d`） |
-| `--interval SEC` | 60 | 持續模式的實際間隔秒數 |
-| `--seed S` | `co2x` | 人物種子。**同一個種子一定產生同一批人**，出問題可以重現、截圖可以重拍 |
-| `--quiet` | — | 只印每 40 輪的摘要 |
+| 使用者（CAFECA 身分合約） | EIP-712：PlaceOrder／CancelOrder／RetireCredits／RegisterProject／RequestWithdrawal | ERC-1271 簽章依 CAFECA 版面解析、驗 WebAuthn ES256；公鑰與有效區間來自 keyring 的 `KeyAdded`／`KeyRemoved` 事件（鏡像進帳本） |
+| 做市、模擬人物（EOA） | 同上 | ecrecover |
+| 授權單位 | `LedgerEvent(version, kind, payload)`，payload 是內容雜湊 | ecrecover；k-of-n 時附門檻數量的不同持有人簽章 |
+| 本站收單 | 簽收收據（RECEIPT_SIGNER） | ecrecover |
 
-**人物不是隨機的。** 每個帳戶有角色（專案開發者／碳價履約對象／自願宣告企業／開發案抵換／做市商／
-個人投資者）、產業、排放規模、申報地、心理價位、活躍度，以及願意用多少比例的國外額度。行為從這些設定推導：
+### 提領（規則第 3 版）
 
-- **申報季會塞車**。臺灣碳費 5 月底前申報、韓國 K-ETS 6 月底履約、日本 3 月年度結算——
-  各國的月份不同，所以量能不是一條均勻的雜訊，而是幾個錯開的波峰。
-- **法規限制真的會擋**。高碳洩漏風險事業（鋼鐵、水泥、石化）不買國外額度；
-  開發案抵換只認本地額度；自然人不註銷（官方登錄簿不開個人帳戶）。
-  這些不是模擬器自己客氣，是合約層會 revert，模擬器只是不去撞牆。
-- **供給有上限**。一個專案一年核發不出比它實際減下來更多的額度。
-  沒有這條，模擬器會變成一個無限印額度的水龍頭，掛單簿就成了一面永遠填不完的牆。
+帳本記每個帳戶的**待提領**、**累計請求**、**累計已領**；葉子帶 `requested` 與 `settled`。
+合約記 `withdrawnTotal[帳戶]`（累計，不分期）：一般上限是 `requested − withdrawnTotal`，
+逃生上限是 `cash + settled − withdrawnTotal`。所以換了幾期、鏡像晚了幾個區塊都一樣，同一筆錢不會領兩次。
+鏈上的 `CashWithdrawn` 鏡像進帳本，先銷待提領，超出的部分（只可能是逃生）從可動用扣，必要時先撤掉該帳戶的買單。
 
-續跑、回填的時間限制、`--prune-history`，都在「[建立模擬資料](#建立模擬資料)」。
+### 前端與 API 的邊界
 
-### 測試（171）
+瀏覽器不直接連節點（`check:boundary` 擋），ABI 只在伺服器端；所有 API 回 `{ ok, data }` 或制式錯誤碼
+（`check:api-envelope` 擋，錯誤碼在 `web/lib/error-codes.ts`）。
 
-| 檔案 | 涵蓋 |
-|---|---|
-| `Identity.t.sol` | attestation 註冊 / 重放 / 未知簽章、到期仍可註銷、凍結、自然人轉出政策、recover |
-| `Registry.t.sol` | 專案需法人、核發 metadata、序號重複、撤銷查驗機構、停用專案、註銷與 soulbound 憑證、批次凍結 |
-| `Listing.t.sol` | 掛單成交與手續費、minFill、自然人不可掛單、未驗證不可買、取消、暫停、費率上限 |
-| `Pool.t.sol` | 存入鑄幣、年份不符、自然人不可存、FIFO 跨批次贖回、指定贖回費與 1:1 backing、redeemAndRetire |
-| `V4.t.sol` | 建池限 OPERATOR 與合法配對、LP 限法人、自然人買入、未驗證與非信任 Router 被擋、自然人不可賣出、每日限額、買入後註銷 |
-| `Governance.t.sol` | 主權角色移轉、單方面撤銷營運角色、只有 admin 可升級、登錄層無升級路徑、registry 只能設一次 |
-| `Registry.t.sol`（新增） | `DOCUMENT_ROLE`：只有文件服務金鑰能回寫 PDF hash，營運可更換該金鑰 |
-| `SafeGovernance.t.sol` | 真實 Safe v1.4.1 多簽簽章：移轉後 EOA 無角色；國家 Safe 2-of-3 即時凍結 / 暫停 / 撤換營運，單簽被拒；營運 Safe 不能凍結或給角色；升級與主權變更必須經 Timelock 48h，未到期執行失敗；只有國家 Safe 能提案 |
-| `PasskeyAccount.t.sol` | 以 `vm.signP256` 組出完整 WebAuthn 斷言：relayer 代送購買與註銷、重放、竄改、錯誤金鑰、內部 revert、ERC-1271、factory 決定性 |
-| `Fuzz.t.sol`（新增） | 隨機化屬性測試（`bound()`）：掛單成交金額/手續費/庫存正確、minFill 強制、池 backing 恆等、FIFO 先進先出順序、KYC 轉帳規則、註銷不可超過核發量、WebAuthn 邊界（篡改/重放）攻擊被拒 |
-| `Jurisdiction.t.sol`（新增） | 國別屬性：國內專案預設 TW、國外專案只有主權角色能登錄、憑證載明核發國、國外額度的增量抵換與環評承諾被鏈上擋下、關閉轄區後不能上架但仍可轉讓、池化拒收國外額度 |
-| `Reserve.t.sol`（新增） | 託管揭露：只有報表金鑰能發布、只有查核機構能簽署、簽署後不可再改、更正以新報告發布且舊報告保留、空報告被拒 |
-| `FeeSchedule.t.sol`（新增） | 各國費率：預設值與專屬費率、清除後回到預設、交易費上限 5%、註銷費按每噸固定金額收取（預設 0）、只有 PRICING_ROLE 能調、只有額度合約能收費 |
-| `Invariant.t.sol`（新增） | Handler-based invariant：256 runs × 500 calls（存入/贖回/指定贖回/贖回註銷隨機序列）驗證池子 1:1 backing、CCT 供給量、資產守恆、`ghostRetiredKg` 追蹤與鏈上註銷量一致，全程 0 revert |
+### 部署指紋
 
-### 自我審查（Self-review / Audit Prep）
+`web/data/.deployment.json` 記下資料屬於哪一次部署（帳本合約、結算幣、`deployedAt`）。對不上時申請與憑證紀錄一律擋下
+（`DATA_STALE`），不悄悄拿舊的來用。anvil 重開後重新部署會得到相同地址，所以 `deployedAt` 不是多餘的。
 
-正式第三方稽核前的內部檢查，供未來稽核方與國家單位承接時參考：
+### 舊的全合約版本
 
-- **靜態分析**：Slither 與 Aderyn 0.6.8 都跑過。
-  6 項具體修正（`TrustedRouter` 重入/callback 完整性防護、多處零地址檢查、`CarbonPool` 單次贖回批次數上限、
-  event 補 indexed、區域變數顯式初始化、`KYCRegistry` 防止系統合約 tier 被覆寫），修正後 34 項殘留發現逐項附理由。
-  Aderyn 4 High + 12 Low 逐項判讀後只改一項（`nonReentrant` 排到第一個 modifier，6 處），其餘是誤報或既有設計。
-  詳見 [`reports/static-analysis.md`](reports/static-analysis.md)（原始輸出於 [`reports/slither.md`](reports/slither.md)、
-  [`reports/aderyn.md`](reports/aderyn.md)）。
-- **Fuzz / Invariant 測試**：見上方測試表 `Fuzz.t.sol`、`Invariant.t.sol`。
-- **Gas 報告**：`forge test --gas-report` 全量輸出、按生命週期分組的關鍵操作耗用、部署成本，以及
-  production profile（`via_ir`）的實測比較——執行期呼叫便宜 3–8%，但 bytecode 全面變大、部署變貴，合計 +3.3%，
-  見 [`reports/gas-report.md`](reports/gas-report.md)；
-  `.gas-snapshot`（`forge snapshot`）已提交，CI 或發版前可用 `forge snapshot --check` 偵測非預期的 gas 迴歸
-  （執行時排除 fuzz/invariant：`--no-match-contract "FuzzTest|PoolInvariantTest"`）。
-  **改了合約就要重跑 `forge snapshot` 更新基準線並一起提交**，否則下一個人跑 `--check` 會看到一堆
-  與他無關的差異，然後學會忽略這個檢查——那比沒有這個檢查更糟。
-- **尚未涵蓋**：正式第三方合約稽核、形式驗證（如 Certora）、經濟/賽局面攻擊面分析、跨合約 MEV/夾單分析、
-  正式 bug bounty。這些屬 Phase 1/2 範疇，見下方「尚未包含」與 project 文件的分期規劃。
+第 7 期之前的版本（KYCRegistry、CarbonRegistry、CarbonCredit1155、Listing、CarbonPool、Bank、PasskeyAccount、
+Uniswap v4 hook／router）已經移除，保留在 git 歷史（`e86089d` 以前）。Boltchain 上 rules v2 的舊帳本合約
+（`0x71034Ae8…`，區塊 26654）不再由本站使用。
+
+---
+
+## 十、Phase 0 限制與後續
+
+- **拒收提領請求的缺口**：營運方持續提交承諾、卻只拒收某一人的提領請求時，逃生門不會開啟。
+  目前靠簽章與沒有收據這件事申訴；鏈上強制收單（使用者直接在合約登記請求、下一期必須納入）列為後續。
+- 身分驗證是模擬的（管理員核准即通過），未介接憑證管理中心；證號目前明文存在伺服器端。
+- 查驗機構的簽章金鑰在本站（`CARBON_VERIFIER_PK`）；正式由查驗機構自己簽。
+- 治理金鑰由腳本在同一台機器產生；正式由三位持有人各自產生。
+- CAFECA 錢包的 `.well-known` 設定檔尚未對外（`issuer` 是 localhost），正式網域的站台還登不進去。
+- RPC 是 `http://`（沒有 TLS）。瀏覽器碰不到它，但伺服器到節點是明文。
+- 正式營運的前提：主管機關認可、查驗機構以自己的金鑰簽章、金融機構提供的結算工具與信託專戶。
+
+| | 內容 | 鏈 |
+|---|---|---|
+| **Phase 0**（現在） | 提案展示。功能完整；身分驗證與查驗簽章是模擬的 | Boltchain 8018 |
+| **Phase 1** | 試點。真實憑證整合、查驗機構自行簽章、強制收單、索引器與監控、金鑰移交 HSM | Besu + QBFT 四節點（Cancun） |
+| **Phase 2** | 正式。結算幣落地、指定做市商、第三方稽核、法遵定案、控制權移轉演練 | — |
 
 ---
 
 ## 授權
 
 本 repo 的程式碼為 **MIT**（見 [`LICENSE`](LICENSE)），著作權人為卡菲卡金融科技股份有限公司。
-`lib/` 底下的第三方元件以 submodule 引入，各依其原授權條款，其中一項要特別注意：
-
-`lib/v4-core/src/PoolManager.sol` 為 **BUSL-1.1**（interfaces 與 `Hooks` library 為 MIT）。
-本 repo 的 v4 模組僅供非生產展示；國家單位正式營運屬生產使用，需 Uniswap Additional Use Grant、等 Change Date、或改用自寫 AMM。
-Phase 1 主市場為 `Listing`，不依賴 v4。
+`lib/` 底下的第三方元件以 submodule 引入，各依其原授權條款（forge-std：MIT／Apache-2.0；
+OpenZeppelin Contracts：MIT；Safe Smart Account：LGPL-3.0）。

@@ -5,7 +5,7 @@ import { chainHash, eventHash, GENESIS, replacer, reviver, type Event } from "./
 
 /// 帳本 v2 的存放：**只追加，不修改**。一行一筆事件（JSONL）＋一個 head 檔。
 ///
-/// 和 v1（lib/server/bank/log-store.ts）的差別：
+/// 兩個要點：
 ///   · **多個行程會同時寫**：網站的收單 API、後台做市、模擬器、管理員的授權事件。
 ///     所以追加有檔案鎖（mkdir 是原子的），序號與雜湊鏈在鎖裡決定。沒有鎖的話，
 ///     兩個行程會拿到同一個序號，而重播會在那裡斷掉——那是整份帳本作廢。

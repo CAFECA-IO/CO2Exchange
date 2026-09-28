@@ -3,7 +3,7 @@ import { signAndIssue, type IssuanceRequest } from "@/lib/server/issuance";
 import { requireRole } from "@/lib/server/roles";
 import { ApiError, handleError, ok } from "@/lib/server/api";
 
-/// POST { approve, reason? }（查驗機構）→ 核發：簽 IssuanceAttestation → registry.issue → 1155 批次到專案擁有者
+/// POST { approve, reason? }（查驗機構）→ 核發：查驗機構簽一筆帳本的 issue 事件，新批次記在專案擁有者名下
 export async function POST(req: Request, ctx: RouteContext<"/api/issuance/[id]">) {
   try {
     const m = await requireRole("verifier");

@@ -1,21 +1,14 @@
-import { deployment, isAddress } from "@/lib/server/chain";
-import { holdings, listBids, listOrders, poolKey, poolSpotPricePerTonne } from "@/lib/server/market";
-import { listingAbi } from "@/lib/abis";
-import { publicClient } from "@/lib/server/chain";
+import { isAddress } from "@/lib/server/chain";
+import { holdings, listBids, listOrders } from "@/lib/server/market";
 import { handleError, ok } from "@/lib/server/api";
-import { ledgerEnabled } from "@/lib/server/ledger/view";
 import { ledgerTradeFeeBps } from "@/lib/server/ledger/read";
 
 export async function GET(req: Request) {
   try {
     const account = new URL(req.url).searchParams.get("account");
-    const d = deployment();
-    const [orders, bids, spot, feeBps] = await Promise.all([
-      listOrders(), listBids(), poolSpotPricePerTonne().catch(() => null),
-      ledgerEnabled() ? Promise.resolve(BigInt(ledgerTradeFeeBps())) : publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "feeBps" }),
-    ]);
+    const [orders, bids] = await Promise.all([listOrders(), listBids()]);
     const h = isAddress(account) ? await holdings(account) : null;
-    return ok({ orders, bids, spotPricePerTonne: spot, listingFeeBps: Number(feeBps), poolKey: poolKey(), holdings: h });
+    return ok({ orders, bids, listingFeeBps: ledgerTradeFeeBps(), holdings: h });
   } catch (e) {
     return handleError(e);
   }

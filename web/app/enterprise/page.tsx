@@ -2,13 +2,10 @@
 import { useEffect, useState } from "react";
 import { useReload } from "@/lib/client/useReload";
 import Link from "next/link";
-import { encodeFunctionData } from "viem";
 import { useAccount, useCash } from "@/components/AccountProvider";
 import { AccountGate } from "@/components/AccountGate";
 import { AgreementCheck, useAgreementGate } from "@/components/AgreementGate";
 import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/components/ui";
-import { erc1155ApprovalAbi, listingWriteAbi, poolWriteAbi, registryWriteAbi } from "@/lib/abis";
-import { type Call } from "@/lib/client/cafeca";
 import { fetchJson, postJson } from "@/lib/client/fetchJson";
 import { outcomeText, useLedger } from "@/lib/client/ledger";
 
@@ -18,7 +15,7 @@ type Holding = { batchId: number; kg: number; vintageYear: number; project: stri
 type Order = { orderId: number; seller: string; batchId: number; remainingKg: number; pricePerTonne: string; project: { name: string } };
 
 export default function EnterprisePage() {
-  const { wallet, channelOpen, config, userId, tier, relay: send } = useAccount();
+  const { wallet, channelOpen, config, userId, tier } = useAccount();
   const CASH = useCash();
   const [projects, setProjects] = useState<Project[]>([]);
   const [issuances, setIssuances] = useState<Issuance[]>([]);
@@ -38,9 +35,8 @@ export default function EnterprisePage() {
   const [rf, setRf] = useState({ projectId: "", monitoringStart: "2025-01-01", monitoringEnd: "2025-12-31", amountTonnes: "100", note: "" });
   const [report, setReport] = useState<File | null>(null);
   // 使用期限：交易拍賣及移轉管理辦法第 12 條要求定價交易上架時申報。
-  // Phase 0 存在鏈下（掛單中繼資料），正式版應與掛單一起上鏈。
+  // Phase 0 存在掛單中繼資料（/api/listing-meta），正式版應與委託單一起簽進帳本。
   const [listForm, setListForm] = useState<Record<number, { tonnes: string; price: string; minFill: string; usageDeadline: string }>>({});
-  const [depositKg, setDepositKg] = useState<Record<number, string>>({});
 
   const [reloadKey, reload] = useReload();
   const lg = useLedger();
@@ -67,24 +63,10 @@ export default function EnterprisePage() {
     return () => { ignore = true; };
   }, [wallet, reloadKey, lg.me?.head.seq]);
 
-  if (!userId || !wallet || !config || (!channelOpen && !(lg.enabled && lg.devSigning))) return <AccountGate />;
+  if (!userId || !wallet || !config || (!channelOpen && !lg.devSigning)) return <AccountGate />;
   if (tier !== 2) return <Notice>企業功能需要法人身分。請到<Link className="underline" href="/kyc">身分驗證</Link>以工商憑證驗證。</Notice>;
-  const d = config.deployment;
 
-  /// after：交易成功後才做的鏈下登錄（例如掛單的使用期限）。鏈上失敗就不該留下中繼資料。
-  async function relay(label: string, calls: Call[], after?: () => Promise<unknown>) {
-    setBusy(label); setMsg(null);
-    try {
-      const r = await send(calls, { title: label, detail: "gas 由平台贊助" });
-      if (!r.success) throw new Error("交易送出了但執行失敗，請稍後查看鏈上結果");
-      if (after) await after();
-      setMsg({ kind: "ok", text: `${label}完成 · tx ${r.txHash.slice(0, 10)}…` });
-      reload();
-    } catch (e) { setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) }); }
-    finally { setBusy(null); }
-  }
-
-  /// 帳本 v2：使用者簽一則訊息，不送鏈上交易
+  /// 使用者簽一則訊息（EIP-712），不送鏈上交易。after：帳本收下之後才做的鏈下登錄（例如掛單的使用期限）
   async function ledgerAct(label: string, kind: "place" | "cancel" | "project", fields: Record<string, unknown>, detail: string, after?: () => Promise<unknown>) {
     setBusy(label); setMsg(null);
     try {
@@ -98,12 +80,8 @@ export default function EnterprisePage() {
 
   function registerProject(e: React.FormEvent) {
     e.preventDefault();
-    if (lg.enabled) {
-      ledgerAct(`登錄專案「${pf.name}」`, "project", { name: pf.name, methodology: pf.methodology, location: pf.location, metadataURI: pf.metadataURI },
-        `方法學 ${pf.methodology}；地點 ${pf.location}。專案登錄記進帳本。`);
-      return;
-    }
-    relay(`登錄專案「${pf.name}」`, [{ target: d.carbonRegistry, value: 0n, data: encodeFunctionData({ abi: registryWriteAbi, functionName: "registerProject", args: [pf.name, pf.methodology, pf.location, pf.metadataURI] }) }]);
+    ledgerAct(`登錄專案「${pf.name}」`, "project", { name: pf.name, methodology: pf.methodology, location: pf.location, metadataURI: pf.metadataURI },
+      `方法學 ${pf.methodology}；地點 ${pf.location}。專案登錄記進帳本。`);
   }
 
   async function submitIssuance(e: React.FormEvent) {
@@ -126,36 +104,15 @@ export default function EnterprisePage() {
   function list(h: Holding) {
     const f = listForm[h.batchId] ?? { tonnes: String(h.kg / 1000), price: "800", minFill: "0.1", usageDeadline: "" };
     const kg = BigInt(Math.min(h.kg, Math.max(1, Math.round(Number(f.tonnes) * 1000))));
-    if (lg.enabled) {
-      ledgerAct(`掛單批次 #${h.batchId} ${fmtKg(Number(kg))}`, "place", {
-        side: "sell", batchId: h.batchId, amountKg: kg.toString(), pricePerTonne: Math.round(Number(f.price) * 1e6), minFillKg: Math.max(0, Math.round(Number(f.minFill) * 1000)),
-      }, `每噸 ${f.price} 元。委託單記進帳本。`, () => postJson("/api/listing-meta", {
-        batchId: h.batchId, seller: wallet!.address, usageDeadline: f.usageDeadline, amountKg: Number(kg),
-      }));
-      return;
-    }
-    relay(`掛單批次 #${h.batchId} ${fmtKg(Number(kg))}`, [
-      { target: d.carbonCredit1155, value: 0n, data: encodeFunctionData({ abi: erc1155ApprovalAbi, functionName: "setApprovalForAll", args: [d.listing, true] }) },
-      { target: d.listing, value: 0n, data: encodeFunctionData({ abi: listingWriteAbi, functionName: "list", args: [BigInt(h.batchId), kg, BigInt(Math.round(Number(f.price) * 1e6)), BigInt(Math.max(0, Math.round(Number(f.minFill) * 1000)))] }) },
-    ], () => postJson("/api/listing-meta", {
+    ledgerAct(`掛單批次 #${h.batchId} ${fmtKg(Number(kg))}`, "place", {
+      side: "sell", batchId: h.batchId, amountKg: kg.toString(), pricePerTonne: Math.round(Number(f.price) * 1e6), minFillKg: Math.max(0, Math.round(Number(f.minFill) * 1000)),
+    }, `每噸 ${f.price} 元。委託單記進帳本。`, () => postJson("/api/listing-meta", {
       batchId: h.batchId, seller: wallet!.address, usageDeadline: f.usageDeadline, amountKg: Number(kg),
     }));
   }
 
-  function deposit(h: Holding) {
-    const kg = BigInt(Math.min(h.kg, Math.max(1, Math.round(Number(depositKg[h.batchId] ?? h.kg)))));
-    relay(`入池批次 #${h.batchId} ${fmtKg(Number(kg))}`, [
-      { target: d.carbonCredit1155, value: 0n, data: encodeFunctionData({ abi: erc1155ApprovalAbi, functionName: "setApprovalForAll", args: [d.carbonPool, true] }) },
-      { target: d.carbonPool, value: 0n, data: encodeFunctionData({ abi: poolWriteAbi, functionName: "deposit", args: [BigInt(h.batchId), kg] }) },
-    ]);
-  }
-
   function cancel(o: Order) {
-    if (lg.enabled) {
-      ledgerAct(`取消掛單 #${o.orderId}`, "cancel", { orderSeq: o.orderId }, "未成交的部分退回可動用餘額。");
-      return;
-    }
-    relay(`取消掛單 #${o.orderId}`, [{ target: d.listing, value: 0n, data: encodeFunctionData({ abi: listingWriteAbi, functionName: "cancel", args: [BigInt(o.orderId)] }) }]);
+    ledgerAct(`取消掛單 #${o.orderId}`, "cancel", { orderSeq: o.orderId }, "未成交的部分退回可動用餘額。");
   }
 
   const statusLabel: Record<string, string> = { pending: "待查驗", issued: "已核發", rejected: "已退回" };
@@ -216,7 +173,7 @@ export default function EnterprisePage() {
         )}
       </Card>
 
-      <Card title={lg.enabled ? "我的額度批次：掛單" : "我的額度批次：掛單或入池"}>
+      <Card title="我的額度批次：掛單">
         <div className="mb-3 space-y-2">
           <p className="text-xs leading-6 text-ink-300">
             上架本交易所的額度，其代辦服務費適用每噸減免；未上架或不配合官方移轉者不適用，已減免部分將依約定書追繳。
@@ -237,12 +194,6 @@ export default function EnterprisePage() {
                     <Field label="最小成交（噸）"><input className={`${inputCls} w-28`} type="number" step="0.001" value={f.minFill} onChange={(e) => setListForm({ ...listForm, [h.batchId]: { ...f, minFill: e.target.value } })} /></Field>
                     <Field label="使用期限"><input className={`${inputCls} w-36`} type="date" value={f.usageDeadline} onChange={(e) => setListForm({ ...listForm, [h.batchId]: { ...f, usageDeadline: e.target.value } })} /></Field>
                     <Button onClick={async () => { await listGate.accept(`batch:${h.batchId}`); list(h); }} disabled={!!busy || !listGate.ok}>掛單</Button>
-                    {/* 帳本 v2 沒有資產池與 CCT：額度只在帳本裡，交易走掛單簿 */}
-                    {!lg.enabled && <>
-                      <span className="mx-2 text-ink-300">|</span>
-                      <Field label="入池 kg"><input className={`${inputCls} w-28`} type="number" value={depositKg[h.batchId] ?? String(h.kg)} onChange={(e) => setDepositKg({ ...depositKg, [h.batchId]: e.target.value })} /></Field>
-                      <Button variant="secondary" onClick={() => deposit(h)} disabled={!!busy}>入池換 CCT</Button>
-                    </>}
                   </div>
                 </li>
               );

@@ -3,8 +3,8 @@
  * 從 out/ 的編譯產物抽出所有自訂 error，寫成 web/lib/error-abi.ts。
  *
  * 為什麼需要：revert 回到前端只剩四個位元組的 selector，沒有 error 定義就解不開。
- * `PasskeyAccount.execute` 更是把真正的錯誤包在 `CallFailed(index, reason)` 裡，
- * 不拆開的話畫面上只有一句 `0x5c0dee5d`，誰也不知道發生什麼事。
+ * 帳本合約的提領與領回證據驗證失敗時也只回 selector，
+ * 不翻譯的話畫面上只有一句 `0x5c0dee5d`，誰也不知道發生什麼事。
  *
  *   cd web && node scripts/gen-error-abi.mjs
  *
@@ -51,9 +51,7 @@ fs.writeFileSync(DEST, `/// 平台上所有合約的自訂 error——由 script
 ///
 /// 前端其他的 ABI 常數都只放 function，因為呼叫只需要那些；
 /// 但 revert 回來的是一個 selector，沒有對應的 error 定義就解不開，
-/// 使用者看到的會是 \`0x5c0dee5d\` 這種東西。\`PasskeyAccount.execute\` 尤其嚴重：
-/// 它把真正的錯誤包在 \`CallFailed(index, reason)\` 的 reason 裡，
-/// 不拆開就等於把診斷資訊整個丟掉。
+/// 使用者看到的會是 \`0x5c0dee5d\` 這種東西。
 ///
 /// 合約改了自訂 error 就要重跑：\`cd web && node scripts/gen-error-abi.mjs\`
 

@@ -1,5 +1,5 @@
 import { encodeAbiParameters, keccak256, type Address, type Hex } from "viem";
-import { buildBalanceTree, totalsHashOf, type BalanceTree } from "../bank/tree.ts";
+import { buildBalanceTree, totalsHashOf, type BalanceTree } from "./balance-tree.ts";
 import { balancesOf, type Batch, type Certificate, type Identity, type Jurisdiction, type Project, type ReserveReport, type State } from "./engine.ts";
 import { countryToBytes2 } from "./events.ts";
 import { buildTree, EMPTY, leaf, type Proof } from "./merkle.ts";

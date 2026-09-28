@@ -6,7 +6,7 @@
  *
  * 為什麼需要這支腳本：
  *
- * 餘額樹有兩份實作——`web/lib/bank/tree.ts` 建樹與出證據，
+ * 餘額樹有兩份實作——`web/lib/ledger/balance-tree.ts` 建樹與出證據，
  * `src/bank/MerkleSumTree.sol` 在提領時驗證。兩邊的雜湊格式必須逐位元組一致。
  * 不一致的後果不是「測試紅一條」：是使用者拿著完全正確的餘額，卻領不到自己的錢，
  * 而且要等到有人真的去提領才會發現。
@@ -25,7 +25,7 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-const { buildBalanceTree, totalsHashOf } = await import("../lib/bank/tree.ts");
+const { buildBalanceTree, totalsHashOf } = await import("../lib/ledger/balance-tree.ts");
 
 const EPOCH = 7n;
 

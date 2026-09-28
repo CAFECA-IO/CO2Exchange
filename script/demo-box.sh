@@ -10,42 +10,32 @@
 #   · 外部鏈兩件都做不到。鏈不是我們的，時間也不是我們的。所以外部鏈上
 #     「rebuild」這個動作不存在，只有「部署一次」與「從現在開始鋪資料」。
 #
-#   bash script/demo-box.sh rebuild   # 僅本機鏈：新鏈、部署、回填 DAYS 天
-#   bash script/demo-box.sh deploy    # 部署到設定的那條鏈（外部鏈＝bootstrap.sh deploy）
-#   bash script/demo-box.sh seed      # 鋪市場資料（本機＝回填；外部＝縮時，從現在開始）
-#   bash script/demo-box.sh live      # 持續跑（前景，Ctrl-C 結束）
-#   bash script/demo-box.sh status    # 現在是什麼狀態
-#   bash script/demo-box.sh commit    # 帳本版：提交一期承諾（先完整查核，不過就不送）
-#   bash script/demo-box.sh commit-loop  # 帳本版：每 COMMIT_EVERY 秒提交一期（前景，Ctrl-C 結束）
+#   bash script/demo-box.sh rebuild      # 僅本機鏈：新鏈、部署帳本合約、回填 LEDGER_DAYS 天、提交第一期
+#   bash script/demo-box.sh deploy       # 部署到設定的那條鏈（外部鏈＝bootstrap.sh deploy）
+#   bash script/demo-box.sh seed         # 鋪資料（本機＝回填；外部＝模擬人物從現在開始交易 EXT_TICKS 輪）
+#   bash script/demo-box.sh commit       # 提交一期承諾（先完整查核，不過就不送）
+#   bash script/demo-box.sh commit-loop  # 每 COMMIT_EVERY 秒提交一期，並寫出每期的公開檔（前景，Ctrl-C 結束）
+#   bash script/demo-box.sh live         # 等於 commit-loop；做市與模擬交易由 npm run mm 管（/admin「做市」頁）
+#   bash script/demo-box.sh status       # 現在是什麼狀態
 #
-# ## 帳本版（預設）與舊版
-#
-# 預設是設計 v4 的帳本：鏈上只有 Ledger 合約，資料是鏈下的簽章事件，每小時一期承諾上鏈。
-#   rebuild：新鏈（時間＝現在）→ DeployLedger → ledger:seed 回填 LEDGER_DAYS 天的事件 → 提交第一期
-#   seed：   本機鏈回填；外部鏈上由模擬人物從現在開始交易 EXT_TICKS 輪（ledger-sim.mjs）
-#   live：   等於 commit-loop；做市與模擬交易由 npm run mm 管（/admin「做市」頁）
-# `LEGACY=1` 走舊的全合約流程（DemoFlowV4 + simulate.mjs）。
+# 鏈上只有帳本合約（script/DeployLedger.s.sol）：資料是鏈下的簽章事件，每小時一期承諾上鏈。
 #
 # 環境變數：
 #   RPC_URL=http://127.0.0.1:28545   目標鏈。與 web/.env.local 同名同義
-#   DAYS=365        回填幾天（只有本機鏈用得到）
-#   TICK=8h         每輪代表多久
-#   SIM_USERS=30 EXT_DAYS=30 EXT_TICK=1d   外部鏈 seed 的規模（每筆交易都要等出塊）
+#   LEDGER_DAYS=60 LEDGER_USERS=40   本機回填的規模（事件時間回溯，收單區塊是現在）
+#   SIM_USERS=30 EXT_TICKS=10 EXT_INTERVAL=30   外部鏈 seed 的規模
+#   COMMIT_EVERY=3600                承諾的間隔（秒）
 #   金鑰：外部鏈一律讀 web/.env.local（bootstrap.sh keys 產生）。shell 裡的同名變數會蓋過它
 #   WEB=http://localhost:10010
 #   STATE=          給 anvil --state 的檔案（只有本機鏈用得到）
-#   LEDGER_DAYS=60 LEDGER_USERS=40   帳本版 rebuild 回填的規模
-#   COMMIT_EVERY=3600                 帳本版承諾的間隔（秒）
 set -euo pipefail
 
 # 變數展開後面接中文字時一定要用 ${VAR} 大括號。macOS 內建的 bash 3.2 會把後面的
-# 多位元組字元當成識別字的一部分，於是 "$TICK）" 變成變數 "TICK<byte>"，
+# 多位元組字元當成識別字的一部分，於是 "$VAR）" 變成變數 "VAR<byte>"，
 # 在 set -u 之下直接 unbound variable。preflight.sh 早就踩過同一個坑。
 
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
-DAYS=${DAYS:-365}
-TICK=${TICK:-8h}
 # RPC_URL 是正式名稱（web 也讀這個）。RPC 是舊名，留著相容，但會提醒。
 if [ -n "${RPC:-}" ] && [ -z "${RPC_URL:-}" ]; then
   echo "!! RPC 這個變數名已經換成 RPC_URL（與 web/.env.local 一致）。這次仍照舊處理。" >&2
@@ -60,8 +50,6 @@ RPC_URL=${RPC_URL:-http://127.0.0.1:28545}
 WEB=${WEB:-http://localhost:10010}
 LOG=${LOG:-$ROOT/.demo-box}
 mkdir -p "$LOG"
-LEGACY=${LEGACY:-0}
-ledger_mode () { [ "$LEGACY" != 1 ]; }
 LEDGER_DAYS=${LEDGER_DAYS:-60}
 LEDGER_USERS=${LEDGER_USERS:-40}
 COMMIT_EVERY=${COMMIT_EVERY:-3600}
@@ -109,12 +97,6 @@ is_local () {
 ANVIL_PORT=$(printf '%s' "$RPC_URL" | sed 's|.*:||; s|/.*||')
 case "$ANVIL_PORT" in ''|*[!0-9]*) ANVIL_PORT=28545;; esac
 
-# 幾天前的日期。GNU 與 BSD(macOS) 的 date 參數不同，兩種都試。
-days_ago () {
-  date -u -d "@$(( $(date +%s) - $1 * 86400 ))" +%F 2>/dev/null \
-    || date -u -r "$(( $(date +%s) - $1 * 86400 ))" +%F
-}
-
 banner () {
   local id; id=$(chain_id)
   if [ -n "$id" ]; then
@@ -130,7 +112,7 @@ refuse_external () {
 
    目前的目標是 ${RPC_URL}，那不是一條我們可以砍掉重來的鏈：
      · 鏈不是我們的，停不掉也重開不了。
-     · 時間不是我們的，沒有 anvil_setTime，回填一年份做不到。
+     · 時間不是我們的，沒有 anvil_setBalance，回填的入金做不到。
      · 每天重新部署會讓前一次的部署變成孤兒，而上面可能有真的餘額。
 
    外部鏈上要做的是這三件事，分開執行：
@@ -160,10 +142,8 @@ start_anvil () {
   # 在 set -e 之下會讓整支腳本靜靜地結束——看起來就像什麼都沒發生。
   if [ -n "${STATE:-}" ]; then rm -f "$STATE"; fi
 
-  # 回填只能把鏈的時間往前推，不能倒退，所以鏈要從 DAYS 天前開始。
-  # 帳本版不需要：回填的是事件的邏輯時間，鏈的時間就是現在（收單區塊確實是現在才收的）。
-  local TS; TS=$(( $(date +%s) - DAYS * 86400 ))
-  if ledger_mode; then TS=$(date +%s); fi
+  # 回填的是事件的邏輯時間，鏈的時間就是現在（收單區塊確實是現在才收的）
+  local TS; TS=$(date +%s)
   echo ">> 開 anvil（起始時間 $(date -u -d "@$TS" +%F 2>/dev/null || date -u -r "$TS" +%F)，--prune-history，:${ANVIL_PORT}）"
   # setsid 讓 anvil 脫離這個 shell 的 process group。只用 nohup 不夠：
   # 終端機關掉、或排程工具收掉整個 process group 的時候，anvil 會跟著被帶走。
@@ -181,43 +161,23 @@ start_anvil () {
 }
 
 do_deploy () {
-  if ledger_mode && is_local; then
-    # 本機展示：國家 Safe 2-of-3、營運 Safe 1-of-2 的持有人是 anvil 帳戶 5–9（DeployLedger 的預設）。
-    # 另外把部署者（anvil 0）登記成主權與營運的簽章者之一：營運門檻 1，後台的費率設定就能直接簽；
-    # 主權門檻仍是 2，ledger-seed 會用本機助記詞裡的持有人湊滿門檻。
-    local A0=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-    echo ">> 部署帳本合約（DeployLedger）"
-    SOVEREIGN_SIGNER=${SOVEREIGN_SIGNER:-$A0} OPERATOR_SIGNER=${OPERATOR_SIGNER:-$A0} \
-      forge script script/DeployLedger.s.sol --rpc-url "$RPC_URL" --broadcast > "$LOG/deploy.log" 2>&1 \
-      || { echo "!! 部署失敗，看 $LOG/deploy.log"; exit 1; }
-    grep -q "ONCHAIN EXECUTION COMPLETE" "$LOG/deploy.log" || { echo "!! 部署沒有完成，看 $LOG/deploy.log"; exit 1; }
-    echo ">> 清掉上一次部署的 web/data/（搬到 data.bak-<時間>）"
-    ( cd web && node scripts/data-reset.mjs ) | sed 's/^/   /'
-    return
-  fi
-  if is_local; then
-    echo ">> 部署（DemoFlowV4，含一張最小的示範桌子）"
-    forge script script/DemoFlowV4.s.sol --rpc-url "$RPC_URL" --broadcast --sig "demo()" \
-      > "$LOG/deploy.log" 2>&1 \
-      || { echo "!! 部署失敗，看 $LOG/deploy.log"; exit 1; }
-  else
-    # 外部鏈不跑 demo()：那支會用 anvil 的預設帳戶當企業與做市商，
-    # 在別人的鏈上那些地址不是我們的，也沒有餘額。
-    #
-    # 外部鏈的部署**一律交給 bootstrap.sh**。這裡以前自己呼叫 forge，少了三件事：
-    # 角色地址（IDENTITY_VERIFIER / CARBON_VERIFIER / DOCUMENT_SIGNER 會變成 deployer，
-    # 網站的簽章全部被合約拒絕）、治理 owner、CREATE2 deployer 的檢查。
+  if ! is_local; then
+    # 外部鏈的部署**一律交給 bootstrap.sh**：角色地址、治理持有人、結算幣、CAFECA keyring、--slow 都在那裡。
     # 兩條路做同一件事，遲早有一條會落後——所以只留一條。
     echo ">> 外部鏈部署交給 bootstrap.sh（驗餘額 → 部署 → 寫回 web/.env.local → 角色檢查）"
     RPC_URL="$RPC_URL" bash script/bootstrap.sh deploy
     return
   fi
-  grep -q "ONCHAIN EXECUTION COMPLETE" "$LOG/deploy.log" \
-    || { echo "!! 部署沒有完成，看 $LOG/deploy.log"; exit 1; }
-
-  # 重新部署等於換了一條鏈：web/data/ 裡的 KYC 與憑證紀錄是用**舊**合約算出來的
-  # 帳戶地址當鍵的，在新部署上對不到任何人。不清掉的話，前端每個讀鏈的端點都會
-  # 回 503「紀錄屬於另一次部署」。data-reset 是搬走不是刪掉。
+  # 本機展示：國家 Safe 2-of-3、營運 Safe 1-of-2 的持有人是 anvil 帳戶 5–9（DeployLedger 的預設）。
+  # 另外把部署者（anvil 0）登記成主權與營運的簽章者之一：營運門檻 1，後台的費率設定就能直接簽；
+  # 主權門檻仍是 2，ledger-seed 會用本機助記詞裡的持有人湊滿門檻。
+  local A0=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+  echo ">> 部署帳本合約（DeployLedger）"
+  SOVEREIGN_SIGNER=${SOVEREIGN_SIGNER:-$A0} OPERATOR_SIGNER=${OPERATOR_SIGNER:-$A0} \
+    forge script script/DeployLedger.s.sol --rpc-url "$RPC_URL" --broadcast > "$LOG/deploy.log" 2>&1 \
+    || { echo "!! 部署失敗，看 $LOG/deploy.log"; exit 1; }
+  grep -q "ONCHAIN EXECUTION COMPLETE" "$LOG/deploy.log" || { echo "!! 部署沒有完成，看 $LOG/deploy.log"; exit 1; }
+  # 重新部署等於換了一本帳：web/data/ 裡的帳本與紀錄屬於舊合約。data-reset 是搬走不是刪掉。
   echo ">> 清掉上一次部署的 web/data/（搬到 data.bak-<時間>）"
   ( cd web && node scripts/data-reset.mjs ) | sed 's/^/   /'
 }
@@ -247,50 +207,23 @@ commit_loop () {
 }
 
 do_seed () {
-  if ledger_mode; then
-    if ! is_local; then
-      # 外部鏈不能回填（沒有 anvil_setBalance、時間不是我們的）：模擬人物從現在開始交易幾輪。
-      # 人物的入金是鏈上真的轉帳——結算幣不是本站發行的話，營運金鑰要先持有足夠的結算幣（TWDC）。
-      local users=${SIM_USERS:-30} ticks=${EXT_TICKS:-10} interval=${EXT_INTERVAL:-30}
-      echo ">> 外部鏈：模擬人物 ${users} 人從現在開始交易 ${ticks} 輪（每 ${interval} 秒一輪）"
-      echo "   入金由營運金鑰轉結算幣給人物、人物自己存進帳本合約；gas 由營運金鑰代付"
-      ( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/ledger-sim.mjs \
-          --users "$users" --ticks "$ticks" --interval "$interval" )
-      echo ">> 提交一期承諾"
-      do_commit | tail -4
-      return
-    fi
-    echo ">> 帳本回填：${LEDGER_USERS} 人、${LEDGER_DAYS} 天的事件（事件時間回溯，收單區塊是現在）"
-    ( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/ledger-seed.mjs \
-        --days "$LEDGER_DAYS" --users "$LEDGER_USERS" ) | tail -5
-    echo ">> 提交第一期承諾"
+  if ! is_local; then
+    # 外部鏈不能回填（沒有 anvil_setBalance、時間不是我們的）：模擬人物從現在開始交易幾輪。
+    # 人物的入金是鏈上真的轉帳——結算幣不是本站發行的話，營運金鑰要先持有足夠的結算幣（TWDC）。
+    local users=${SIM_USERS:-30} ticks=${EXT_TICKS:-10} interval=${EXT_INTERVAL:-30}
+    echo ">> 外部鏈：模擬人物 ${users} 人從現在開始交易 ${ticks} 輪（每 ${interval} 秒一輪）"
+    echo "   入金由營運金鑰轉結算幣給人物、人物自己存進帳本合約；gas 由營運金鑰代付"
+    ( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/ledger-sim.mjs \
+        --users "$users" --ticks "$ticks" --interval "$interval" )
+    echo ">> 提交一期承諾"
     do_commit | tail -4
     return
   fi
-  if is_local; then
-    echo ">> 回填 $(days_ago $(( DAYS - 1 ))) → 現在（每輪 ${TICK}）"
-    ( cd web && RPC_URL="$RPC_URL" node scripts/simulate.mjs \
-        --from "$(days_ago $(( DAYS - 1 )))" --tick "$TICK" --quiet ) | tail -3
-  else
-    # 外部鏈沒有 anvil_setTime，所以劇本的一年會壓縮成「現在這一段時間」。
-    # 模擬器自己會說這件事（見 simulate.mjs 的縮時模式提示）。
-    #
-    # 規模刻意縮小。外部鏈每筆交易都要等出塊（Boltchain 6 秒），而模擬器一筆等一筆：
-    # 本機預設的一百人 × 一年 × 每 8 小時一輪，在這裡要跑好幾天。
-    # 預設 30 人 × 30 天 × 每天一輪，大約一小時；要更多就自己調 SIM_USERS / EXT_DAYS / EXT_TICK。
-    #
-    # **不要**不帶 --from：那是持續模式，永遠不會結束——以前這裡就是那樣寫的，
-    # 再接一個 `| tail -3`，結果是一個永遠不回來、也什麼都不印的指令。
-    local users=${SIM_USERS:-30} days=${EXT_DAYS:-30} tick=${EXT_TICK:-1d}
-    echo ">> 縮時鋪資料：${users} 人、劇本 ${days} 天、每輪 ${tick}（外部鏈不能調整區塊時間，劇本壓在現在）"
-    # 人物帳戶的 gas 由平台出：模擬器的 ensureGas() 會在餘額不足時從 DEPLOYER_PK
-    # （沒有就 RELAYER_PK）真的轉一筆過去。所以要備的是**營運金鑰**的餘額。
-    # 金鑰從 web/.env.local 讀（shell 有設同名變數會蓋過它）。
-    echo "   人物帳戶的 gas 由平台金鑰代付（每個 ${SIM_GAS_TOPUP:-0.001} BOLT）。"
-    echo "   每筆交易等一次出塊，會跑一陣子；中斷後重跑會接手鏈上已有的帳戶。"
-    ( cd web && RPC_URL="$RPC_URL" node scripts/simulate.mjs \
-        --users "$users" --from "$(days_ago $(( days - 1 )))" --tick "$tick" )
-  fi
+  echo ">> 帳本回填：${LEDGER_USERS} 人、${LEDGER_DAYS} 天的事件（事件時間回溯，收單區塊是現在）"
+  ( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/ledger-seed.mjs \
+      --days "$LEDGER_DAYS" --users "$LEDGER_USERS" ) | tail -5
+  echo ">> 提交第一期承諾"
+  do_commit | tail -4
 }
 
 case "${1:-}" in
@@ -332,14 +265,9 @@ commit-loop)
 live)
   banner
   rpc_up || { echo "!! $RPC_URL 沒有回應"; exit 1; }
-  if ledger_mode; then
-    echo ">> 帳本版的持續模式：每小時提交承諾。"
-    echo "   做市與模擬交易另外跑：cd web && npm run mm（在 /admin「做市」頁啟動報價、開模擬交易）"
-    commit_loop
-  fi
-  echo ">> 持續模式。提醒：年度需求額度大約一小時會用完，之後只剩做市商還在買。"
-  echo "   本機展示機請改用排程每天 rebuild，見 README「五、日常怎麼營運 › 持續運作」。"
-  cd web && RPC_URL="$RPC_URL" exec node scripts/simulate.mjs "${@:2}"
+  echo ">> 持續模式：每小時提交承諾、寫出公開檔。"
+  echo "   做市與模擬交易另外跑：cd web && npm run mm（在 /admin「做市」頁啟動報價、開模擬交易）"
+  commit_loop
   ;;
 
 status)
@@ -365,7 +293,7 @@ status)
   # 健康檢查要問的是「這個行程活著嗎」，不是「資料是不是新的」。
   curl -fs --max-time 5 "${WEB}/api/config" >/dev/null 2>&1 \
     && echo "前端       在跑（${WEB}）" || echo "前端       沒在跑"
-  # 帳本版：最新一期、距今多久、逃生艙還有多久
+  # 最新一期、距今多久、逃生門是否開啟
   DEP="deployments/$((${ID:-0})).json"
   if [ -n "$ID" ] && [ -f "$DEP" ] && command -v python3 >/dev/null 2>&1 \
      && [ "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('ledgerVersion',0))" "$DEP")" = 2 ]; then
@@ -380,10 +308,11 @@ status)
       [ "$ESC" = "true" ] && echo "逃生艙     ⚠️ 已開啟：太久沒有新承諾，使用者可以直接從合約提領"
     fi
   fi
-  pgrep -f "simulate.mjs" >/dev/null && echo "模擬器     在跑" || echo "模擬器     沒在跑"
+  pgrep -f "ledger-sim.mjs" >/dev/null && echo "模擬器     在跑" || echo "模擬器     沒在跑"
+  pgrep -f "mm/mm.mjs" >/dev/null && echo "做市       在跑" || echo "做市       沒在跑"
   pgrep -f "ledger-commit.mjs" >/dev/null && echo "承諾提交   正在送一期" || true
   ;;
 
 *)
-  sed -n '2,40p' "$0"; exit 1;;
+  sed -n '2,30p' "$0"; exit 1;;
 esac

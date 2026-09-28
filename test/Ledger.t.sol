@@ -4,7 +4,7 @@ pragma solidity 0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 import {Ledger} from "../src/ledger/Ledger.sol";
-import {MerkleSumTree} from "../src/bank/MerkleSumTree.sol";
+import {MerkleSumTree} from "../src/ledger/MerkleSumTree.sol";
 import {MockTWD} from "../src/mocks/MockTWD.sol";
 
 /// 帳本合約的測試，大部分以 TypeScript 產生的 fixture（test/fixtures/ledger.json）為輸入：

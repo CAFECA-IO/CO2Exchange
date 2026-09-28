@@ -1,14 +1,12 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { encodeFunctionData, keccak256, toBytes, type Hex } from "viem";
+import { keccak256, toBytes, type Hex } from "viem";
 import { useAccount } from "@/components/AccountProvider";
 import { AccountGate } from "@/components/AccountGate";
 import { AgreementCheck, useAgreementGate } from "@/components/AgreementGate";
 import { Button, Card, Field, Notice, fmtKg, inputCls } from "@/components/ui";
-import { creditAbi, poolAbi } from "@/lib/abis";
 import { PURPOSE_LABEL, flagOf, purposeAllowed } from "@/lib/deployment";
-import { type Call } from "@/lib/client/cafeca";
 import { useReload } from "@/lib/client/useReload";
 import { fetchJson } from "@/lib/client/fetchJson";
 import { outcomeText, useLedger } from "@/lib/client/ledger";
@@ -22,10 +20,10 @@ import { outcomeText, useLedger } from "@/lib/client/ledger";
 /// 因為註銷之後沒有回頭路。
 
 type Batch = { batchId: number; kg: number; vintageYear: number; project: string; country: string; scheme: string };
-type Market = { holdings: { twd: string; cct: string; batches: Batch[] } | null };
+type Market = { holdings: { twd: string; batches: Batch[] } | null };
 
 /// 國外額度的用途遮罩：只有扣除碳費與自願性碳中和。
-/// 這個常數要跟合約的 setJurisdiction 對齊——合約才是最後把關的地方，
+/// 這個常數要跟帳本裡轄區事件的 purposeMask 對齊——帳本引擎才是最後把關的地方，
 /// 這裡只是讓使用者在按下去之前就知道會被擋。
 const FOREIGN_MASK = 0b0011;
 const DOMESTIC_MASK = 0b1111;
@@ -44,7 +42,7 @@ function announceableFrom(from = new Date()) {
 }
 
 export default function RetirePage() {
-  const { wallet, channelOpen, config, userId, tier, relay: send } = useAccount();
+  const { wallet, channelOpen, config, userId, tier } = useAccount();
   const [m, setM] = useState<Market | null>(null);
   // 訊息連同「它講的是哪一個地址」一起存。
   //
@@ -59,7 +57,7 @@ export default function RetirePage() {
   const [beneficiary, setBeneficiary] = useState("");
   const [purpose, setPurpose] = useState(1);
   const [memo, setMemo] = useState("");
-  /// 選定要註銷的標的："b<batchId>" 或 "cct"
+  /// 選定要註銷的標的："b<batchId>"
   const [target, setTarget] = useState<string | null>(null);
   const [tonnes, setTonnes] = useState("1");
   const [confirm, setConfirm] = useState(false);
@@ -78,30 +76,12 @@ export default function RetirePage() {
     return () => { ignore = true; };
   }, [wallet, reloadKey, lg.me?.head.seq]);
 
-  // 帳本 v2 的開發用登入由伺服器代簽，不需要 CAFECA 通道
-  if (!userId || !wallet || !config || (!channelOpen && !(lg.enabled && lg.devSigning))) return <AccountGate />;
-  const d = config.deployment;
-
-  async function relay(label: string, calls: Call[]) {
-    setBusy(label); setMsg(null); setConfirm(false);
-    try {
-      // 註銷是不可逆的，所以說明要把這件事講出來——錢包那一頁是使用者
-      // 最後一次能反悔的地方。
-      const r = await send(calls, { title: label, detail: "註銷不可逆。gas 由平台贊助。" });
-      if (!r.success) throw new Error("交易送出了但執行失敗，請稍後查看鏈上結果");
-      setMsg({ kind: "ok", text: `${label}完成 · tx ${r.txHash.slice(0, 10)}…（gas 由平台贊助）` });
-      reload();
-    } catch (e) {
-      console.error("relay failed", e);
-      setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) });
-    } finally { setBusy(null); }
-  }
-
+  // 開發用登入由伺服器代簽，不需要 CAFECA 通道
+  if (!userId || !wallet || !config || (!channelOpen && !lg.devSigning)) return <AccountGate />;
   const beneficiaryHash = (): Hex => keccak256(toBytes(beneficiary || wallet!.address));
 
   const h = m?.holdings;
   const batches = h?.batches ?? [];
-  const cctKg = h ? Math.floor(Number(BigInt(h.cct) / 10n ** 15n)) : 0;
 
   const options: { key: string; label: string; maxKg: number; country: string; scheme: string }[] = [
     ...batches.map((b) => ({
@@ -111,13 +91,6 @@ export default function RetirePage() {
       country: b.country,
       scheme: b.scheme,
     })),
-    ...(cctKg > 0
-      ? [{
-          key: "cct",
-          label: `${flagOf("TW")} TW　未指定批次的額度　持有 ${fmtKg(cctKg)}（註銷時依序對應到具體批次）`,
-          maxKg: cctKg, country: "TW", scheme: "TCER",
-        }]
-      : []),
   ];
   const sel = options.find((o) => o.key === (target ?? options[0]?.key)) ?? null;
   const kg = sel ? Math.min(sel.maxKg, Math.max(1, Math.round(Number(tonnes) * 1000))) : 0;
@@ -127,39 +100,21 @@ export default function RetirePage() {
 
   function doRetire() {
     if (!sel) return;
-    // 帳本 v2：註銷是使用者簽的一則 RetireCredits 訊息，憑證是重播帳本產出的衍生資料
-    if (lg.enabled) {
-      const batchId = Number(sel.key.slice(1));
-      const label = `註銷批次 #${batchId} ${fmtKg(kg)}`;
-      setBusy(label); setMsg(null); setConfirm(false);
-      (async () => {
-        try {
-          const r = await lg.submit("retire", {
-            batchId, amountKg: kg, beneficiary, beneficiaryHash: beneficiaryHash(), purpose, memo,
-          }, { title: label, detail: `受益人：${beneficiary}；用途：${PURPOSE_LABEL[purpose]}。註銷不可逆。` });
-          setMsg(outcomeText(r, "註銷"));
-          reload();
-        } catch (e) {
-          setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) });
-        } finally { setBusy(null); }
-      })();
-      return;
-    }
-    if (sel.key === "cct") {
-      relay(`註銷未指定批次額度 ${fmtKg(kg)}`, [{
-        target: d.carbonPool, value: 0n,
-        data: encodeFunctionData({ abi: poolAbi, functionName: "redeemAndRetire", args: [BigInt(kg), beneficiaryHash(), beneficiary, purpose, memo] }),
-      }]);
-      return;
-    }
+    // 註銷是使用者簽的一則 RetireCredits 訊息，憑證是重播帳本產出的衍生資料
     const batchId = Number(sel.key.slice(1));
-    relay(`註銷批次 #${batchId} ${fmtKg(kg)}`, [{
-      target: d.carbonCredit1155, value: 0n,
-      data: encodeFunctionData({ abi: creditAbi, functionName: "retire", args: [{
-        holder: wallet!.address, batchId: BigInt(batchId), amountKg: BigInt(kg), certificateTo: wallet!.address,
-        beneficiaryHash: beneficiaryHash(), beneficiary, purpose, memo,
-      }] }),
-    }]);
+    const label = `註銷批次 #${batchId} ${fmtKg(kg)}`;
+    setBusy(label); setMsg(null); setConfirm(false);
+    (async () => {
+      try {
+        const r = await lg.submit("retire", {
+          batchId, amountKg: kg, beneficiary, beneficiaryHash: beneficiaryHash(), purpose, memo,
+        }, { title: label, detail: `受益人：${beneficiary}；用途：${PURPOSE_LABEL[purpose]}。註銷不可逆。` });
+        setMsg(outcomeText(r, "註銷"));
+        reload();
+      } catch (e) {
+        setMsg({ kind: "error", text: e instanceof Error ? e.message : String(e) });
+      } finally { setBusy(null); }
+    })();
   }
 
   return (
@@ -180,7 +135,7 @@ export default function RetirePage() {
       {tier === 1 ? (
         <Notice kind="info">
           <b>自然人無法註銷額度。</b>環境部的額度帳戶只開給事業（公司、行號、工廠、民間機構、行政機關與各級政府），
-          自然人開不了帳戶，也就無法在官方登錄簿完成註銷；若只在鏈上註銷，會產生一張官方端查無紀錄的憑證，
+          自然人開不了帳戶，也就無法在官方登錄簿完成註銷；若只在本站註銷，會產生一張官方端查無紀錄的憑證，
           反而不能拿來申報。您可以持有、也可以隨時到<Link className="text-tide underline" href="/trade">交易</Link>賣出給需要使用的事業。
           若貴單位有統一編號，可到<Link className="text-tide underline" href="/kyc">身分驗證</Link>改以法人身分驗證。
         </Notice>
@@ -241,7 +196,7 @@ export default function RetirePage() {
                 <b>這是國外減量額度（{flagOf(sel.country)} {sel.country}．{sel.scheme}）。</b>
                 依氣候變遷因應法第 27 條，國外額度只能用於<b>扣除碳費排放量</b>（須經中央主管機關認可，
                 上限為收費排放量 5%，高碳洩漏風險事業不得使用）與抵銷超額量；
-                <b>不能</b>用於環評增量抵換或環評承諾事項，本站在鏈上就會擋下。
+                <b>不能</b>用於環評增量抵換或環評承諾事項，帳本收單時就會擋下。
                 認可申請請自行向主管機關辦理——本站只負責交易與移轉，不代為申請。
               </Notice>
             )}
@@ -295,13 +250,13 @@ export default function RetirePage() {
               ))}
             </dl>
             <p className="mt-4 text-xs leading-6 text-ink-300">
-              按下確認後會立刻以 passkey 簽章並上鏈。<b className="text-ink-200">註銷不可回復</b>，
+              按下確認後會請您在 CAFECA 錢包簽一則註銷訊息，交易所收進帳本並回簽收收據。<b className="text-ink-200">註銷不可回復</b>，
               這批額度將無法再交易，並由本站代您向主管機關辦理官方移轉與註銷登錄。
             </p>
             <div className="mt-5 flex gap-2">
               <Button variant="secondary" onClick={() => setConfirm(false)} className="flex-1">返回修改</Button>
               <Button onClick={async () => { await retireGate.accept(sel.key); doRetire(); }} disabled={!!busy} className="flex-1">
-                {busy ? "簽章中…" : "以 passkey 簽章註銷"}
+                {busy ? "簽章中…" : "簽章註銷"}
               </Button>
             </div>
           </div>

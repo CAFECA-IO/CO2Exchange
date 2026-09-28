@@ -1,12 +1,7 @@
 import "server-only";
-import { EVENTS } from "@/lib/abis";
-import { deployment, publicClient } from "./chain";
 import { ledgerTrades } from "./ledger/read";
-import { ledgerEnabled } from "./ledger/view";
 
-/// 行情全部由鏈上 Listing 的 Filled 事件推導，沒有任何捏造的數字。
-/// Filled(orderId, buyer, amountKg, cost, fee) —— 成交價 = cost / amountKg * 1000（每噸，結算幣最小單位）。
-const { filled: FILLED } = EVENTS;
+/// 行情全部由帳本的成交推導，沒有任何捏造的數字。成交價是每噸的結算幣最小單位。
 
 export type Trade = { ts: number; pricePerTonne: number; kg: number; cost: number; txHash: string };
 export type Candle = { t: number; o: number; h: number; l: number; c: number; v: number };
@@ -38,36 +33,7 @@ function bucketFor(rangeHours: number): number {
 }
 
 export async function readTrades(): Promise<Trade[]> {
-  if (ledgerEnabled()) return ledgerTrades();
-  const d = deployment();
-  const logs = await publicClient.getLogs({ address: d.listing, event: FILLED, fromBlock: 0n });
-  if (logs.length === 0) return [];
-
-  // 逐區塊取時間戳（同一區塊只取一次）
-  const blocks = [...new Set(logs.map((l) => l.blockNumber!))];
-  const times = new Map<bigint, number>();
-  await Promise.all(
-    blocks.map(async (bn) => {
-      const b = await publicClient.getBlock({ blockNumber: bn });
-      times.set(bn, Number(b.timestamp));
-    }),
-  );
-
-  return logs
-    .map((l) => {
-      const kg = Number(l.args.amountKg ?? 0n);
-      const cost = Number(l.args.cost ?? 0n);
-      return {
-        ts: times.get(l.blockNumber!) ?? 0,
-        // 每噸價格：cost 是結算幣最小單位（6 decimals），kg → 噸要乘 1000
-        pricePerTonne: kg > 0 ? (cost * 1000) / kg : 0,
-        kg,
-        cost,
-        txHash: l.transactionHash!,
-      };
-    })
-    .filter((t) => t.kg > 0)
-    .sort((a, b) => a.ts - b.ts);
+  return ledgerTrades();
 }
 
 export function toCandles(trades: Trade[], bucketMinutes: number): Candle[] {
@@ -122,7 +88,7 @@ export async function ticker(rangeHours = 24 * 7): Promise<Ticker> {
   const fee = process.env.CARBON_FEE_PER_TONNE ? Number(process.env.CARBON_FEE_PER_TONNE) : null;
 
   return {
-    pair: "CCT / mTWD",
+    pair: "tCO₂e / TWD",
     last,
     open,
     change,

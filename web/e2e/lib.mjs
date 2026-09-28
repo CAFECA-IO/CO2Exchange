@@ -83,8 +83,8 @@ export async function login(page, email) {
 /// 交易也不再由本站的 passkey 簽字，而是透過 CAFECA 的簽章通道。
 /// 一個 Chrome 虛擬 authenticator 模擬得出 WebAuthn，模擬不出那個錢包。
 ///
-/// 所以會動用到交易的那幾支 e2e（flow / bids / enterprise / recovery / faith / shots）
-/// 需要一個 CAFECA 錢包的測試替身才能重寫。**在那之前它們不會通過**，
+/// 所以會動用到交易的 e2e（faith）需要一個 CAFECA 錢包的測試替身才能重寫。**在那之前它不會通過**，
+/// 帳本的交易流程改由 scripts/e2e-ledger-*.mjs 以開發用登入測（npm run test:ledger-write 等）。
 /// 而這裡選擇明確地失敗並說出原因，而不是讓它們在某個 selector 上逾時——
 /// 一個說不出原因的紅燈，跟沒有測試差不多。
 export async function createPasskeyAccount() {

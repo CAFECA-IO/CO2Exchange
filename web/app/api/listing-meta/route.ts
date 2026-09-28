@@ -7,8 +7,8 @@ import { auth } from "@/auth";
 /// 掛單的申報事項（目前只有「使用期限」）。
 ///
 /// 交易拍賣及移轉管理辦法第 12 條要求定價交易上架時申報使用期限與用途。
-/// Listing 合約沒有這個欄位，Phase 0 先存鏈下並隨掛單公告；
-/// 正式版應與掛單一起上鏈，否則「申報」只存在於平台的資料庫裡，說服力不同。
+/// 帳本的委託單事件沒有這個欄位，Phase 0 先存在網站資料並隨掛單公告；
+/// 正式版應與委託單一起簽進帳本，否則「申報」只存在於平台的資料庫裡，說服力不同。
 export type ListingMeta = WithId & { batchId: number; seller: string; usageDeadline: string; amountKg: number };
 
 export async function GET(req: Request) {

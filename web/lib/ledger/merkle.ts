@@ -2,7 +2,7 @@ import { encodeAbiParameters, keccak256, type Hex } from "viem";
 
 /// 帳本 v2 共用的 Merkle 樹：事件包含證據（logRoot）、登錄簿（registryRoot）、身分（identityRoot）。
 ///
-/// 規則和餘額樹（lib/bank/tree.ts）一致，理由也一樣：
+/// 規則和餘額樹（lib/ledger/balance-tree.ts）一致，理由也一樣：
 ///   · 葉子與節點用不同前綴（0x00 / 0x01），防止拿內部節點冒充葉子（second preimage）
 ///   · 層數不是 2 的冪時，**落單的節點往上帶**，不補假葉子
 ///   · 節點用 `abi.encode`（不是 packed）：Solidity 那邊驗證時一行 `keccak256(abi.encode(...))` 就對得上

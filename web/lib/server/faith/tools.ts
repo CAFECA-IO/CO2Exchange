@@ -1,5 +1,4 @@
 import "server-only";
-import { ledgerEnabled } from "../ledger/view";
 import { ledgerCertificates, ledgerFees, ledgerIdentity } from "../ledger/registry";
 import { ledgerTradeFeeBps } from "../ledger/read";
 import type { FaithTool } from "./provider";
@@ -7,12 +6,9 @@ import { byCountry } from "../by-country";
 import { holdings, listBids, listOrders } from "../market";
 import { agreement, agreementMetas } from "../agreements";
 import { walletOf } from "../wallet";
-import { deployment, publicClient } from "../chain";
 import { all } from "../store";
 import type { KycRequest } from "../kyc";
-import { certificateAbi, feeScheduleAbi, kycRegistryAbi, listingAbi } from "@/lib/abis";
-import { EVENTS } from "@/lib/abis";
-import { PURPOSE_LABEL, TIER_LABEL, countryToBytes2 } from "@/lib/deployment";
+import { PURPOSE_LABEL, TIER_LABEL } from "@/lib/deployment";
 
 /// 費思能讀的東西。**全部唯讀**——會改變狀態的事在 actions.ts，而且要使用者按確認。
 ///
@@ -49,15 +45,16 @@ const needLogin = { error: "這個問題要看使用者自己的資料，但目�
 /// 各自負責什麼——這份對照是那個知識，寫在伺服器端而不是提示字串裡，
 /// 因為它會跟著路由一起改。
 const PAGES: Record<string, string> = {
-  "/": "首頁：市場現況。立體地球顯示各轄區的核發量、成交量與成交均價，下方是各轄區明細與價格走勢圖。也是登入與建立錢包的入口。",
-  "/about": "認識碳權：制度說明（自願減量專案、巴黎協定第六條、ISO 14064、專案九階段、為什麼優先買在地、亞太各國額度、用途邊界、錢包原理），以及 K 線行情與市場概況。",
-  "/trade": "交易：買賣同頁。買方可吃掛單或掛買單（限價）、也可市價買進；賣方可上架持有的批次或賣給現有買單。下單前有確認單。",
+  "/": "首頁：市場現況。立體地球顯示各轄區的核發量、成交量與成交均價，下方是各轄區明細與價格走勢圖。也是以 CAFECA 登入的入口。",
+  "/about": "認識碳權：制度說明（自願減量專案、巴黎協定第六條、ISO 14064、專案九階段、為什麼優先買在地、亞太各國額度、用途邊界、帳戶與帳本怎麼運作），以及 K 線行情與市場概況。",
+  "/trade": "交易：買賣同頁。買方可吃掛單或掛買單（限價）；賣方可上架持有的批次或賣給現有買單。下單是在 CAFECA 錢包簽一則訊息，不是鏈上交易。也在這裡存入、提領結算幣，以及下載自己的證明檔。",
   "/portfolio": "我的資產：持有的批次、平均成本、損益，以及已取得的註銷憑證（可下載 PDF）。",
   "/retire": "註銷：把額度永久退出流通並取得憑證。要選用途（扣碳費／自願性碳中和／增量抵換／環評承諾）與受益人。自然人不能註銷。",
   "/kyc": "身分驗證：申請自然人或法人身分，通過後才能交易。",
-  "/enterprise": "企業：專案登錄、上傳監測報告、申請查驗核發、上架與入池。需要法人身分。",
+  "/enterprise": "企業：專案登錄、上傳監測報告、申請查驗核發、上架。需要法人身分。",
   "/registry": "公告欄：所有核發、上架、移轉、註銷的即時紀錄，任何人都看得到。",
-  "/custody": "託管揭露：每月 5 日的託管與準備金對帳報告，由查核機構簽署。",
+  "/custody": "託管揭露：每月 5 日的託管與準備金對帳報告（查核機構簽署），以及帳本合約的償付能力（帳本宣稱欠多少 vs 實際有多少）、提領與逃生門。",
+  "/transparency": "透明度與驗證：鏈上有什麼、鏈下有什麼、哪些規則從合約拒絕降級成重播抓得到、分層公開、自己驗證的三種方法，以及每一期承諾與公開檔。",
   "/agreements": "契約：平台使用約定書、買賣契約、註銷委任書、代辦費用約定、服務流程說明書、隱私權政策、服務條款。每一份都有獨立網址與內容雜湊。",
   "/account": "帳戶與安全：CAFECA 身分合約地址、實名等級、簽章通道狀態，以及金鑰／裝置／掛失要去 CAFECA 錢包做的說明。",
 };
@@ -106,12 +103,9 @@ export const TOOLS: { spec: FaithTool; run: Impl; needsLogin?: boolean }[] = [
         side === "bid" ? Promise.resolve([]) : listOrders(),
         side === "ask" ? Promise.resolve([]) : listBids(),
       ]);
-      // 帳本版沒有 Listing 合約：費率是帳本裡的 fees 事件（國內預設）
-      const feeBps = ledgerEnabled()
-        ? ledgerTradeFeeBps()
-        : await publicClient.readContract({ address: deployment().listing, abi: listingAbi, functionName: "feeBps" });
+      // 費率是帳本裡的 fees 事件（國內預設）
       return {
-        listingFeeBps: Number(feeBps),
+        listingFeeBps: ledgerTradeFeeBps(),
         note: "pricePerTonne 的單位是 mTWD 的最小單位（1e6 = 1 mTWD）。remainingKg 是公斤，1000 公斤 = 1 公噸。",
         asks: orders.filter((o) => !country || o.country === country).slice(0, 25),
         bids: bids.filter((b) => !country || b.country === country || b.country === "").slice(0, 25),
@@ -121,28 +115,24 @@ export const TOOLS: { spec: FaithTool; run: Impl; needsLogin?: boolean }[] = [
   {
     spec: {
       name: "my_portfolio",
-      description: "目前登入者的結算幣餘額、持有的批次（含核發國、專案、年份、數量）與未指定批次的池化額度。",
+      description: "目前登入者在帳本裡的結算幣餘額，與持有的批次（含核發國、專案、年份、數量）。",
       parameters: { type: "object", properties: {} },
     },
     needsLogin: true,
     run: async (_a, ctx) => ({
       ...(await holdings(ctx.address!)),
-      note: "twd 與 cct 是最小單位字串（1e6 = 1 mTWD；cct 1e18 = 1 公噸）。batches[].kg 是公斤。",
+      note: "twd 是結算幣最小單位字串（1e6 = 1 元）。batches[].kg 是公斤。",
     }),
   },
   {
     spec: {
       name: "my_identity",
-      description: "目前登入者的鏈上身分：等級（未驗證／自然人／法人）、效期、是否被凍結，以及還在審核中的申請。",
+      description: "目前登入者在帳本裡的身分：等級（未驗證／自然人／法人）、效期、是否被凍結，以及還在審核中的申請。",
       parameters: { type: "object", properties: {} },
     },
     needsLogin: true,
     run: async (_a, ctx) => {
-      const id = ledgerEnabled()
-        ? ledgerIdentity(ctx.address!)
-        : await publicClient.readContract({
-          address: deployment().kycRegistry, abi: kycRegistryAbi, functionName: "identityOf", args: [ctx.address!],
-        });
+      const id = ledgerIdentity(ctx.address!);
       const latest = all<KycRequest>("kyc-requests")
         .filter((r) => r.account.toLowerCase() === ctx.address!.toLowerCase())
         .sort((x, y) => y.createdAt.localeCompare(x.createdAt))[0] ?? null;
@@ -179,30 +169,9 @@ export const TOOLS: { spec: FaithTool; run: Impl; needsLogin?: boolean }[] = [
     },
     needsLogin: true,
     run: async (_a, ctx) => {
-      if (ledgerEnabled()) {
-        return ledgerCertificates(ctx.address!).slice(0, 30).map((c) => ({
-          certId: c.certId, batchId: c.batchId, amountKg: c.amountKg, purpose: c.purpose, purposeLabel: PURPOSE_LABEL[c.purpose] ?? "未知",
-          retiredAt: c.retiredAt, officialNo: c.officialNo || null, officialAnnouncedAt: c.officialAnnouncedAt || null,
-        }));
-      }
-      const d = deployment();
-      // 用額度合約的 CreditRetired 而不是憑證合約的事件：兩邊都記得這件事，
-      // 但共用的那一個已經在 lib/abis 的 EVENTS 裡，抄第二份遲早會跟它不一致。
-      const logs = await publicClient.getLogs({ address: d.carbonCredit1155, event: EVENTS.creditRetired, fromBlock: 0n });
-      const mine = logs
-        .filter((l) => String(l.args.certificateOwner).toLowerCase() === ctx.address!.toLowerCase())
-        .slice(-30);
-      return Promise.all(mine.map(async (l) => {
-        const c = await publicClient.readContract({
-          address: d.retirementCertificate, abi: certificateAbi, functionName: "certificateOf", args: [l.args.certId!],
-        });
-        return {
-          certId: Number(l.args.certId), batchId: Number(c.batchId), amountKg: Number(c.amountKg),
-          purpose: c.purpose, purposeLabel: PURPOSE_LABEL[c.purpose] ?? "未知",
-          retiredAt: Number(c.retiredAt),
-          officialNo: c.officialNo || null,
-          officialAnnouncedAt: Number(c.officialAnnouncedAt) || null,
-        };
+      return ledgerCertificates(ctx.address!).slice(0, 30).map((c) => ({
+        certId: c.certId, batchId: c.batchId, amountKg: c.amountKg, purpose: c.purpose, purposeLabel: PURPOSE_LABEL[c.purpose] ?? "未知",
+        retiredAt: c.retiredAt, officialNo: c.officialNo || null, officialAnnouncedAt: c.officialAnnouncedAt || null,
       }));
     },
   },
@@ -215,28 +184,14 @@ export const TOOLS: { spec: FaithTool; run: Impl; needsLogin?: boolean }[] = [
     run: async (a) => {
       const c = str(a.country).toUpperCase().slice(0, 2);
       if (!/^[A-Z]{2}$/.test(c)) return { error: "country 要是兩碼英文國別，例如 TW。" };
-      if (ledgerEnabled()) {
-        const f = ledgerFees();
-        const row = f.rows.find((r) => r.country === c);
-        return {
-          country: c, overridden: row?.custom ?? false,
-          tradeFeeBps: row?.tradeBps ?? f.defaultTradeBps, retireFeePerTonne: row?.retireFeePerTonne ?? f.defaultRetireFeePerTonne,
-          note: "retireFeePerTonne 單位是結算幣最小單位（1e6 = 1 元），每公噸。overridden=false 代表這一國沿用平台預設值。",
-        };
-      }
-      const d = deployment();
       // 各國可以覆寫，沒設就用預設值——回答時這個差別要講出來，
       // 否則「日本的費率是多少」會得到一個看起來是特別設定、其實是預設的數字。
-      const [own, defBps, defRetire] = await Promise.all([
-        publicClient.readContract({ address: d.feeSchedule, abi: feeScheduleAbi, functionName: "countryFeeOf", args: [countryToBytes2(c)] }),
-        publicClient.readContract({ address: d.feeSchedule, abi: feeScheduleAbi, functionName: "defaultTradeBps" }),
-        publicClient.readContract({ address: d.feeSchedule, abi: feeScheduleAbi, functionName: "defaultRetireFeePerTonne" }),
-      ]);
+      const f = ledgerFees();
+      const row = f.rows.find((r) => r.country === c);
       return {
-        country: c, overridden: own.set,
-        tradeFeeBps: own.set ? Number(own.tradeBps) : Number(defBps),
-        retireFeePerTonne: (own.set ? own.retireFeePerTonne : defRetire).toString(),
-        note: "retireFeePerTonne 單位是 mTWD 最小單位（1e6 = 1 mTWD），每公噸。overridden=false 代表這一國沿用平台預設值。",
+        country: c, overridden: row?.custom ?? false,
+        tradeFeeBps: row?.tradeBps ?? f.defaultTradeBps, retireFeePerTonne: row?.retireFeePerTonne ?? f.defaultRetireFeePerTonne,
+        note: "retireFeePerTonne 單位是結算幣最小單位（1e6 = 1 元），每公噸。overridden=false 代表這一國沿用平台預設值。",
       };
     },
   },

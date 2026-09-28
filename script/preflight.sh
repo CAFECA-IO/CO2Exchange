@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# 部署前檢查：確認目標鏈能不能跑這套合約，以及要用哪種部署模式。
+# 部署前檢查：確認目標鏈跑不跑得動帳本合約（script/DeployLedger.s.sol）。
 #
 #   ./script/preflight.sh                        # 預設 http://127.0.0.1:28545
-#   ./script/preflight.sh http://127.0.0.1:20024 # 指定 RPC
-#   RPC_URL=... ./script/preflight.sh
+#   ./script/preflight.sh http://211.22.118.149:8545
+#   RPC_URL=... SETTLEMENT_TOKEN=0x... ./script/preflight.sh
 #
 # 檢查項目：
-#   1. RPC 是否連得上、chainId 是多少
-#   2. EIP-1153（TSTORE/TLOAD）—— Uniswap v4 PoolManager 的硬需求
-#   3. EIP-5656（MCOPY）—— Cancun 的另一個指令，solc 0.8.26 + evm_version=cancun 會用到
-#   4. EIP-1559 —— 決定 forge script 要不要加 --legacy
-#   5. 部署者餘額 —— 私有鏈上 Anvil 預設金鑰通常是 0 餘額
-#   6. 公開鏈的金鑰檢查 —— 有沒有人還在用 Anvil 的公開金鑰
+#   1. RPC 連線、chainId、節點版本、目前高度
+#   2. EIP-5656（MCOPY）—— solc 0.8.26 + evm_version=cancun 產出的碼會用到
+#   3. EIP-1559 —— 決定 forge script 要不要加 --legacy
+#   4. eth_getLogs 單次可讀的區塊範圍 —— 帳本的鏡像與重播靠它
+#   5. 結算幣（SETTLEMENT_TOKEN）—— 有設的話確認那是個 ERC-20
+#   6. 部署者餘額與公開鏈的金鑰檢查
 #
-# 結尾會印出建議的部署指令。
+# 只印位址，不印任何私鑰。
 
 set -uo pipefail
 
@@ -22,16 +22,16 @@ set -uo pipefail
 # 於是 "$CHAIN_ID）" 會被解析成變數 "CHAIN_ID）"，在 set -u 下直接 unbound variable。
 
 RPC="${1:-${RPC_URL:-http://127.0.0.1:28545}}"
-DEPLOYER_PK="${DEPLOYER_PK:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}"
+ANVIL_PK0=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+DEPLOYER_PK="${DEPLOYER_PK:-$ANVIL_PK0}"
 
-# 只做 TSTORE→TLOAD→回傳 的 initcode；eth_call 會回傳 0x..01，鏈不支援則整段 revert。
-TSTORE_PROBE=0x600160005D60005C60005260206000F3
-# 同樣手法測 MCOPY（0x5E）。
+# MCOPY（0x5E）探針：把 32 bytes 複製一份再回傳；鏈不支援則整段 revert。
 MCOPY_PROBE=0x60206000600060005E60005260206000F3
 
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; }
 warn() { printf '  \033[33m!\033[0m %s\n' "$1"; }
+FAIL=0
 
 command -v cast >/dev/null 2>&1 || { echo "找不到 cast，請先安裝 Foundry（bash setup.sh）"; exit 1; }
 
@@ -39,7 +39,7 @@ echo "目標 RPC：$RPC"
 echo
 
 # --- 1. 連線與 chainId ---------------------------------------------------
-echo "[1/5] 連線"
+echo "[1/6] 連線"
 CHAIN_ID=$(cast chain-id --rpc-url "$RPC" 2>/dev/null)
 if [ -z "$CHAIN_ID" ]; then
   bad "連不上 $RPC"
@@ -55,53 +55,63 @@ ok "目前高度：${BLOCK:-unknown}"
 echo "  部署檔會寫到 deployments/${CHAIN_ID}.json（前端需設 CHAIN_ID=${CHAIN_ID}）"
 echo
 
-# --- 2. EIP-1153 TSTORE --------------------------------------------------
-echo "[2/5] EIP-1153（TSTORE / TLOAD）— Uniswap v4 必要"
-HAS_TSTORE=0
-RES=$(cast call --rpc-url "$RPC" --create "$TSTORE_PROBE" 2>&1)
-case "$RES" in
-  0x*1) HAS_TSTORE=1; ok "支援，v4 模組可以部署" ;;
-  *)    bad "不支援（或已停用）—— v4 模組無法部署，改用 script/Deploy.s.sol" ;;
-esac
-echo
-
-# --- 2b. CREATE2 deployer ------------------------------------------------
-# v4 的 hook 要把權限旗標挖進位址的低 14 bits，只能用 CREATE2 部署，而 forge script
-# 的 CREATE2 是透過鏈上這個標準代理做的。多數鏈預先部署了它，**新鏈通常沒有**——
-# 而缺了它的症狀是部署跑到一半才丟 `missing CREATE2 deployer`，前面幾分鐘白跑。
-C2=${CREATE2_DEPLOYER:-0x4e59b44847b379578588920cA78FbF26c0B4956C}
-HAS_CREATE2=0
-if [ "$(cast code "$C2" --rpc-url "$RPC" 2>/dev/null)" != "0x" ]; then
-  HAS_CREATE2=1; ok "CREATE2 deployer 在（${C2}）"
-else
-  bad "沒有 CREATE2 deployer（${C2}）—— v4 模組部署不了，改用 script/Deploy.s.sol"
-fi
-echo
-
-# --- 3. EIP-5656 MCOPY ---------------------------------------------------
-echo "[3/5] EIP-5656（MCOPY）— solc evm_version=cancun 產出的碼會用到"
-HAS_MCOPY=0
+# --- 2. EIP-5656 MCOPY ---------------------------------------------------
+echo "[2/6] EIP-5656（MCOPY）— solc evm_version=cancun 產出的碼會用到"
 RES=$(cast call --rpc-url "$RPC" --create "$MCOPY_PROBE" 2>&1)
 case "$RES" in
-  0x*) HAS_MCOPY=1; ok "支援" ;;
-  *)   bad "不支援 —— 必須把 foundry.toml 的 evm_version 降到 shanghai 或 paris 後重新編譯" ;;
+  0x*) ok "支援" ;;
+  *)   bad "不支援 —— 這條鏈比 Cancun 舊，帳本合約與 Safe v1.4.1 都跑不了"; FAIL=1 ;;
 esac
 echo
 
-# --- 4. EIP-1559 ---------------------------------------------------------
-echo "[4/5] EIP-1559（動態手續費）"
+# --- 3. EIP-1559 ---------------------------------------------------------
+echo "[3/6] EIP-1559（動態手續費）"
 BASEFEE=$(cast block latest --json --rpc-url "$RPC" 2>/dev/null | grep -o '"baseFeePerGas":"[^"]*"' | head -1 | cut -d'"' -f4)
 LEGACY_FLAG=""
 if [ -n "$BASEFEE" ] && [ "$BASEFEE" != "null" ]; then
   ok "支援（baseFeePerGas = ${BASEFEE}）"
 else
   LEGACY_FLAG=" --legacy"
-  warn "區塊沒有 baseFeePerGas —— forge script 要加 --legacy"
+  warn "區塊沒有 baseFeePerGas —— forge script 要加 --legacy（bootstrap.sh 會自動判斷）"
 fi
 echo
 
-# --- 5. 部署者餘額 -------------------------------------------------------
-echo "[5/5] 部署者"
+# --- 4. eth_getLogs 範圍 -------------------------------------------------
+# 帳本的鏡像（入金、提領、金鑰）與重播驗證都靠 eth_getLogs。Boltchain 單次上限 10,000 個區塊，
+# web/lib/ledger/chain.ts 的 getLogsPaged 會自動分段；這裡只是讓人知道這條鏈的上限。
+echo "[4/6] eth_getLogs"
+if [ -n "${BLOCK:-}" ] && [ "$BLOCK" -gt 0 ] 2>/dev/null; then
+  for span in 50000 10000 2000; do
+    FROM=$(( BLOCK > span ? BLOCK - span : 0 ))
+    if cast logs --from-block "$FROM" --to-block "$BLOCK" --address 0x0000000000000000000000000000000000000001 --rpc-url "$RPC" >/dev/null 2>&1; then
+      ok "單次讀 ${span} 個區塊可以（鏡像會自動分段）"; break
+    fi
+    [ "$span" = 2000 ] && { bad "連 2,000 個區塊都讀不了 —— 鏡像會很慢，請確認節點有開 eth_getLogs"; FAIL=1; }
+  done
+else
+  warn "高度 0，跳過"
+fi
+echo
+
+# --- 5. 結算幣 -----------------------------------------------------------
+echo "[5/6] 結算幣"
+if [ -n "${SETTLEMENT_TOKEN:-}" ]; then
+  if [ "$(cast code "$SETTLEMENT_TOKEN" --rpc-url "$RPC" 2>/dev/null)" = "0x" ]; then
+    bad "SETTLEMENT_TOKEN=${SETTLEMENT_TOKEN} 上面沒有合約"; FAIL=1
+  else
+    SYM=$(cast call "$SETTLEMENT_TOKEN" "symbol()(string)" --rpc-url "$RPC" 2>/dev/null)
+    DEC=$(cast call "$SETTLEMENT_TOKEN" "decimals()(uint8)" --rpc-url "$RPC" 2>/dev/null)
+    if [ -n "$DEC" ]; then ok "${SYM:-?}，${DEC} 位小數（${SETTLEMENT_TOKEN}）"
+    else bad "${SETTLEMENT_TOKEN} 不像 ERC-20（讀不到 decimals）"; FAIL=1; fi
+  fi
+  echo "  外部結算幣沒有鑄幣權：做市與模擬人物的撥款要由部署者事先持有。"
+else
+  ok "沒設 SETTLEMENT_TOKEN —— 部署腳本會一起部署 MockTWD（只適合展示鏈）"
+fi
+echo
+
+# --- 6. 部署者 -----------------------------------------------------------
+echo "[6/6] 部署者"
 DEPLOYER=$(cast wallet address --private-key "$DEPLOYER_PK" 2>/dev/null)
 if [ -z "$DEPLOYER" ]; then
   bad "DEPLOYER_PK 格式不正確"
@@ -111,78 +121,36 @@ BAL=$(cast balance "$DEPLOYER" --rpc-url "$RPC" 2>/dev/null || echo 0)
 BAL_ETH=$(cast from-wei "${BAL:-0}" 2>/dev/null || echo 0)
 echo "  地址：$DEPLOYER"
 if [ "${BAL:-0}" = "0" ]; then
-  bad "餘額 0 —— 部署一定失敗"
-  echo "    私有鏈上 Anvil 的預設金鑰沒有錢。請設一把這條鏈上有餘額的金鑰："
-  echo "    export DEPLOYER_PK=0x<你的私鑰>"
+  bad "餘額 0 —— 部署一定失敗"; FAIL=1
+  echo "    bash script/bootstrap.sh keys 會產生金鑰並印出每把要撥多少。"
 else
-  ok "餘額 ${BAL_ETH}（整套部署約需數千萬 gas，含 Safe 基礎設施）"
+  ok "餘額 ${BAL_ETH}（帳本 + 兩個 Safe + Timelock，約需數百萬 gas）"
 fi
-echo
-echo "  注意：RELAYER_PK 與 DOCUMENT_SIGNER_PK 也要在這條鏈上有餘額——它們會送交易。"
-echo "  IDENTITY_VERIFIER_PK 與 CARBON_VERIFIER_PK 只簽 attestation、由 relayer 送出，不需要餘額。"
-echo "  這幾把金鑰與撥款額，bootstrap.sh 會一次處理：bash script/bootstrap.sh"
-echo
+echo "  RELAYER_PK 要有餘額（每小時送一次承諾）；三把簽章金鑰只簽鏈下事件，不需要餘額。"
 
-# --- 6. 公開鏈上不准用公開金鑰 -------------------------------------------
-# Anvil 的十把金鑰印在它的啟動畫面上。在本機那是便利，在任何別人也連得到的鏈上
-# 那是把鑰匙插在門上：operator 那把能凍結所有人的錢包，identityVerifier 那把能
-# 替自己簽發身分。部署腳本本身也會擋（Deploy.s.sol 的 _requireNoWellKnownKeys），
-# 這裡先講，是為了讓人在花時間之前就知道要準備什麼。
 PUBLIC_CHAIN=1
 case "$CHAIN_ID" in 31337|1337) PUBLIC_CHAIN=0;; esac
 if [ "$PUBLIC_CHAIN" = "1" ]; then
-  echo "5b. 公開鏈的金鑰"
-  ANVIL0=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-  if [ "$(echo "$DEPLOYER" | tr 'A-F' 'a-f')" = "$(echo "$ANVIL0" | tr 'A-F' 'a-f')" ]; then
-    bad "部署者是 Anvil 的預設帳戶，而這條鏈不是本機鏈"
-    echo "    那把金鑰全世界都有。部署腳本會直接拒絕。請先產一把新的："
-    echo "      cast wallet new"
-    echo "      export DEPLOYER_PK=0x<新私鑰>"
+  if [ "$DEPLOYER_PK" = "$ANVIL_PK0" ]; then
+    bad "部署者是 Anvil 的預設帳戶，而這條鏈不是本機鏈 —— DeployLedger 會直接拒絕"; FAIL=1
+    echo "    那把金鑰全世界都有。請用 bash script/bootstrap.sh keys 產生新的。"
   else
     ok "部署者不是 Anvil 預設帳戶"
   fi
-  echo "    治理 owners 也一樣：NATIONAL_OWNERS / OPERATOR_OWNERS 不設的話，"
-  echo "    預設值是 Anvil 的帳戶 5–9，部署會被擋下來。"
-  echo "    復原等待期預設 72 小時；要在展示裡跑完復原流程就設短一點："
-  echo "      export RECOVERY_DELAY=600"
-  echo
+  echo "  治理 owners（NATIONAL_OWNERS / OPERATOR_OWNERS）不設的話預設是 Anvil 帳戶 5–9，也會被擋。"
+  echo "  那幾把私鑰放 .governance.env，不要放 web/.env.local。"
 fi
+echo
 
 # --- 結論 ----------------------------------------------------------------
 echo "────────────────────────────────────────────────────────"
-if [ "$HAS_MCOPY" = "0" ] || [ "$HAS_TSTORE" = "0" ]; then
-  echo "結論：這條鏈比 Cancun 舊。"
-  echo
-  echo "  缺 TSTORE  → v4 展示模組不能部署（改用 Deploy.s.sol，主市場 Listing 不受影響）"
-  if [ "$HAS_MCOPY" = "0" ]; then
-    echo "  缺 MCOPY   → 連其他合約都不能跑：solc 以 evm_version=cancun 編出來的碼會用到 MCOPY，"
-    echo "               必須把 foundry.toml 的 evm_version 改成 shanghai 再重編。"
-    echo
-    echo "  v4 的編譯期相依已經拆乾淨了，但 shanghai 這條路還卡在 Safe v1.4.1 編不過，"
-    echo "  詳見 README「目標鏈沒有 Cancun 的話」與 foundry.toml 的 [profile.shanghai]。"
-  fi
-  echo
-  echo "  最省事的另一條路：把這條鏈的節點升級到有 Cancun（EIP-1153 + EIP-5656）的版本。"
+if [ "$FAIL" = 1 ]; then
+  echo "結論：上面有 ✗ 的項目要先處理。"
+  echo "────────────────────────────────────────────────────────"
   exit 2
 fi
-
-if [ "$HAS_TSTORE" = "1" ] && [ "$HAS_CREATE2" = "1" ]; then
-  echo "結論：完整部署（含 v4 展示模組）"
-  echo
-  echo "  forge script script/DeployV4.s.sol --rpc-url ${RPC} --broadcast${LEGACY_FLAG}"
-else
-  echo "結論：用 script/Deploy.s.sol 部署（登錄 / 身分 / Listing 市場 / 池化 / 治理全都會部署，只少掉 v4 展示模組）"
-  [ "$HAS_CREATE2" = "0" ] && echo "（原因是沒有 CREATE2 deployer；v4 的 hook 位址非 CREATE2 挖不出來）"
-  echo "v4 本來就只是展示用，主市場是 Listing，功能不受影響。"
-  echo
-  echo "  forge script script/Deploy.s.sol --rpc-url ${RPC} --broadcast${LEGACY_FLAG}"
-fi
+echo "結論：可以部署帳本。"
 echo
-echo "部署後前端（web/.env.local）："
-echo "  RPC_URL=$RPC"
-echo "  CHAIN_ID=$CHAIN_ID"
-if [ "${PUBLIC_CHAIN:-0}" = "1" ]; then
-  echo "  RELAYER_PK / IDENTITY_VERIFIER_PK / CARBON_VERIFIER_PK / DOCUMENT_SIGNER_PK=<這條鏈專用的金鑰>"
-  echo "  IDENTITY_SALT=<換掉，別用範例值——鏈上存的是身分證號的雜湊>"
-fi
+echo "  bash script/bootstrap.sh deploy          # 建議：金鑰、角色、部署檔、web/.env.local 一次處理"
+echo "  forge script script/DeployLedger.s.sol --rpc-url ${RPC} --broadcast${LEGACY_FLAG}   # 手動"
 echo "────────────────────────────────────────────────────────"

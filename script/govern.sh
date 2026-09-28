@@ -13,15 +13,24 @@
 #   govern.sh safe (national|operator) exec <target> <data> <addr:sig> [<addr:sig>…]
 #   govern.sh sign <hash> --private-key <pk> | --ledger | --trezor
 #
-# 使用者錢包復原（所有裝置都遺失，且身分已在鏈下重新驗證過）：
-#   govern.sh build wallet-status  <account>
-#   read T D < <(govern.sh build wallet-recover <account> <qx> <qy> "新手機")
-#   H=$(govern.sh safe national hash $T $D); …各自 sign…; govern.sh safe national exec $T $D …
-#   # 等過 RECOVERY_DELAY（72 小時）之後，任何人都能執行：
-#   cast send <account> 'finaliseRecovery()' --rpc-url "$RPC_URL" --private-key <任何有餘額的帳戶>
+# 帳本合約的治理（設計 v4）：
+#   國家 Safe（SOVEREIGN_ROLE）：授權金鑰清單與門檻——即時生效，重播以事件所在的區塊為起點
+#   營運 Safe（OPERATOR_ROLE）：一般提領的開關、承諾提交者（COMMITTER_ROLE）
+#   Timelock（DEFAULT_ADMIN_ROLE，國家 Safe 提案與執行）：主權與營運角色本身的更換
 #
-# 典型流程（緊急凍結）：
-#   read T D < <(govern.sh build freeze 0xABC… true)
+#   govern.sh build grant-authority <角色> <地址>   角色：SOVEREIGN OPERATOR IDENTITY_VERIFIER CARBON_VERIFIER DOCUMENT_SIGNER AUDITOR RECEIPT_SIGNER
+#   govern.sh build revoke-authority <角色> <地址>
+#   govern.sh build threshold <角色> <k>
+#   govern.sh build withdrawals <true|false>
+#   govern.sh build committer-grant|committer-revoke <地址>
+#   govern.sh build grant-role|revoke-role <sovereign|operator|admin> <地址>   → 交給 timelock schedule/execute
+#   govern.sh build safe-add-owner|safe-remove-owner|safe-swap-owner|safe-threshold|safe-owners …
+#
+# ⚠️ Safe 持有人異動時，帳本的 SOVEREIGN／OPERATOR 授權清單要跟著改（grant/revoke-authority），
+#    否則新持有人簽不了帳本事件、舊持有人仍然簽得了。
+#
+# 典型流程（撤銷一把查驗機構金鑰）：
+#   read T D < <(govern.sh build revoke-authority CARBON_VERIFIER 0xABC…)
 #   H=$(govern.sh safe national hash $T $D)        # 給每位簽章者
 #   S1=$(govern.sh sign $H --private-key …)         # 各自簽，回傳 65-byte 簽章
 #   govern.sh safe national exec $T $D 0xOwner1:$S1 0xOwner2:$S2
@@ -33,68 +42,47 @@ DEPLOYMENT=${DEPLOYMENT:-"$(dirname "$0")/../deployments/${CHAIN_ID}.json"}
 [ -f "$DEPLOYMENT" ] || { echo "找不到部署檔 $DEPLOYMENT" >&2; exit 1; }
 addr() { jq -r ".$1" "$DEPLOYMENT"; }
 
-KYC=$(addr kycRegistry); CREDIT=$(addr carbonCredit1155); REGISTRY=$(addr carbonRegistry); CERT=$(addr retirementCertificate)
-LISTING=$(addr listing); POOL=$(addr carbonPool); CCT=$(addr cct); HOOK=$(addr hook); ROUTER=$(addr router); PM=$(addr poolManager)
+LEDGER=$(addr ledger)
 NATIONAL=$(addr nationalSafe); OPERATOR=$(addr operatorSafe); TIMELOCK=$(addr timelock)
+[ "$(jq -r '.ledgerVersion' "$DEPLOYMENT")" = "2" ] || { echo "$DEPLOYMENT 不是帳本部署（script/DeployLedger.s.sol）" >&2; exit 1; }
 ROLE_ADMIN=0x0000000000000000000000000000000000000000000000000000000000000000
-ROLE_SOV=$(cast keccak "SOVEREIGN_ROLE"); ROLE_OP=$(cast keccak "OPERATOR_ROLE")
-ROLE_IDV=$(cast keccak "IDENTITY_VERIFIER_ROLE"); ROLE_VERIFIER=$(cast keccak "VERIFIER_ROLE")
+ROLE_SOV=$(cast keccak "SOVEREIGN_ROLE"); ROLE_OP=$(cast keccak "OPERATOR_ROLE"); ROLE_COMMITTER=$(cast keccak "COMMITTER_ROLE")
 ROLE_PROPOSER=$(cast keccak "PROPOSER_ROLE"); ROLE_EXECUTOR=$(cast keccak "EXECUTOR_ROLE"); ROLE_CANCELLER=$(cast keccak "CANCELLER_ROLE")
 ZERO_B32=0x0000000000000000000000000000000000000000000000000000000000000000
+AUTH_ROLES="SOVEREIGN OPERATOR IDENTITY_VERIFIER CARBON_VERIFIER DOCUMENT_SIGNER AUDITOR RECEIPT_SIGNER"
 
 call() { cast call --rpc-url "$RPC_URL" "$@"; }
-contract_by_name() {
-  case "$1" in
-    kyc) echo "$KYC";; credit) echo "$CREDIT";; registry) echo "$REGISTRY";; cert) echo "$CERT";;
-    listing) echo "$LISTING";; pool) echo "$POOL";; cct) echo "$CCT";; hook) echo "$HOOK";; timelock) echo "$TIMELOCK";;
-    *) echo "未知合約名稱 $1（kyc|credit|registry|cert|listing|pool|cct|hook|timelock）" >&2; exit 1;;
-  esac
+auth_role() {
+  case " $AUTH_ROLES " in *" $1 "*) cast keccak "$1";; *) echo "未知的帳本角色 $1（$AUTH_ROLES）" >&2; exit 1;; esac
 }
 
 # ───────────────────────── build：預設操作 → TARGET DATA ─────────────────────────
 cmd_build() {
   local p=$1; shift
   case "$p" in
-    freeze)            echo "$KYC $(cast calldata 'setFrozen(address,bool)' "$1" "$2")";;
-    freeze-batch)      echo "$CREDIT $(cast calldata 'setBatchFrozen(uint256,bool)' "$1" "$2")";;
-    pause)             echo "$(contract_by_name "$1") $(cast calldata 'pause()')";;
-    unpause)           echo "$(contract_by_name "$1") $(cast calldata 'unpause()')";;
-    kill-swaps)        echo "$HOOK $(cast calldata 'setTrustedRouter(address)' 0x0000000000000000000000000000000000000000)";;
-    restore-swaps)     echo "$HOOK $(cast calldata 'setTrustedRouter(address)' "$ROUTER")";;
-    grant-role)        echo "$(contract_by_name "$1") $(cast calldata 'grantRole(bytes32,address)' "$(role_by_name "$2")" "$3")";;
-    revoke-role)       echo "$(contract_by_name "$1") $(cast calldata 'revokeRole(bytes32,address)' "$(role_by_name "$2")" "$3")";;
-    approve-verifier)  echo "$REGISTRY $(cast calldata 'approveVerifier(address)' "$1")";;
-    revoke-verifier)   echo "$REGISTRY $(cast calldata 'revokeVerifier(address)' "$1")";;
-    set-project-active) echo "$REGISTRY $(cast calldata 'setProjectActive(uint256,bool)' "$1" "$2")";;
-    individual-transfer) echo "$KYC $(cast calldata 'setIndividualTransferEnabled(bool)' "$1")";;
-    set-fee)           echo "$(contract_by_name "$1") $(cast calldata 'setFee(uint256,address)' "$2" "$3")";;
-    upgrade)           echo "$(contract_by_name "$1") $(cast calldata 'upgradeToAndCall(address,bytes)' "$2" 0x)";;
+    # 國家 Safe
+    grant-authority)   echo "$LEDGER $(cast calldata 'grantAuthority(bytes32,address)' "$(auth_role "$1")" "$2")";;
+    revoke-authority)  echo "$LEDGER $(cast calldata 'revokeAuthority(bytes32,address)' "$(auth_role "$1")" "$2")";;
+    threshold)         echo "$LEDGER $(cast calldata 'setThreshold(bytes32,uint8)' "$(auth_role "$1")" "$2")";;
+    # 營運 Safe
+    withdrawals)       echo "$LEDGER $(cast calldata 'setWithdrawalsEnabled(bool)' "$1")";;
+    committer-grant)   echo "$LEDGER $(cast calldata 'grantRole(bytes32,address)' "$ROLE_COMMITTER" "$1")";;
+    committer-revoke)  echo "$LEDGER $(cast calldata 'revokeRole(bytes32,address)' "$ROLE_COMMITTER" "$1")";;
+    # Timelock（主權與營運角色本身）
+    grant-role)        echo "$LEDGER $(cast calldata 'grantRole(bytes32,address)' "$(role_by_name "$1")" "$2")";;
+    revoke-role)       echo "$LEDGER $(cast calldata 'revokeRole(bytes32,address)' "$(role_by_name "$1")" "$2")";;
     # Safe 自身的 owner 管理（目標 = 該 Safe，由該 Safe 自己簽章執行）
     safe-add-owner)    echo "$(safe_addr "$1") $(cast calldata 'addOwnerWithThreshold(address,uint256)' "$2" "$3")";;
     safe-remove-owner) echo "$(safe_addr "$1") $(cast calldata 'removeOwner(address,address,uint256)' "$(prev_owner "$1" "$2")" "$2" "$3")";;
     safe-swap-owner)   echo "$(safe_addr "$1") $(cast calldata 'swapOwner(address,address,address)' "$(prev_owner "$1" "$2")" "$2" "$3")";;
     safe-threshold)    echo "$(safe_addr "$1") $(cast calldata 'changeThreshold(uint256)' "$2")";;
     safe-owners)       call "$(safe_addr "$1")" 'getOwners()(address[])'; echo "threshold=$(call "$(safe_addr "$1")" 'getThreshold()(uint256)')";;
-    # ── 使用者錢包的復原（所有裝置都遺失）─────────────────────────────
-    # 目標是**使用者的 PasskeyAccount**，由國家 Safe 以 recoveryAgent 的身分執行。
-    # 提案不會立刻生效：合約強制等 RECOVERY_DELAY，期間使用者手上任何一把現存
-    # passkey 都能否決。所以這條路的安全性不在合約，在**提案之前**那一步——
-    # 治理方必須先在鏈下重新驗證申請人的身分（與當初 KYC 同一套程序，不是「他登入了」）。
-    # 少了那一步，這幾行就是一個接管任何錢包的後門。
-    wallet-recover)    echo "$1 $(cast calldata 'proposeRecovery(bytes32,bytes32,string)' "$2" "$3" "${4:-recovered device}")";;
-    wallet-cancel)     echo "$1 $(cast calldata 'cancelRecovery()')";;
-    wallet-freeze)     echo "$1 $(cast calldata 'freeze()')";;
-    wallet-unfreeze)   echo "$1 $(cast calldata 'unfreeze()')";;
-    wallet-status)     echo "frozen=$(call "$1" 'frozen()(bool)')  activeKeys=$(call "$1" 'activeKeys()(uint256)')"
-                       echo "keys:"; call "$1" 'keys()(bytes32[],(bytes32,bytes32,string,uint64,bool)[])'
-                       echo "pendingRecovery:"; call "$1" 'pendingRecovery()(bytes32,bytes32,string,uint64)';;
     *) echo "未知 preset：$p" >&2; exit 1;;
   esac
 }
 role_by_name() {
   case "$1" in
-    admin) echo "$ROLE_ADMIN";; sovereign) echo "$ROLE_SOV";; operator) echo "$ROLE_OP";;
-    identity-verifier) echo "$ROLE_IDV";; verifier) echo "$ROLE_VERIFIER";;
+    admin) echo "$ROLE_ADMIN";; sovereign) echo "$ROLE_SOV";; operator) echo "$ROLE_OP";; committer) echo "$ROLE_COMMITTER";;
     proposer) echo "$ROLE_PROPOSER";; executor) echo "$ROLE_EXECUTOR";; canceller) echo "$ROLE_CANCELLER";;
     *) echo "未知角色 $1" >&2; exit 1;;
   esac
@@ -154,29 +142,17 @@ cmd_sign() { local hash=$1; shift; cast wallet sign --no-hash "$hash" "$@"; }
 # ───────────────────────── status ─────────────────────────
 has() { call "$1" 'hasRole(bytes32,address)(bool)' "$2" "$3"; }
 
-# 這個部署有沒有 v4。用 script/Deploy.s.sol 部署（目標鏈沒有 EIP-1153 或沒有
-# CREATE2 deployer）時，hook / poolManager / router 三個地址是 0——**那是正常狀態**，
-# 不是壞掉。前端早就依這個自動隱藏 v4 的 UI 了，這支腳本以前沒跟上：
-# 它照樣去 cast call 零地址，於是印出三行 "does not have any code"，
-# 看起來像部署出了問題，而其實一切正常。
-ZERO=0x0000000000000000000000000000000000000000
-has_v4() { [ -n "$PM" ] && [ "$PM" != "$ZERO" ]; }
 cmd_status() {
-  echo "chainId=$CHAIN_ID  nationalSafe=$NATIONAL ($(call "$NATIONAL" 'getThreshold()(uint256)')-of-$(call "$NATIONAL" 'getOwners()(address[])' | tr ',' '\n' | wc -l))  operatorSafe=$OPERATOR  timelock=$TIMELOCK (delay $(call "$TIMELOCK" 'getMinDelay()(uint256)' | awk '{print $1}')s)"
-  printf "%-10s %-14s %-14s %-14s\n" contract admin=timelock sov=national op=operator
-  local core="kyc cert listing pool"
-  has_v4 && core="$core hook"
-  for c in $core; do a=$(contract_by_name $c); printf "%-10s %-14s %-14s %-14s\n" $c "$(has $a $ROLE_ADMIN $TIMELOCK)" "$(has $a $ROLE_SOV $NATIONAL)" "$(has $a $ROLE_OP $OPERATOR)"; done
-  for c in credit registry; do a=$(contract_by_name $c); printf "%-10s %-14s %-14s %-14s\n" $c "$(has $a $ROLE_ADMIN $TIMELOCK)" "$(has $a $ROLE_SOV $NATIONAL)" -; done
-  printf "%-10s %-14s\n" cct "$(has $CCT $ROLE_ADMIN $TIMELOCK)"
-  printf "listing.paused=%s  pool.paused=%s" "$(call "$LISTING" 'paused()(bool)')" "$(call "$POOL" 'paused()(bool)')"
-  if has_v4; then
-    printf "  poolManager.owner=%s  hook.trustedRouter=%s" "$(call "$PM" 'owner()(address)')" "$(call "$HOOK" 'trustedRouter()(address)')"
-  else
-    printf "  v4=未部署（這個部署沒有 hook / poolManager / router，屬正常）"
-  fi
+  echo "chainId=$CHAIN_ID  ledger=$LEDGER"
+  echo "nationalSafe=$NATIONAL ($(call "$NATIONAL" 'getThreshold()(uint256)')-of-$(call "$NATIONAL" 'getOwners()(address[])' | tr ',' '\n' | wc -l | tr -d ' '))  operatorSafe=$OPERATOR  timelock=$TIMELOCK (delay $(call "$TIMELOCK" 'getMinDelay()(uint256)' | awk '{print $1}')s)"
+  echo "roles  admin=timelock:$(has $LEDGER $ROLE_ADMIN $TIMELOCK)  sovereign=national:$(has $LEDGER $ROLE_SOV $NATIONAL)  operator=operator:$(has $LEDGER $ROLE_OP $OPERATOR)"
+  local r t
+  printf "thresholds "
+  for r in SOVEREIGN OPERATOR AUDITOR; do t=$(call "$LEDGER" 'thresholdOf(bytes32)(uint8)' "$(cast keccak $r)"); printf " %s=%s" "$r" "${t:-0}"; done
   echo
+  echo "withdrawalsEnabled=$(call "$LEDGER" 'withdrawalsEnabled()(bool)')  epoch=$(call "$LEDGER" 'epoch()(uint64)')  escapeActive=$(call "$LEDGER" 'escapeActive()(bool)')"
   echo "timelock proposer=national:$(has $TIMELOCK $ROLE_PROPOSER $NATIONAL) executor=national:$(has $TIMELOCK $ROLE_EXECUTOR $NATIONAL) canceller=national:$(has $TIMELOCK $ROLE_CANCELLER $NATIONAL)"
+  echo "（授權金鑰清單的完整歷史：cd web && npm run ledger:authority -- list，或後台治理頁）"
 }
 
 case "${1:-}" in
@@ -186,5 +162,5 @@ case "${1:-}" in
   safe) shift; cmd_safe "$@";;
   sign) shift; cmd_sign "$@";;
   addresses) cat "$DEPLOYMENT";;
-  *) sed -n '2,20p' "$0"; exit 1;;
+  *) sed -n '2,30p' "$0"; exit 1;;
 esac

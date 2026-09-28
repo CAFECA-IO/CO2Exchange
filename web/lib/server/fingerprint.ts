@@ -15,17 +15,10 @@ import { CHAIN_ID, deployment } from "./chain";
 export const DATA_DIR = process.env.DATA_DIR ?? path.resolve(process.cwd(), "data");
 const STAMP = path.join(DATA_DIR, ".deployment.json");
 
-/// 只納入「會決定帳戶或紀錄身分」的合約。poolFee、tickSpacing 這種參數改了不影響舊紀錄，
-/// 納進來只會製造假警報。
+/// 只納入「會決定帳戶或紀錄身分」的合約。參數類的欄位改了不影響舊紀錄，納進來只會製造假警報。
 const KEYS = [
-  "accountFactory",
-  "kycRegistry",
-  "carbonRegistry",
-  "carbonCredit1155",
-  "retirementCertificate",
   "settlementToken",
-  "listing",
-  // 設計 v4：帳本合約。v4 部署裡上面那幾個都不存在（空字串），這一個才是身分所在
+  // 帳本合約：web/data/ledger 裡每一筆事件的簽章網域都指向它，換了就是另一份帳本
   "ledger",
 ] as const;
 

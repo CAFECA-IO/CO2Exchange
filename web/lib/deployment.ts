@@ -1,48 +1,31 @@
 import type { Address } from "viem";
 
+/// deployments/<chainId>.json，由 script/DeployLedger.s.sol 寫出。
+///
+/// 設計 v4：鏈上只有帳本合約（每小時的承諾、授權金鑰清單與門檻、結算幣託管）與治理。
+/// 登錄簿、身分、市場全部在鏈下帳本。
 export type Deployment = {
   chainId: number;
   /// 這一次部署的識別碼（主機時鐘毫秒）。Anvil 重開後重新部署會得到相同地址，
-  /// 只有這個欄位分得出「鏈重開了」。舊的部署檔沒有這個欄位，視為未知。
+  /// 只有這個欄位分得出「鏈重開了」。
   deployedAt?: number;
   deployedAtBlock?: number;
-  kycRegistry: Address; retirementCertificate: Address; carbonCredit1155: Address; carbonRegistry: Address;
-  reserveAttestation: Address;
-  feeSchedule: Address;
-  settlementToken: Address; listing: Address; cct: Address; carbonPool: Address;
+  ledger: Address;
+  /// 帳本合約的介面版本（目前是 2）。事件規則的版本另記在每一期承諾的 rulesVersion。
+  ledgerVersion: number;
+  settlementToken: Address;
   /// 這個結算幣是不是本站自己發的（MockTWD）。
-  /// false ＝ 外部代幣（Boltchain 上是 CAFECA 的 TWDC），本站沒有鑄幣權，
-  /// demo faucet 不能用。舊的部署檔沒有這個欄位，所以是 optional；
-  /// 讀的時候當 undefined 為「不確定」而不是 true——猜錯的方向要選安全的那一邊。
+  /// false ＝ 外部代幣（Boltchain 上是 CAFECA 的 TWDC），本站沒有鑄幣權，demo faucet 不能用。
+  /// 讀的時候把 undefined 當「不確定」而不是 true——猜錯的方向要選安全的那一邊。
   settlementMintable?: boolean;
-  poolManager: Address; hook: Address; router: Address; accountFactory: Address;
-  /// 交易所資產池。使用者在交易所期間，碳權與結算幣都在這裡；每個 epoch 提交餘額樹 root。
-  /// 舊的部署檔沒有這個欄位——Bank 是後來才加的，沒有它就代表這條鏈還沒有資產池。
-  bank?: Address;
-  /// 手續費收款人。資產池模型下它是餘額樹裡的一個帳戶。
-  treasury?: Address;
-  poolFee: number; tickSpacing: number;
-  /// 設計 v4 的帳本合約。有它（且 ledgerVersion = 2）代表這個部署的登錄簿、身分、市場
-  /// 全部在鏈下帳本，鏈上只有承諾——上面那些合約地址在 v4 部署裡都不存在。
-  ledger?: Address;
-  ledgerVersion?: number;
-  nationalSafe?: Address;
-  operatorSafe?: Address;
-  timelock?: Address;
+  nationalSafe: Address;
+  operatorSafe: Address;
+  timelock: Address;
+  timelockDelay?: number;
   committer?: Address;
+  /// CAFECA 的 keyring 合約（金鑰鏡像的來源）。本機鏈沒有就不設。
+  cafecaKeyring?: Address;
 };
-
-/// 這個部署是不是 v4（鏈上只放壓縮證據）。
-export const isLedgerV2 = (d: Partial<Deployment>): d is Deployment & { ledger: Address } =>
-  d.ledgerVersion === 2 && !!d.ledger;
-
-export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-
-/// SKIP_V4=1 部署時（目標鏈沒有 EIP-1153），v4 相關地址會是 0。
-/// 主市場 Listing、池化、註銷憑證都不受影響，只有 v4 swap 這塊要隱藏。
-export function hasV4(d: Pick<Deployment, "poolManager" | "hook" | "router">): boolean {
-  return [d.poolManager, d.hook, d.router].every((a) => !!a && a !== ZERO_ADDRESS);
-}
 
 export const TIER = { None: 0, Individual: 1, Corporate: 2, SystemContract: 3 } as const;
 export const TIER_LABEL = ["未驗證", "自然人", "法人", "系統合約"] as const;

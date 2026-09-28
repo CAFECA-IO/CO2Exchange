@@ -3,40 +3,28 @@ import { useEffect, useState } from "react";
 import { Card, Notice } from "./ui";
 import { fetchJson } from "@/lib/client/fetchJson";
 
-/// 平台資產池的償付能力揭露。
+/// 帳本合約的償付能力揭露。
 ///
-/// 使用者在交易所期間，碳權與結算幣都放在資產池（Bank 合約）裡，內部買賣是帳本更新。
-/// 這讓交易不必等出塊、不必付 gas，但也表示**鏈上看不到個別持有人**——
-/// 鏈上只看得到「池子裡有多少」。
+/// 設計 v4：碳權與交易都在鏈下帳本，鏈上只放每小時一期的承諾與結算幣的託管。
+/// 這讓交易不必等出塊、不必付 gas，但也表示**鏈上看不到個別持有人**。
 ///
 /// 那個代價要用揭露補回來，而揭露只有在「可以自己算一次」的時候才算數：
 ///
-///   · 帳本宣稱欠多少 —— 每 24 小時提交一次的餘額樹，總額被 root 蓋住，改不掉
-///   · 池子裡實際有多少 —— 鏈上餘額，誰都查得到
+///   · 帳本宣稱欠多少 —— 每小時提交一次的餘額樹，總額被 root 蓋住，改不掉
+///   · 實際有多少 —— 結算幣是帳本合約的鏈上餘額；碳權是登錄簿流通量（核發 − 註銷），
+///     由同一期的 registry root 蓋住
 ///
-/// 兩個數字並列，不合併。一樣的原則：合併之後就看不出兩者差在哪裡。
-///
-/// 差額為正是正常的（剛存進來、還沒進到下一期的樹裡）；為負則是資不抵債，
-/// 而合約會在提交時就擋下來（`Insolvent`），所以它不該出現在這裡。
+/// 兩個數字並列，不合併。合併之後就看不出兩者差在哪裡。
+/// 結算幣差額為正是正常的（剛存進來、還沒進到下一期）；為負則合約在提交時就擋下來（`Insolvent`）。
 ///
 /// ## 法律性質：商業託管，不是信託
 ///
-/// 這一段要寫在畫面上，不能只寫在文件裡。資產池的法律性質是**商業託管**：
-/// 資產登記在 Bank 合約名下，使用者對交易所有返還請求權。
-///
-/// 和信託的差別在出事的時候才看得出來——信託有法定的破產隔離，商業託管沒有
-/// 同等的保障。所以「識別得出哪一份是誰的」與「拿得回來」這兩件事不能靠法律地位撐，
-/// 只能靠機制撐：餘額樹負責前者（每 24 小時把歸屬釘在鏈上），逃生門負責後者
-/// （營運方不再提交 root 時，憑最後一個 root 仍然領得走）。
-///
-/// 換句話說，這兩個機制不是加分項，是這個法律性質下的**必要條件**。
-///
-/// 注意不要和上面那一段混為一談：`/custody` 上半部講的是**國家級**託管——
-/// 額度在核發國登錄簿、入金在信託專戶。那一層的入金是真的信託。
+/// 這一段要寫在畫面上，不能只寫在文件裡。結算幣登記在帳本合約名下，碳權登記在核發國登錄簿的
+/// 託管帳戶，使用者對交易所有返還請求權。和信託的差別在出事的時候才看得出來——
+/// 信託有法定的破產隔離，商業託管沒有同等的保障。所以「識別得出哪一份是誰的」與
+/// 「拿得回來」只能靠機制撐：餘額樹負責前者，提領與逃生門負責後者。
 
 type Solvency = {
-  /// "ledger" = 設計 v4：碳權不在鏈上，右欄是登錄簿流通量而不是池子餘額
-  mode?: "ledger";
   address: string;
   epoch: string;
   head: string;
@@ -82,31 +70,30 @@ export function BankSolvency() {
   }, []);
 
   if (err) {
-    // 這條鏈還沒有資產池是正常狀態（舊部署），不是錯誤，所以講清楚而不是報紅。
+    // 讀不到（節點斷線、還沒部署）講清楚原因，不報紅
     return (
-      <Card title="平台資產池">
+      <Card title="帳本合約">
         <Notice>{err}</Notice>
       </Card>
     );
   }
-  if (!d) return <Card title="平台資產池"><Notice>讀取中…</Notice></Card>;
+  if (!d) return <Card title="帳本合約"><Notice>讀取中…</Notice></Card>;
 
   const s = d.solvency;
-  const period = d.mode === "ledger" ? "每小時" : "每 24 小時";
   return (
     <Card
-      title="平台資產池：帳本 vs 池子"
-      action={<span className="text-xs text-ink-300">第 {d.epoch} 期・{d.mode === "ledger" ? "每小時" : "每 24 小時"}上鏈</span>}
+      title="帳本合約：宣稱欠 vs 實際有"
+      action={<span className="text-xs text-ink-300">第 {d.epoch} 期・每小時上鏈</span>}
     >
       <div className="grid grid-cols-[1fr_auto_auto] gap-x-4 border-b border-ink-500 pb-1.5 text-[11px] text-ink-300">
         <span />
         <span className="text-right">帳本宣稱欠</span>
-        <span className="text-right">{d.mode === "ledger" ? "登錄簿／合約實際有" : "池子裡實際有"}</span>
+        <span className="text-right">登錄簿／合約實際有</span>
       </div>
       <div className="divide-y divide-ink-600 text-sm">
         <Row label="碳權" ledger={kg(s.owedKg)} pool={kg(s.heldKg)} unit="噸"
              short={BigInt(s.heldKg) < BigInt(s.owedKg)} />
-        <Row label="結算幣" ledger={twd(s.owedCash)} pool={twd(s.heldCash)} unit="mTWD"
+        <Row label="結算幣" ledger={twd(s.owedCash)} pool={twd(s.heldCash)} unit="元"
              short={BigInt(s.heldCash) < BigInt(s.owedCash)} />
       </div>
 
@@ -125,7 +112,7 @@ export function BankSolvency() {
         </div>
         <div className="flex justify-between gap-4">
           <dt className="text-ink-300">提領</dt>
-          <dd className="text-ink-200">{d.withdrawalsEnabled ? "開放" : "尚未開放（機制已在鏈上）"}</dd>
+          <dd className="text-ink-200">{d.withdrawalsEnabled ? "開放" : "暫停（營運 Safe 的開關；逃生提領不受影響）"}</dd>
         </div>
         <div className="flex justify-between gap-4">
           <dt className="text-ink-300">逃生模式</dt>
@@ -140,45 +127,41 @@ export function BankSolvency() {
       </dl>
 
       <p className="mt-3 text-xs leading-6 text-ink-300">
-        使用者在交易所期間，資產放在資產池裡，內部買賣是帳本更新——所以鏈上看不到個別持有人。
-        代價用這張表補回來：{period}把「誰有多少」壓成一棵帶總額的 Merkle 樹提交上鏈，
-        總額被 root 蓋住，事後改不掉；
-        {d.mode === "ledger"
-          ? "結算幣實際有多少是合約的鏈上餘額，碳權流通量則由登錄簿重播得出、同一期的 registry root 蓋住。"
-          : "池子裡實際有多少則是鏈上餘額，誰都查得到。"}
-        兩個數字並列，不合併。
+        交易、登錄簿與身分都在鏈下帳本裡，鏈上看不到個別持有人。代價用這張表補回來：
+        每小時把整份帳本壓成一期承諾（事件 log root、帶總額的餘額樹 root、登錄簿 root、身分 root）提交上鏈，
+        並與前一期串連，事後改不掉。結算幣實際有多少是帳本合約的鏈上餘額；碳權流通量由登錄簿重播得出、
+        同一期的 registry root 蓋住。兩個數字並列，不合併。
       </p>
       <p className="mt-2 text-xs leading-6 text-ink-300">
         <span className="text-ink-200">法律性質：商業託管。</span>
-        資產登記在資產池合約名下，您對本站擁有返還請求權。
-        存入是交付託管、成立約定移轉權利，池內成交是該權利的讓與，提領是返還託管物——
-        三者都不是額度本身的「移轉」，整個過程對一單位額度只發生一次移轉
-        （從最初存入的人到最後提領的人）。
-        這與信託不同——信託有法定的破產隔離，商業託管沒有同等保障。
-        因此「識別得出哪一份是誰的」由上面那棵{period}上鏈的餘額樹負責，
-        「拿得回來」由提領機制負責（尚未開放，見下）。
+        結算幣託管在帳本合約名下，碳權託管在核發國官方登錄簿的本站帳戶，您對本站擁有返還請求權。
+        帳本內成交是該請求權的讓與，不是額度本身的移轉——整個過程對一單位額度只發生一次官方移轉。
+        這與信託不同：信託有法定的破產隔離，商業託管沒有同等保障。
+        所以「識別得出哪一份是誰的」由每小時上鏈的餘額樹負責，「拿得回來」由提領機制負責。
         <span className="text-ink-200">這兩項不是附加保障，是這個法律性質下必要的補強。</span>
       </p>
       <p className="mt-2 text-xs leading-6 text-ink-300">
+        <span className="text-ink-200">提領怎麼走：</span>
+        先在帳本裡簽一則提領請求（那筆錢從可動用移到待提領），下一期承諾上鏈之後，憑最新一期的證據向合約領回。
+        合約記每個帳戶累計領了多少，同一筆錢不會領到第二次。
+      </p>
+      <p className="mt-2 text-xs leading-6 text-ink-300">
         <span className="text-ink-200">營運方停擺時怎麼辦：</span>
-        超過 72 小時沒有新的承諾上鏈，資產池會自動進入逃生模式——
-        任何人都能憑最後一期的 Merkle 分支提領，<span className="text-ink-200">不需要本站同意，
-        本站也關不掉</span>（它只看「最後一次提交到現在過了多久」）。
-        提領依<span className="text-ink-200">先到先得</span>；池子不足時能領多少領多少，
-        差額會以 Shortfall 事件記在鏈上，作為向本站請求補足的依據——
-        不足的部分由本站負責償還。
+        超過 72 小時沒有新的承諾上鏈，合約自動進入逃生模式——
+        任何人都能憑最後一期的證據領回自己在帳本裡的全部結算幣（不必先申請），
+        <span className="text-ink-200">不需要本站同意，本站也關不掉</span>（它只看「最後一次提交到現在過了多久」）。
+        碳權則可在鏈上登記請求權（claimCredits），留下帶時間、改不掉的紀錄，由接手單位據以辦理官方移轉。
+        合約不足時能領多少領多少，差額以 CashShortfall 事件記在鏈上，作為向本站請求補足的依據。
       </p>
       <p className="mt-2 text-xs leading-6 text-ink-300">
-        <span className="text-ink-200">請保存您每一期的證據。</span>
-        逃生模式要能用，前提是您手上有自己的 Merkle 分支。
-        本站每一期都會提供，並同時交付查核機構與主管機關的鏡像節點——
-        如果產生證據的唯一途徑是本站的伺服器，那麼本站消失時證據也跟著消失，
-        而那正是逃生門唯一會被用到的時候。
+        <span className="text-ink-200">請保存您的證據檔。</span>
+        逃生模式要能用，前提是您手上有自己的證據。交易頁可以下載，每一期的公開檔與完整帳本鏡像也同時交付查核機構與主管機關——
+        如果產生證據的唯一途徑是本站的伺服器，那麼本站消失時證據也跟著消失，而那正是逃生門唯一會被用到的時候。
+        詳見<a className="text-tide underline" href="/transparency">透明度與驗證</a>。
       </p>
       <p className="mt-2 text-xs leading-6 text-ink-300">
-        這串數字不必相信本站：<code className="text-ink-200">{d.mode === "ledger" ? "npm run ledger:verify" : "npm run bank:verify"}</code> 會從{d.mode === "ledger" ? "公開的事件 log 與鏈上承諾" : "鏈上事件"}
+        這串數字不必相信本站：<code className="text-ink-200">npm run ledger:verify</code> 會從公開的事件 log 與鏈上承諾
         重新推導一次所有人的餘額、重建同一棵樹，對不上就 exit 1。
-        每一位使用者也拿得到自己那一份的 Merkle 分支。
       </p>
     </Card>
   );

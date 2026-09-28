@@ -1,11 +1,6 @@
 import "server-only";
-import { keccak256, toBytes, toHex, type Address, type Hex } from "viem";
-import { kycRegistryAbi } from "@/lib/abis";
-import { deployment, identityVerifier, publicClient, relayerClient } from "./chain";
+import { keccak256, toBytes, type Address, type Hex } from "viem";
 import { TIER } from "@/lib/deployment";
-import { submit } from "./tx";
-import { ApiError } from "./api";
-import { ledgerEnabled } from "./ledger/view";
 import { ledgerRegisterIdentity } from "./ledger/registry";
 
 export type KycRequest = {
@@ -26,33 +21,8 @@ export function identityHashOf(tier: number, idn: string): Hex {
   return keccak256(toBytes(`${tier === TIER.Individual ? "TW-ID" : "TW-UBN"}:${idn}:${salt}`));
 }
 
-/// 身分驗證服務簽發 attestation 並由 relayer 送出 register()。
+/// 身分驗證服務簽一筆帳本的 identity 事件。
 /// 正式環境：這一步之前要驗證工商憑證 / 自然人憑證 / TW FidO 對 account 的簽章與憑證鏈。
 export async function attestAndRegister(account: Address, tier: number, idn: string) {
-  const identityHash = identityHashOf(tier, idn);
-  // 帳本 v2：身分是帳本裡的一筆 identity 事件，不是鏈上的 register()
-  if (ledgerEnabled()) return ledgerRegisterIdentity(account, tier, identityHash);
-  const d = deployment();
-  const nonce = await publicClient.readContract({ address: d.kycRegistry, abi: kycRegistryAbi, functionName: "nonces", args: [account] });
-  const now = Math.floor(Date.now() / 1000);
-  const attestation = {
-    account, tier, expiry: BigInt(now + 365 * 86400), jurisdiction: toHex("TW") as Hex, identityHash, nonce, deadline: BigInt(now + 3600),
-  };
-  const signature = await identityVerifier.signTypedData({
-    domain: { name: "CO2Exchange KYCRegistry", version: "1", chainId: d.chainId, verifyingContract: d.kycRegistry },
-    types: { IdentityAttestation: [
-      { name: "account", type: "address" }, { name: "tier", type: "uint8" }, { name: "expiry", type: "uint64" },
-      { name: "jurisdiction", type: "bytes2" }, { name: "identityHash", type: "bytes32" }, { name: "nonce", type: "uint256" }, { name: "deadline", type: "uint256" } ] },
-    primaryType: "IdentityAttestation", message: attestation,
-  });
-  // 先模擬再送。公開鏈上一筆注定失敗的交易照樣要付 gas，而且 estimateGas 的
-  // revert 常常不帶資料——「attestation 過期」會變成「合約拒絕了，沒說原因」。
-  // 模擬拿得到真正的 error，錢也省下來。
-  const { request } = await publicClient.simulateContract({
-    address: d.kycRegistry, abi: kycRegistryAbi, functionName: "register", args: [attestation, signature],
-    account: relayerClient.account,
-  });
-  const { hash, receipt } = await submit(request);
-  if (receipt.status !== "success") throw new ApiError("CONTRACT_REVERTED", "身分註冊交易被鏈上拒絕");
-  return { txHash: hash, identityHash };
+  return ledgerRegisterIdentity(account, tier, identityHashOf(tier, idn));
 }

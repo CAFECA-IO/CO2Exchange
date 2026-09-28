@@ -1,11 +1,8 @@
 import "server-only";
-import { encodeFunctionData, keccak256, toBytes, toHex, type Hex } from "viem";
-import { bidWriteAbi, creditAbi, erc20Abi, erc1155ApprovalAbi, listingAbi, listingWriteAbi, registryAbi } from "@/lib/abis";
-import { PURPOSE_LABEL, countryToBytes2, flagOf, purposeAllowed } from "@/lib/deployment";
-import { deployment, publicClient } from "../chain";
-import { holdings } from "../market";
+import { PURPOSE_LABEL, flagOf, purposeAllowed } from "@/lib/deployment";
+import { deployment } from "../chain";
 import { ApiError } from "../api";
-import { ledgerEnabled, ledgerView } from "../ledger/view";
+import { ledgerView } from "../ledger/view";
 import { notional, retireFeeOf, tradeBpsOf } from "@/lib/ledger/engine";
 import type { Ctx } from "./tools";
 
@@ -20,13 +17,13 @@ import type { Ctx } from "./tools";
 /// 三條規則，缺一不可：
 ///
 /// 1. **模型不產生 calldata，也不產生地址。** 它只能給一個白名單裡的動作名稱，
-///    加上純量參數（數量、價格、訂單編號）。合約地址一律來自部署檔，
-///    calldata 一律在這裡用 ABI 編。模型被注入時，它能表達的最壞情況是
+///    加上純量參數（數量、價格、訂單編號）。要簽的 EIP-712 訊息一律由 /api/ledger 組，
+///    這裡只給欄位。模型被注入時，它能表達的最壞情況是
 ///    「用錯的數字買一張真實存在的單」，而不是「把錢轉到某個地址」。
 /// 2. **沒有轉帳這個動作。** 白名單裡沒有任何「把資產送到任意地址」的項目。
 ///    這是刻意的缺口：註冊了它，上面那條防線就沒有意義了。
 /// 3. **確認時重算一次。** 從提議到按下確認之間，掛單可能被別人吃掉、價格可能變。
-///    預覽的每個數字都在確認的那一刻重新從鏈上讀，對不上就擋下來。
+///    預覽的每個數字都在確認的那一刻重新從帳本讀，對不上就擋下來。
 
 export type ActionKind =
   | "navigate"
@@ -46,8 +43,6 @@ export const ACTION_KINDS = [
 export const isActionKind = (k: string): k is ActionKind =>
   (ACTION_KINDS as readonly string[]).includes(k);
 
-export type Call = { target: Hex; value: string; data: Hex };
-
 export type Preview = {
   kind: ActionKind;
   /// 一句話說這是什麼。確認卡的標題。
@@ -59,11 +54,10 @@ export type Preview = {
   warnings: string[];
   /// 不需要簽章的動作（例如換頁）在這裡給目的地，前端直接導過去。
   href?: string;
-  calls?: Call[];
-  /// 帳本 v2：要使用者簽的那一筆帳本事件（交給 /api/ledger 的 prepare → CAFECA 簽 → submit）。
+  /// 要使用者簽的那一筆帳本事件（交給 /api/ledger 的 prepare → CAFECA 簽 → submit）。
   /// 只有純量欄位；nonce 與要簽的 typed data 由 /api/ledger 在 prepare 時才組，前端不自己組。
   ledger?: { kind: "place" | "cancel" | "retire"; fields: Record<string, string | number> };
-  /// 帳本 v2 的領水：領到之後直接存進帳本合約
+  /// 領水：領到之後直接存進帳本合約
   deposit?: string;
 };
 
@@ -76,14 +70,10 @@ function need(v: unknown, name: string): number {
   return n;
 }
 
-/// 每一個動作：驗參數 → 讀鏈上現況 → 算出人看得懂的預覽 → 編 calldata。
-/// 讀鏈上現況這一步不能省：它同時是「這張單還在嗎」的檢查，
-/// 也是預覽裡那些數字的來源。
+/// 每一個動作：驗參數 → 讀帳本現況 → 算出人看得懂的預覽 → 給出要簽的欄位。
+/// 讀現況這一步不能省：它同時是「這張單還在嗎」的檢查，也是預覽裡那些數字的來源。
 export async function buildAction(kind: ActionKind, p: Record<string, unknown>, ctx: Ctx): Promise<Preview> {
-  if (ledgerEnabled() && kind !== "navigate" && kind !== "manage_identity") return buildLedgerAction(kind, p, ctx);
-  const d = deployment();
   const me = ctx.address;
-
   switch (kind) {
     case "navigate": {
       const path = String(p.path ?? "");
@@ -91,174 +81,6 @@ export async function buildAction(kind: ActionKind, p: Record<string, unknown>, 
       // 而畫面上那顆按鈕看起來跟其他按鈕一模一樣。
       if (!/^\/[A-Za-z0-9\-/_]*$/.test(path)) throw new ApiError("INVALID_PARAM", "只能導向本站頁面", { param: "path" });
       return { kind, title: `前往 ${path}`, rows: [], warnings: [], href: path };
-    }
-
-    case "claim_faucet": {
-      if (!me) throw new ApiError("UNAUTHENTICATED", "要先登入");
-      return {
-        kind, title: "領取測試用 mTWD",
-        rows: [{ label: "收款帳戶", value: me }, { label: "用途", value: "Phase 0 展示用的模擬結算幣" }],
-        warnings: ["mTWD 是模擬的結算幣，沒有任何實際價值。"],
-      };
-    }
-
-    case "buy_listing": {
-      if (!me) throw new ApiError("UNAUTHENTICATED", "要先登入");
-      const orderId = Math.trunc(need(p.orderId, "orderId"));
-      const want = need(p.tonnes, "tonnes");
-      const o = await publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "orderOf", args: [BigInt(orderId)] });
-      if (!o.active || o.remainingKg === 0n) throw new ApiError("ORDER_INACTIVE", `第 ${orderId} 號掛單已經被買走或取消了。`, { orderId });
-      const kg = BigInt(Math.min(Number(o.remainingKg), Math.max(1, Math.round(want * 1000))));
-      if (o.minFillKg > 0n && kg < o.minFillKg) {
-        throw new ApiError("INVALID_PARAM", `這張單的最小成交量是 ${tonnes(o.minFillKg)}，買不了 ${tonnes(kg)}。`, { param: "tonnes", minFillKg: Number(o.minFillKg) });
-      }
-      const cost = (kg * o.pricePerTonne) / 1000n;
-      const feeBps = await publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "feeBps" });
-      const fee = (cost * BigInt(feeBps)) / 10_000n;
-      const bal = await holdings(me).then((h) => BigInt(h.twd));
-      return {
-        kind, title: `買進 ${tonnes(kg)}`,
-        rows: [
-          { label: "掛單", value: `#${orderId}　批次 #${Number(o.batchId)}` },
-          { label: "數量", value: tonnes(kg) },
-          { label: "單價", value: `${twd(o.pricePerTonne)} / 公噸` },
-          { label: "小計", value: twd(cost) },
-          { label: `手續費（${Number(feeBps) / 100}%）`, value: twd(fee) },
-          { label: "你要付", value: twd(cost), emphasis: true },
-          { label: "付款後餘額", value: twd(bal - cost) },
-        ],
-        warnings: [
-          ...(bal < cost ? [`結算幣不夠：你有 ${twd(bal)}，這筆要 ${twd(cost)}。`] : []),
-          "成交後額度直接進你的錢包，價金一次付清，不能反悔。",
-        ],
-        calls: [
-          { target: d.settlementToken, value: "0", data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [d.listing, cost] }) },
-          { target: d.listing, value: "0", data: encodeFunctionData({ abi: listingAbi, functionName: "buy", args: [BigInt(orderId), kg] }) },
-        ],
-      };
-    }
-
-    case "place_bid": {
-      if (!me) throw new ApiError("UNAUTHENTICATED", "要先登入");
-      const t = need(p.tonnes, "tonnes");
-      const price = need(p.pricePerTonne, "pricePerTonne");
-      const c = String(p.country ?? "").toUpperCase();
-      if (c && c !== "ANY" && !/^[A-Z]{2}$/.test(c)) throw new ApiError("INVALID_COUNTRY", "country 要是兩碼國別或 ANY", { param: "country" });
-      const kg = BigInt(Math.round(t * 1000));
-      const pricePerTonne = BigInt(Math.round(price * 1e6));
-      const cost = (kg * pricePerTonne) / 1000n;
-      const bal = await holdings(me).then((h) => BigInt(h.twd));
-      const country = !c || c === "ANY" ? "0x0000" : toHex(c, { size: 2 });
-      return {
-        kind, title: `掛買單 ${tonnes(kg)}`,
-        rows: [
-          { label: "核發國", value: !c || c === "ANY" ? "不限" : `${flagOf(c)} ${c}` },
-          { label: "數量", value: tonnes(kg) },
-          { label: "出價", value: `${twd(pricePerTonne)} / 公噸` },
-          { label: "現在鎖進合約", value: twd(cost), emphasis: true },
-          { label: "鎖款後餘額", value: twd(bal - cost) },
-        ],
-        warnings: [
-          ...(bal < cost ? [`結算幣不夠：你有 ${twd(bal)}，這筆要鎖 ${twd(cost)}。`] : []),
-          "錢會**當場**鎖進合約，直到成交或你自己取消為止。取消會全額退回。",
-        ],
-        calls: [
-          { target: d.settlementToken, value: "0", data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [d.listing, cost] }) },
-          { target: d.listing, value: "0", data: encodeFunctionData({ abi: bidWriteAbi, functionName: "placeBid", args: [country as Hex, kg, pricePerTonne, 0n] }) },
-        ],
-      };
-    }
-
-    case "cancel_bid": {
-      if (!me) throw new ApiError("UNAUTHENTICATED", "要先登入");
-      const bidId = Math.trunc(need(p.bidId, "bidId"));
-      const b = await publicClient.readContract({ address: d.listing, abi: listingAbi, functionName: "bidOf", args: [BigInt(bidId)] });
-      if (!b.active) throw new ApiError("ORDER_INACTIVE", `第 ${bidId} 號買單已經不在了。`, { bidId });
-      if (b.buyer.toLowerCase() !== me.toLowerCase()) throw new ApiError("FORBIDDEN", "這不是你的買單。");
-      return {
-        kind, title: `取消買單 #${bidId}`,
-        rows: [
-          { label: "剩餘數量", value: tonnes(b.remainingKg) },
-          { label: "退回", value: twd((b.remainingKg * b.pricePerTonne) / 1000n), emphasis: true },
-        ],
-        warnings: [],
-        calls: [{ target: d.listing, value: "0", data: encodeFunctionData({ abi: bidWriteAbi, functionName: "cancelBid", args: [BigInt(bidId)] }) }],
-      };
-    }
-
-    case "sell_batch": {
-      if (!me) throw new ApiError("UNAUTHENTICATED", "要先登入");
-      const batchId = Math.trunc(need(p.batchId, "batchId"));
-      const t = need(p.tonnes, "tonnes");
-      const price = need(p.pricePerTonne, "pricePerTonne");
-      const h = await holdings(me);
-      const held = h.batches.find((b) => b.batchId === batchId);
-      if (!held) throw new ApiError("INVALID_PARAM", `你沒有批次 #${batchId}。`, { param: "batchId", batchId });
-      const kg = BigInt(Math.min(held.kg, Math.round(t * 1000)));
-      const pricePerTonne = BigInt(Math.round(price * 1e6));
-      return {
-        kind, title: `上架批次 #${batchId} ${tonnes(kg)}`,
-        rows: [
-          { label: "批次", value: `#${batchId}　${flagOf(held.country)} ${held.country}　${held.project}　${held.vintageYear}` },
-          { label: "你持有", value: tonnes(held.kg) },
-          { label: "這次上架", value: tonnes(kg) },
-          { label: "開價", value: `${twd(pricePerTonne)} / 公噸` },
-          { label: "全部賣出可得（未扣手續費）", value: twd((kg * pricePerTonne) / 1000n), emphasis: true },
-        ],
-        warnings: [
-          "上架不是賣出：要有人來買才成交，你隨時可以取消。",
-          "使用期限等掛單資訊請到交易頁補填，費思不會替你決定那個日期。",
-        ],
-        calls: [
-          { target: d.carbonCredit1155, value: "0", data: encodeFunctionData({ abi: erc1155ApprovalAbi, functionName: "setApprovalForAll", args: [d.listing, true] }) },
-          { target: d.listing, value: "0", data: encodeFunctionData({ abi: listingWriteAbi, functionName: "list", args: [BigInt(batchId), kg, pricePerTonne, 0n] }) },
-        ],
-      };
-    }
-
-    case "retire": {
-      if (!me) throw new ApiError("UNAUTHENTICATED", "要先登入");
-      const batchId = Math.trunc(need(p.batchId, "batchId"));
-      const t = need(p.tonnes, "tonnes");
-      const purpose = Math.trunc(Number(p.purpose ?? -1));
-      if (!(purpose >= 0 && purpose < PURPOSE_LABEL.length)) {
-        throw new ApiError("INVALID_PARAM", `purpose 要是 0–${PURPOSE_LABEL.length - 1}：${PURPOSE_LABEL.map((l, i) => `${i}=${l}`).join("、")}`, { param: "purpose" });
-      }
-      const beneficiary = String(p.beneficiary ?? "").trim();
-      if (!beneficiary) throw new ApiError("MISSING_PARAM", "註銷一定要指名受益人——憑證上會載明，而且不能改。", { param: "beneficiary" });
-      const h = await holdings(me);
-      const held = h.batches.find((b) => b.batchId === batchId);
-      if (!held) throw new ApiError("INVALID_PARAM", `你沒有批次 #${batchId}。`, { param: "batchId", batchId });
-      const kg = BigInt(Math.min(held.kg, Math.round(t * 1000)));
-      // 用途 × 轄區的檢查在合約裡也會做一次，但**這裡要先做**：
-      // 讓使用者在確認卡上就看到「這個轄區不允許這個用途」，
-      // 而不是按下 passkey、等交易 revert、再去讀一個四位元組的錯誤。
-      const mask = await publicClient
-        .readContract({ address: d.carbonRegistry, abi: registryAbi, functionName: "jurisdictionOf", args: [countryToBytes2(held.country)] })
-        .then((j) => j.purposeMask).catch(() => 0xff);
-      const allowed = purposeAllowed(mask, purpose);
-      return {
-        kind, title: `註銷 ${tonnes(kg)}`,
-        rows: [
-          { label: "批次", value: `#${batchId}　${flagOf(held.country)} ${held.country}　${held.project}　${held.vintageYear}` },
-          { label: "數量", value: tonnes(kg), emphasis: true },
-          { label: "用途", value: PURPOSE_LABEL[purpose] },
-          { label: "受益人", value: beneficiary },
-        ],
-        warnings: [
-          ...(allowed ? [] : [`${held.country} 核發的額度不允許用於「${PURPOSE_LABEL[purpose]}」。換一個用途，或換一批額度。`]),
-          "**註銷不可逆。** 這些額度會永久退出流通，不能再轉讓、也不能再被任何人主張。",
-          "受益人與用途會寫進憑證，之後改不了。",
-        ],
-        calls: [{
-          target: d.carbonCredit1155, value: "0",
-          data: encodeFunctionData({ abi: creditAbi, functionName: "retire", args: [{
-            holder: me, batchId: BigInt(batchId), amountKg: kg, certificateTo: me,
-            beneficiaryHash: keccak256(toBytes(beneficiary)), beneficiary, purpose,
-            memo: String(p.memo ?? ""),
-          }] }),
-        }],
-      };
     }
 
     case "manage_identity": {
@@ -277,13 +99,14 @@ export async function buildAction(kind: ActionKind, p: Record<string, unknown>, 
         href: "/account",
       };
     }
+    default:
+      return buildLedgerAction(kind, p, ctx);
   }
-  throw new ApiError("UNSUPPORTED_ACTION", `不支援的動作：${kind}`, { kind });
 }
 
-// ── 帳本 v2（設計 v4 第 5 期）──
+// ── 帳本動作 ──
 //
-// 同樣三條規則，換成帳本的說法：模型只給動作名稱與純量；**要簽的內容由 /api/ledger 組**（這裡只給欄位）；
+// 模型只給動作名稱與純量；**要簽的內容由 /api/ledger 組**（這裡只給欄位）；
 // 確認時重算——這裡的每個數字都從帳本現在的狀態讀。使用者簽的是一則 EIP-712 委託單，
 // CAFECA 錢包會把每個欄位攤開給他核對，所以確認卡上的數字要和那些欄位一一對得上。
 
@@ -305,6 +128,9 @@ function buildLedgerAction(kind: ActionKind, p: Record<string, unknown>, ctx: Ct
   const countryOf = (batchId: bigint) => s.projects.get(String(s.batches.get(String(batchId))?.projectId ?? 0n))?.country ?? "";
 
   switch (kind) {
+    case "navigate":
+    case "manage_identity":
+      break; // buildAction 已處理
     case "claim_faucet": {
       if (deployment().settlementMintable !== true) throw new ApiError("FORBIDDEN", "這條鏈上的結算幣不是本站發行的，沒有鑄幣權。請改由發行方入金。");
       const amount = 100_000n * 10n ** 6n;
@@ -457,10 +283,10 @@ function buildLedgerAction(kind: ActionKind, p: Record<string, unknown>, ctx: Ct
 export const ACTION_CATALOG = `
 可提議的動作（propose_action 的 kind 與參數）：
 - navigate {path}                     帶使用者去某一頁。不需要簽章。
-- claim_faucet {}                     領測試用 mTWD。
+- claim_faucet {}                     領測試用 mTWD 並存進帳本（只有本站發行結算幣的展示鏈可以）。
 - buy_listing {orderId, tonnes}       買一張現有掛單。先用 order_book 取得 orderId。
-- place_bid {country?, tonnes, pricePerTonne}  掛買單（錢會鎖住）。country 省略：舊版 = 不限核發國；帳本版 = 國內（TW）。
-- cancel_bid {bidId}                  取消自己的買單，退回鎖住的錢。帳本版買單賣單共用序號，撤賣單也用這個（bidId 給 order_book 的 orderId）。
+- place_bid {country?, tonnes, pricePerTonne}  掛買單（錢會鎖住）。country 省略 = 國內（TW）。
+- cancel_bid {bidId}                  取消自己的委託，退回鎖住的錢或額度。買單賣單共用序號，撤賣單也用這個（bidId 給 order_book 的 orderId）。
 - sell_batch {batchId, tonnes, pricePerTonne}  上架自己持有的批次。
 - retire {batchId, tonnes, purpose, beneficiary, memo?}  註銷。purpose 是 0–3 的整數。**不可逆**。
 - manage_identity {}                  帶使用者去管理自己的 CAFECA 身分（掛失、裝置、恢復）。

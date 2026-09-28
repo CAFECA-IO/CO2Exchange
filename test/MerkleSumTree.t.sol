@@ -3,11 +3,11 @@ pragma solidity 0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {stdJson} from "forge-std/StdJson.sol";
-import {MerkleSumTree} from "../src/bank/MerkleSumTree.sol";
+import {MerkleSumTree} from "../src/ledger/MerkleSumTree.sol";
 
 /// 餘額樹的**跨語言一致性**測試。
 ///
-/// 樹有兩份實作：`web/lib/bank/tree.ts` 建樹並產生證據，`MerkleSumTree.sol` 在提領時驗證。
+/// 樹有兩份實作：`web/lib/ledger/balance-tree.ts` 建樹並產生證據，`MerkleSumTree.sol` 在提領時驗證。
 /// 兩邊的雜湊格式必須逐位元組一致，而「兩份實作、一份規格」這種東西不會靠人盯著保持同步。
 ///
 /// 所以這支測試讀 TS 那邊產生的 fixture（`npm run gen:tree-fixture`），
@@ -16,7 +16,7 @@ import {MerkleSumTree} from "../src/bank/MerkleSumTree.sol";
 ///
 /// 不一致的後果值得再說一次：不是測試紅一條，是使用者拿著完全正確的餘額卻領不到錢，
 /// 而且要等到有人真的去提領才會發現。
-contract BankTreeTest is Test {
+contract MerkleSumTreeTest is Test {
     using stdJson for string;
 
     string internal fixture;

@@ -1,10 +1,8 @@
-import { registryAbi } from "@/lib/abis";
-import { deployment, isAddress, publicClient } from "@/lib/server/chain";
+import { isAddress } from "@/lib/server/chain";
 import { all, insert, saveUpload } from "@/lib/server/store";
 import type { IssuanceRequest } from "@/lib/server/issuance";
 import { me, requireRole } from "@/lib/server/roles";
 import { ApiError, fail, handleError, ok } from "@/lib/server/api";
-import { ledgerEnabled } from "@/lib/server/ledger/view";
 import { ledgerProject } from "@/lib/server/ledger/registry";
 
 /// GET ?owner= | ?status=（查驗機構可看全部）
@@ -41,9 +39,7 @@ export async function POST(req: Request) {
     if (!(amountKg > 0)) throw new ApiError("INVALID_PARAM", "噸數必須大於 0", { param: "amountTonnes" });
     if (!(report instanceof File) || report.size === 0) throw new ApiError("MISSING_PARAM", "需要上傳查驗報告", { param: "report" });
     if (report.size > 20 * 1024 * 1024) throw new ApiError("FILE_TOO_LARGE", "報告超過 20MB", { maxBytes: 20 * 1024 * 1024, got: report.size });
-    const p = ledgerEnabled()
-      ? ledgerProject(projectId)
-      : await publicClient.readContract({ address: deployment().carbonRegistry, abi: registryAbi, functionName: "projectOf", args: [BigInt(projectId)] });
+    const p = ledgerProject(projectId);
     if (!p) throw new ApiError("PROJECT_NOT_FOUND");
     if (p.owner.toLowerCase() !== owner.toLowerCase()) throw new ApiError("FORBIDDEN", "此帳戶不是該專案擁有者");
     if (!p.active) throw new ApiError("PROJECT_NOT_FOUND", "專案已停用");
