@@ -14,6 +14,7 @@ export const ROLES = [
   "CARBON_VERIFIER",    // 查驗機構
   "DOCUMENT_SIGNER",    // 憑證文件雜湊、對帳報告
   "AUDITOR",            // 查核機構：對帳報告簽署
+  "RECEIPT_SIGNER",     // 收單金鑰：簽收收據（不簽事件，但使用者要能確認收據是誰簽的）
 ] as const;
 export type Role = (typeof ROLES)[number];
 

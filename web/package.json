@@ -24,7 +24,9 @@
     "gen:tree-fixture": "node --experimental-strip-types --no-warnings scripts/gen-tree-fixture.mjs",
     "test:keys": "node scripts/test-keys.mjs",
     "test:mm": "node scripts/test-mm.mjs",
+    "gen:ledger-fixture": "node --experimental-strip-types --no-warnings scripts/gen-ledger-fixture.mjs",
     "test:ledger": "node --experimental-strip-types --no-warnings scripts/test-ledger.mjs",
+    "test:ledger-chain": "node --experimental-strip-types --no-warnings scripts/e2e-ledger-chain.mjs",
     "mm": "node scripts/mm/mm.mjs",
     "test:cafeca": "node --conditions=react-server --experimental-strip-types --no-warnings scripts/test-cafeca.mjs"
   },

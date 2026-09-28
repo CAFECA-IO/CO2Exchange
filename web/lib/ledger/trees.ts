@@ -118,10 +118,10 @@ export function rootsOf(s: State, epoch: bigint): Roots {
 /// 一期的 anchor。**帳本合約用同一個公式**；改這裡就要改合約，而且之前所有 anchor 都要重算。
 export function anchorOf(a: {
   prev: Hex; epoch: bigint; logRoot: Hex; balanceRoot: Hex; registryRoot: Hex; identityRoot: Hex;
-  totalCash: bigint; totalsHash: Hex; upToBlock: bigint; lastSeq: bigint; rulesVersion: number;
+  totalKg: bigint; totalCash: bigint; totalsHash: Hex; upToBlock: bigint; lastSeq: bigint; rulesVersion: number;
 }): Hex {
   return keccak256(encodeAbiParameters(
-    ["bytes32", "uint64", "bytes32", "bytes32", "bytes32", "bytes32", "uint256", "bytes32", "uint64", "uint64", "uint16"].map((type) => ({ type })),
-    [a.prev, a.epoch, a.logRoot, a.balanceRoot, a.registryRoot, a.identityRoot, a.totalCash, a.totalsHash, a.upToBlock, a.lastSeq, a.rulesVersion] as never,
+    ["bytes32", "uint64", "bytes32", "bytes32", "bytes32", "bytes32", "uint256", "uint256", "bytes32", "uint64", "uint64", "uint16"].map((type) => ({ type })),
+    [a.prev, a.epoch, a.logRoot, a.balanceRoot, a.registryRoot, a.identityRoot, a.totalKg, a.totalCash, a.totalsHash, a.upToBlock, a.lastSeq, a.rulesVersion] as never,
   ));
 }

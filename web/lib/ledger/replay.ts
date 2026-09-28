@@ -117,7 +117,7 @@ export async function replay(
     const logRoot = logTree(slice).root;
     const anchor = anchorOf({
       prev, epoch: b.epoch, logRoot, balanceRoot: roots.balanceRoot, registryRoot: roots.registryRoot, identityRoot: roots.identityRoot,
-      totalCash: roots.totalCash, totalsHash: roots.totalsHash, upToBlock: b.upToBlock, lastSeq: b.lastSeq, rulesVersion: RULES_VERSION,
+      totalKg: roots.totalKg, totalCash: roots.totalCash, totalsHash: roots.totalsHash, upToBlock: b.upToBlock, lastSeq: b.lastSeq, rulesVersion: RULES_VERSION,
     });
     const { balanceTree: _bt, registry: _r, identity: _i, ...plain } = roots;
     void _bt; void _r; void _i;

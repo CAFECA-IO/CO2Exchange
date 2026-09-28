@@ -1,0 +1,82 @@
+{
+  "note": "由 web/scripts/gen-ledger-fixture.mjs 產生，不要手改",
+  "epochs": [
+    {
+      "prev": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "epoch": "1",
+      "logRoot": "0xba379d369acfbbd743048edf588fde955bc111d0440c2e9e71a23e6fed69c870",
+      "balanceRoot": "0xaa595f237ca7fc1da2434e31f74fe6aa10f1ce31e953fc7cb850ec59f96faba5",
+      "registryRoot": "0x3766a58fc0a1a956e17cfa121c574e2dc8065a088ae73ded87083b6311962fb4",
+      "identityRoot": "0xea0eee5e68c7eb16521e7cf981d7c53b78c270dab26fa6bcb5adf1843baab59a",
+      "totalKg": "70000",
+      "totalCash": "1100000000000",
+      "totalsHash": "0x5ec886e614b3a618e1c47f61b3c6cbaa74e01f68e481cddf645206e2ecdf9b96",
+      "upToBlock": "112",
+      "lastSeq": "12",
+      "rulesVersion": 2,
+      "anchor": "0x3c08c3c101fac73e6311cb636d99f312a7a68a9e304d133c7a7d9333bde6cbe5"
+    },
+    {
+      "prev": "0x3c08c3c101fac73e6311cb636d99f312a7a68a9e304d133c7a7d9333bde6cbe5",
+      "epoch": "2",
+      "logRoot": "0xbb726c20aa61c67b6b896839966a6ca8c93425db86dae39b882c22f212fa4071",
+      "balanceRoot": "0x92a4d8b08bf2553aa9b5290bd0bbb753b43138a5d4a74faec4fad40be9396bc9",
+      "registryRoot": "0x0857cd4fb9f9e46f07210266e3c2b3536fe10e1b8d8c380a7fc07871f251d22c",
+      "identityRoot": "0x22fba6803772515d698fd5a05ac2215bf5424043cdbe035cebe6dd193fafb06e",
+      "totalKg": "68000",
+      "totalCash": "1100000000000",
+      "totalsHash": "0x79f76cfbedfc8840dfa3ab23ad96b9250a86824fc5d0275cfc5cec5769ce70fd",
+      "upToBlock": "700",
+      "lastSeq": "27",
+      "rulesVersion": 2,
+      "anchor": "0x25a68bac03f1532fe6442e76bf2b37c83aaa95b665fd9d7b2cf1ddb996174ed5"
+    }
+  ],
+  "claim": {
+    "account": "0x37dA28C050E3c0A1c0aC3BE97913EC038783dA4C",
+    "proofEpoch": "2",
+    "assetsRoot": "0x371667cf1c71dffbbac22b4fb7ba4a2927bf998fe4562fb335a30f508f020cfb",
+    "leafKg": "3000",
+    "leafCash": "995980000000",
+    "siblingHashes": [
+      "0x9115499b7383b36bcd233898564b15ec9dba9a928d40f052adefaf9d1af8f30f",
+      "0xd2430bf71c60b25034eab4f1a6fa199710fbb74c301e6a7a334806ed6b352ae2",
+      "0x19b1eeb3fefaf252f0a3c47b37ede5b72ebe4c04001141446ec0579f3cdb761e"
+    ],
+    "siblingKgs": [
+      "44000",
+      "1000",
+      "20000"
+    ],
+    "siblingCashes": [
+      "4752000000",
+      "99268000000",
+      "0"
+    ],
+    "path": "1",
+    "batchKg": "3000",
+    "assetSiblings": [],
+    "assetPath": "0",
+    "batch": {
+      "id": "1",
+      "projectId": "1",
+      "monitoringStart": "1700000000",
+      "monitoringEnd": "1760000000",
+      "vintageYear": 2025,
+      "serialHash": "0x09549c2a9db7230ccb2b530e8f297487340ea30bfcf493bb0019b6693ad06ce5",
+      "reportHash": "0xb0703af66bafc21cd5be43995c603c1bbec33eea2ff065ed19b35e8aa095e9a1",
+      "verifier": "0x68E527780872cda0216Ba0d8fBD58b67a5D5e351",
+      "issuedAt": "1800000420",
+      "issuedKg": "50000",
+      "retiredKg": "2000",
+      "frozen": false
+    },
+    "registrySiblings": [
+      "0xf158a93367bea81d9c4ff3b276c83a938781dd981b939a3cd5272a2b42d8f330",
+      "0x67779697fd4dfc24ee1a68fd5acb2b3357751a3ecba80ed16f44353ceb0ac938",
+      "0xd6a499f70286c15953f8f73771850057bec835af0052dea1b6c28d73d7f24851",
+      "0xb507ef239f8947177bbf3562cde52f18788bb13a813b3e9669a836fad5b7fbd4"
+    ],
+    "registryPath": "4"
+  }
+}
