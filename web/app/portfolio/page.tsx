@@ -90,7 +90,13 @@ export default function PortfolioPage() {
         <>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <StatTile label="資產總值" value={`${twd(p.totalValue)} ${CASH}`} sub="現金 + 碳權市值" />
-            <StatTile label="可用現金" value={`${twd(p.twd)} ${CASH}`} sub="存於信託專戶" />
+            <StatTile
+              label={p.walletTwd !== undefined ? "帳本裡的現金" : "可用現金"}
+              value={`${twd(p.twd)} ${CASH}`}
+              sub={p.walletTwd !== undefined
+                ? `錢包裡另有 ${p.walletTwd === null ? "（讀不到）" : `${twd(p.walletTwd)} ${CASH}`}，存入帳本才能交易`
+                : "存於信託專戶"}
+            />
             <StatTile
               label="持有碳權"
               value={fmtKg(p.holdingKg)}

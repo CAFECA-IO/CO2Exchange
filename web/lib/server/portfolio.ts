@@ -59,6 +59,8 @@ export type Portfolio = {
   unrealisedPnl: number | null;
   realisedPnl: number;
   totalValue: number; // 現金 + 市值
+  /// 帳本 v2：錢包裡還沒存進帳本合約的結算幣（鏈上餘額）。null = 讀不到。舊版沒有這個欄位（twd 就是錢包餘額）
+  walletTwd?: number | null;
   movements: Movement[];
   /// 淨值走勢：每一次異動後的「現金 + 持有市值（以當時價估）」
   equityCurve: { t: number; v: number }[];
@@ -66,7 +68,13 @@ export type Portfolio = {
 };
 
 export async function portfolio(account: Address): Promise<Portfolio> {
-  if (ledgerEnabled()) return ledgerPortfolio(account);
+  if (ledgerEnabled()) {
+    // 帳本版的「現金」是帳本裡的餘額；錢包裡的結算幣要存入才能交易，兩個數字都要讓人看得到
+    const walletTwd = await publicClient
+      .readContract({ address: deployment().settlementToken, abi: erc20Abi, functionName: "balanceOf", args: [account] })
+      .then(Number).catch(() => null);
+    return { ...ledgerPortfolio(account), walletTwd };
+  }
   const d = deployment();
   const me = account.toLowerCase();
 
