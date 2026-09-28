@@ -6,7 +6,14 @@
 #   bash script/bootstrap.sh fund     # 印出各要多少，等到夠為止
 #   bash script/bootstrap.sh deploy   # 驗餘額 → 部署 → 更新 web/.env.local
 #   bash script/bootstrap.sh status   # 五把金鑰現在各有多少、部署了沒、角色對不對
-#   bash script/bootstrap.sh roles    # 只做角色檢查：鏈上 hasRole 對照 web/.env.local 的金鑰
+#   bash script/bootstrap.sh roles    # 只做角色檢查：鏈上授權清單對照 web/.env.local 的金鑰
+#
+# ## 部署的是哪一套
+#
+# 預設部署**設計 v4 的帳本合約**（script/DeployLedger.s.sol）：鏈上只有 Ledger（每小時的承諾鏈、
+# 授權金鑰清單與門檻、結算幣託管、逃生艙、碳權請求權登記）與治理（國家 Safe、營運 Safe、Timelock）。
+# 登錄簿、身分、市場、憑證都是鏈下帳本裡的簽章事件。
+# `LEGACY=1` 部署舊的全合約版本（DeployV4 / Deploy.s.sol），只為了比對，之後會移除。
 #
 # ## 金鑰在**你的機器上產生**，不會經過任何人
 #
@@ -21,6 +28,9 @@
 #   ENV_FILE=web/.env.local   金鑰與設定寫到哪
 #   DEPLOY_GAS / SERVICE_GAS  估算撥款額用的 gas 預算（見「要多少」）
 #   SAFETY=2                  估出來的金額再乘上的倍數
+#   COMMIT_GAS / COMMIT_DAYS  帳本版：一期承諾的 gas 上限（實測最多約 27 萬）× 每小時一期 × 幾天
+#   CAFECA_KEYRING            帳本版：CAFECA 的 KeyringValidator（查核使用者 WebAuthn 簽章用）
+#   LEGACY=1                  部署舊的全合約版本
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -32,14 +42,20 @@ ENV_FILE=${ENV_FILE:-$ROOT/web/.env.local}
 # 攻進網站的人就拿到了凍結任何人、撤換營運方、升級合約的能力。
 # 所以另外一個檔案，網站永遠不會讀它。
 GOV_FILE=${GOV_FILE:-$ROOT/.governance.env}
-DEPLOY_GAS=${DEPLOY_GAS:-60000000}
+LEGACY=${LEGACY:-0}
+ledger_mode () { [ "$LEGACY" != 1 ]; }
+# 帳本版的部署實測約 1,340 萬 gas（Safe 基礎設施＋Timelock＋Ledger＋授權清單）；舊版幾十筆合約要 6,000 萬
+if ledger_mode; then DEPLOY_GAS=${DEPLOY_GAS:-20000000}; else DEPLOY_GAS=${DEPLOY_GAS:-60000000}; fi
 SERVICE_GAS=${SERVICE_GAS:-20000000}
+COMMIT_GAS=${COMMIT_GAS:-270000}
+COMMIT_DAYS=${COMMIT_DAYS:-30}
 SAFETY=${SAFETY:-2}
 # 模擬市場的人物帳戶由**平台代付 gas**：外部鏈上沒有 anvil_setBalance，所以
 # simulate.mjs 的 ensureFunded() 會從 DEPLOYER_PK（沒有就 RELAYER_PK）真的轉一筆
 # 過去。所以撥款額要把這一百筆算進去，否則模擬跑到一半平台金鑰就見底，
 # 而症狀是「交易莫名其妙開始失敗」。
-SIM_ACCOUNTS=${SIM_ACCOUNTS:-100}
+# 帳本版沒有這一筆：人物帳戶不送交易，只簽事件（第 5 期起模擬器改送簽名委託單）。
+if ledger_mode; then SIM_ACCOUNTS=${SIM_ACCOUNTS:-0}; else SIM_ACCOUNTS=${SIM_ACCOUNTS:-100}; fi
 SIM_GAS_TOPUP=${SIM_GAS_TOPUP:-1000000000000000}   # 1e15 wei，與 simulate.mjs 的外部鏈預設一致
 export PATH="$HOME/.foundry/bin:$PATH"
 
@@ -58,7 +74,17 @@ command -v cast >/dev/null 2>&1 || { echo "找不到 cast，請先安裝 Foundry
 # 撥款給它們不會壞掉，但那是白放的錢，而且會讓人以為它們會動鏈。
 KEY_NAMES="DEPLOYER_PK RELAYER_PK DOCUMENT_SIGNER_PK IDENTITY_VERIFIER_PK CARBON_VERIFIER_PK"
 # 與上面同順序的 gas 預算；0 = 這把不送交易，不需要餘額
+#
+# 帳本版不一樣：除了部署者，**只有 relayer 送交易**（每小時一期承諾），其餘三把只簽帳本事件。
 key_gas () {
+  if ledger_mode; then
+    case "$1" in
+      DEPLOYER_PK) echo "$DEPLOY_GAS";;
+      RELAYER_PK) echo $(( COMMIT_GAS * 24 * COMMIT_DAYS ));;
+      *) echo 0;;
+    esac
+    return
+  fi
   case "$1" in
     DEPLOYER_PK) echo "$DEPLOY_GAS";;
     RELAYER_PK|DOCUMENT_SIGNER_PK) echo "$SERVICE_GAS";;
@@ -66,6 +92,16 @@ key_gas () {
   esac
 }
 key_role () {
+  if ledger_mode; then
+    case "$1" in
+      DEPLOYER_PK) echo "部署帳本合約與治理（部署完即放棄全部權限）";;
+      RELAYER_PK) echo "每小時提交承諾（COMMITTER）、簽收單回執（RECEIPT_SIGNER）";;
+      DOCUMENT_SIGNER_PK) echo "簽帳本的憑證文件雜湊事件（不送交易）";;
+      IDENTITY_VERIFIER_PK) echo "簽帳本的身分事件（不送交易）";;
+      CARBON_VERIFIER_PK) echo "簽帳本的核發事件、月度查核（不送交易）";;
+    esac
+    return
+  fi
   case "$1" in
     DEPLOYER_PK) echo "部署整套合約（含 Safe 基礎設施）";;
     RELAYER_PK) echo "代送使用者相關交易、承諾上鏈";;
@@ -117,6 +153,9 @@ usable () {
 }
 
 addr_of () { cast wallet address --private-key "$1" 2>/dev/null; }
+
+# 本機開發鏈（anvil / hardhat 的慣例 chainId）。need_chain 之後才有 CHAIN_ID。
+is_local () { [ "${CHAIN_ID:-}" = "31337" ] || [ "${CHAIN_ID:-}" = "1337" ]; }
 
 # ── keys ───────────────────────────────────────────────────────────
 cmd_keys () {
@@ -260,7 +299,10 @@ cmd_fund () {
   local short=0
   echo ">> 目標鏈 ${RPC_URL}（chainId ${CHAIN_ID}）"
   echo "   撥款額 = gas 預算 × 目前 gasPrice × ${SAFETY} 倍"
-  echo "   DEPLOYER_PK 另加 ${SIM_ACCOUNTS} × $(fmt_eth "$SIM_GAS_TOPUP")：模擬市場的人物帳戶由平台代付 gas"
+  if ledger_mode; then
+    echo "   帳本版：RELAYER_PK 備 ${COMMIT_DAYS} 天 × 24 期承諾 × ${COMMIT_GAS} gas（COMMIT_DAYS / COMMIT_GAS 可調）"
+  fi
+  [ "$SIM_ACCOUNTS" = 0 ] || echo "   DEPLOYER_PK 另加 ${SIM_ACCOUNTS} × $(fmt_eth "$SIM_GAS_TOPUP")：模擬市場的人物帳戶由平台代付 gas"
   echo
   printf '   %-20s %-44s %12s %14s\n' "金鑰" "地址" "需要" "現有"
   for k in $KEY_NAMES; do
@@ -285,7 +327,11 @@ cmd_fund () {
     [ "$(key_gas "$k")" = "0" ] && printf '   %s 不需要餘額：%s\n' "$k" "$(key_role "$k")"
   done
   echo "   治理 Safe 的 owner 也不需要餘額：簽章是鏈下的，execTransaction 的 gas 由 SENDER_PK 付"
-  echo "   一般使用者也不需要：買賣與註銷走 CAFECA 簽章通道的 sendCalls，gas 由 CAFECA 贊助"
+  if ledger_mode; then
+    echo "   一般使用者也不需要：買賣與註銷是簽一筆帳本事件，不送交易（只有入金／提領會動鏈）"
+  else
+    echo "   一般使用者也不需要：買賣與註銷走 CAFECA 簽章通道的 sendCalls，gas 由 CAFECA 贊助"
+  fi
   if [ "$short" = "1" ]; then
     echo
     echo ">> 還沒夠。撥款到上面標 ✗ 的地址，然後再跑一次："
@@ -336,28 +382,47 @@ cmd_deploy () {
   export NATIONAL_THRESHOLD=${NATIONAL_THRESHOLD:-2}
   export OPERATOR_THRESHOLD=${OPERATOR_THRESHOLD:-1}
 
-  # v4 要兩個條件，缺一個就得改用核心那一支。**兩個都要查**——
-  # 只查 EIP-1153 的話，會在跑了好幾分鐘、部署到一半的時候才撞上第二個。
-  local script=script/DeployV4.s.sol why=""
-  local probe
-  probe=$(rpc_result '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"data":"0x600160005D60005C60005260206000F3"},"latest"]}') || true
-  case "$probe" in *1) ;; *) why="沒有 EIP-1153（TSTORE）";; esac
+  local script
+  if ledger_mode; then
+    script=script/DeployLedger.s.sol
+    # 帳本授權清單（簽章模型方案 B）：
+    #   · 高頻角色各一把：身分、查驗、文件、收單回執（= relayer，它同時提交承諾）
+    #   · 主權、營運登記的是 Safe 持有人的 EOA，門檻與 Safe 相同；查核角色預設就是查驗金鑰、1-of-1
+    # 網站**不持有**主權／營運持有人的金鑰：需要這兩個角色的事件（例如費率）在後台建立提案，
+    # 由持有人用 npm run ledger:authority 簽署後送出。
+    export RECEIPT_SIGNER=${RECEIPT_SIGNER:-$relayer_addr}
+    export AUDITORS=${AUDITORS:-$CARBON_VERIFIER}
+    # CAFECA 的 KeyringValidator：查核工具據此讀使用者 passkey 的 KeyAdded／KeyRemoved。
+    # 順序：shell → web/.env.local → Boltchain 上已知的那一份。
+    if [ -z "${CAFECA_KEYRING:-}" ]; then CAFECA_KEYRING=$(env_get CAFECA_KEYRING); fi
+    if [ -z "${CAFECA_KEYRING:-}" ] && [ "$CHAIN_ID" = "8018" ]; then CAFECA_KEYRING=0x367a9E8a6E8bA108F4cC4B863d03dD618aD7893b; fi
+    if [ -n "${CAFECA_KEYRING:-}" ]; then export CAFECA_KEYRING; fi
+    # Boltchain 上的結算幣是 CAFECA 的 TWDC。沒指定就用它——在外部鏈上發 MockTWD 沒有意義。
+    if [ -z "${SETTLEMENT_TOKEN:-}" ] && [ "$CHAIN_ID" = "8018" ]; then export SETTLEMENT_TOKEN=0xb07f90B82eEb0269fAcafC5A6a6CC01BE4747bA3; fi
+  else
+    # v4 要兩個條件，缺一個就得改用核心那一支。**兩個都要查**——
+    # 只查 EIP-1153 的話，會在跑了好幾分鐘、部署到一半的時候才撞上第二個。
+    script=script/DeployV4.s.sol; local why=""
+    local probe
+    probe=$(rpc_result '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"data":"0x600160005D60005C60005260206000F3"},"latest"]}') || true
+    case "$probe" in *1) ;; *) why="沒有 EIP-1153（TSTORE）";; esac
 
-  # 第二個條件：CREATE2 deployer。v4 的 hook 位址要把權限旗標挖進低 14 bits，
-  # 只能用 CREATE2 部署，而 forge script 的 CREATE2 是透過鏈上那個標準代理做的。
-  # 多數鏈預先部署了它，新鏈通常沒有。
-  if [ -z "$why" ]; then
-    local c2 code
-    c2=${CREATE2_DEPLOYER:-0x4e59b44847b379578588920cA78FbF26c0B4956C}
-    code=$(rpc_result "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_getCode\",\"params\":[\"$c2\",\"latest\"]}") || true
-    [ "${code:-0x}" = "0x" ] && why="沒有 CREATE2 deployer（${c2}）"
-  fi
+    # 第二個條件：CREATE2 deployer。v4 的 hook 位址要把權限旗標挖進低 14 bits，
+    # 只能用 CREATE2 部署，而 forge script 的 CREATE2 是透過鏈上那個標準代理做的。
+    # 多數鏈預先部署了它，新鏈通常沒有。
+    if [ -z "$why" ]; then
+      local c2 code
+      c2=${CREATE2_DEPLOYER:-0x4e59b44847b379578588920cA78FbF26c0B4956C}
+      code=$(rpc_result "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_getCode\",\"params\":[\"$c2\",\"latest\"]}") || true
+      [ "${code:-0x}" = "0x" ] && why="沒有 CREATE2 deployer（${c2}）"
+    fi
 
-  if [ -n "$why" ]; then
-    script=script/Deploy.s.sol
-    echo ">> 這條鏈${why}，改用 ${script}"
-    echo "   少掉的只有 v4 展示模組。主市場是 Listing，功能不受影響，"
-    echo "   而 v4 的 PoolManager 是 BUSL-1.1、本來就只能非生產展示。"
+    if [ -n "$why" ]; then
+      script=script/Deploy.s.sol
+      echo ">> 這條鏈${why}，改用 ${script}"
+      echo "   少掉的只有 v4 展示模組。主市場是 Listing，功能不受影響，"
+      echo "   而 v4 的 PoolManager 是 BUSL-1.1、本來就只能非生產展示。"
+    fi
   fi
 
   # 部署是一串幾十筆交易。中途按 Ctrl-C 或連線斷掉，鏈上會留下做到一半的狀態，
@@ -367,12 +432,23 @@ cmd_deploy () {
   echo ">> 部署 ${script} → chainId ${CHAIN_ID}"
   echo "   這會送出幾十筆交易。外部鏈上加了 --slow（一筆確認再送下一筆），"
   echo "   所以要等 筆數 × 出塊時間，可能十幾分鐘。**中途不要中斷。**"
-  echo "   COMMITTER = ${COMMITTER}（relayer，這樣 bank:commit 才送得出去）"
-  echo "   IDENTITY_VERIFIER = ${IDENTITY_VERIFIER}（身分 attestation）"
-  echo "   CARBON_VERIFIER   = ${CARBON_VERIFIER}（核發 attestation、對帳查核）"
-  echo "   DOCUMENT_SIGNER   = ${DOCUMENT_SIGNER}（憑證文件雜湊、對帳報告、費率）"
-  echo "   NATIONAL_OWNERS = ${NATIONAL_OWNERS}（${NATIONAL_THRESHOLD}-of-3）"
-  echo "   OPERATOR_OWNERS = ${OPERATOR_OWNERS}（${OPERATOR_THRESHOLD}-of-2）"
+  if ledger_mode; then
+    echo "   COMMITTER / RECEIPT_SIGNER = ${COMMITTER} / ${RECEIPT_SIGNER}（relayer：每小時承諾、收單回執）"
+    echo "   IDENTITY_VERIFIER = ${IDENTITY_VERIFIER}（帳本身分事件）"
+    echo "   CARBON_VERIFIER   = ${CARBON_VERIFIER}（帳本核發事件）"
+    echo "   DOCUMENT_SIGNER   = ${DOCUMENT_SIGNER}（憑證文件雜湊事件）"
+    echo "   AUDITORS          = ${AUDITORS}（月度查核，門檻 ${AUDITOR_THRESHOLD:-1}）"
+    echo "   主權角色 = 國家 Safe 持有人 ${NATIONAL_OWNERS}（帳本門檻 ${SOVEREIGN_THRESHOLD:-$NATIONAL_THRESHOLD}）"
+    echo "   營運角色 = 營運 Safe 持有人 ${OPERATOR_OWNERS}（帳本門檻 ${OPERATOR_AUTH_THRESHOLD:-$OPERATOR_THRESHOLD}）"
+    echo "   CAFECA_KEYRING    = ${CAFECA_KEYRING:-（沒有：無法查核 CAFECA passkey 簽章，只收 EOA 簽章）}"
+  else
+    echo "   COMMITTER = ${COMMITTER}（relayer，這樣 bank:commit 才送得出去）"
+    echo "   IDENTITY_VERIFIER = ${IDENTITY_VERIFIER}（身分 attestation）"
+    echo "   CARBON_VERIFIER   = ${CARBON_VERIFIER}（核發 attestation、對帳查核）"
+    echo "   DOCUMENT_SIGNER   = ${DOCUMENT_SIGNER}（憑證文件雜湊、對帳報告、費率）"
+    echo "   NATIONAL_OWNERS = ${NATIONAL_OWNERS}（${NATIONAL_THRESHOLD}-of-3）"
+    echo "   OPERATOR_OWNERS = ${OPERATOR_OWNERS}（${OPERATOR_THRESHOLD}-of-2）"
+  fi
   [ -n "${SETTLEMENT_TOKEN:-}" ] \
     && echo "   SETTLEMENT_TOKEN = ${SETTLEMENT_TOKEN}（不會自己發 MockTWD）" \
     || echo "   ⚠️ 沒有 SETTLEMENT_TOKEN，會部署 MockTWD。外部鏈上通常該指定既有的結算幣。"
@@ -398,7 +474,8 @@ cmd_deploy () {
   echo ">> 更新 $(basename "$ENV_FILE")"
   env_set RPC_URL "$RPC_URL"
   env_set CHAIN_ID "$CHAIN_ID"
-  [ -n "${SETTLEMENT_TOKEN:-}" ] && env_set SETTLEMENT_TOKEN "$SETTLEMENT_TOKEN"
+  if [ -n "${SETTLEMENT_TOKEN:-}" ]; then env_set SETTLEMENT_TOKEN "$SETTLEMENT_TOKEN"; fi
+  if ledger_mode && [ -n "${CAFECA_KEYRING:-}" ]; then env_set CAFECA_KEYRING "$CAFECA_KEYRING"; fi
   echo "   RPC_URL / CHAIN_ID 已寫入"
 
   # 換了一次部署，web/data/ 裡的紀錄屬於舊合約（網站會回 503「紀錄屬於另一次部署」）。
@@ -423,11 +500,20 @@ PY
   echo
   check_roles "$dep" || echo "!! 角色不對：網站的簽章會被合約拒絕。見上面標 ✗ 的那幾行。"
   echo
-  echo ">> 還要做的兩件事："
-  echo "   1. web/.env.local 的 SITE_ORIGIN 要與瀏覽器網址列逐字相同（含 scheme 與 port）"
-  echo "   2. 登入一次，把 /account 上的地址填進 ADMIN_ADDRESSES，然後重啟"
-  echo "   3. ./script/govern.sh status —— 每一格都該是 true，admin 指向 Timelock、sov 指向國家 Safe"
-  echo "      之後要動治理時：govern.sh 的簽章金鑰在 ${GOV_FILE}，送出 execTransaction 需要 SENDER_PK（任何有餘額的帳戶）"
+  if ledger_mode; then
+    echo ">> 還要做的事："
+    echo "   1. web/.env.local 的 SITE_ORIGIN 要與瀏覽器網址列逐字相同（含 scheme 與 port）"
+    echo "   2. 登入一次，把 /account 上的地址填進 ADMIN_ADDRESSES，然後重啟"
+    echo "   3. 每小時提交一期承諾：bash script/demo-box.sh commit-loop（或排程每小時跑 cd web && npm run ledger:commit）"
+    echo "   4. 營運／主權角色的事件（費率等）在後台建立提案，持有人用 npm run ledger:authority -- sign <id> --key-env <變數> 簽署"
+    echo "      持有人金鑰在 ${GOV_FILE}，**不要**搬進 web/.env.local"
+  else
+    echo ">> 還要做的兩件事："
+    echo "   1. web/.env.local 的 SITE_ORIGIN 要與瀏覽器網址列逐字相同（含 scheme 與 port）"
+    echo "   2. 登入一次，把 /account 上的地址填進 ADMIN_ADDRESSES，然後重啟"
+    echo "   3. ./script/govern.sh status —— 每一格都該是 true，admin 指向 Timelock、sov 指向國家 Safe"
+    echo "      之後要動治理時：govern.sh 的簽章金鑰在 ${GOV_FILE}，送出 execTransaction 需要 SENDER_PK（任何有餘額的帳戶）"
+  fi
 }
 
 # ── 角色檢查 ───────────────────────────────────────────────────────
@@ -438,6 +524,8 @@ check_roles () {
   local dep=$1 ok=0
   command -v python3 >/dev/null 2>&1 || { echo "   （沒有 python3，略過角色檢查）"; return 0; }
   addr_in () { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$dep" "$1"; }
+  local lv; lv=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('ledgerVersion',0))" "$dep")
+  if [ "$lv" = "2" ]; then check_ledger_roles "$(addr_in ledger)"; return; fi
   role_of () { cast call --rpc-url "$RPC_URL" "$1" "$2()(bytes32)" 2>/dev/null; }
   has () { cast call --rpc-url "$RPC_URL" "$1" "hasRole(bytes32,address)(bool)" "$2" "$3" 2>/dev/null; }
   one () { # 標籤 合約鍵 角色函式 金鑰變數
@@ -455,6 +543,39 @@ check_roles () {
   one "憑證文件雜湊"            retirementCertificate DOCUMENT_ROLE          DOCUMENT_SIGNER_PK
   one "費率設定"                feeSchedule           PRICING_ROLE           DOCUMENT_SIGNER_PK
   one "承諾上鏈（bank:commit）" bank                  COMMITTER_ROLE         RELAYER_PK
+  return $ok
+}
+
+# 帳本版：授權清單是 Ledger.isAuthority(keccak256(角色名), 地址)，門檻是 thresholdOf。
+# 網站自己能簽的只有高頻角色；主權／營運只核對「持有人都在清單上、門檻與 Safe 相同」。
+check_ledger_roles () {
+  local L=$1 ok=0
+  auth_has () { cast call --rpc-url "$RPC_URL" "$L" "isAuthority(bytes32,address)(bool)" "$(cast keccak "$1")" "$2" 2>/dev/null; }
+  thr () { local t; t=$(cast call --rpc-url "$RPC_URL" "$L" "thresholdOf(bytes32)(uint8)" "$(cast keccak "$1")" 2>/dev/null); [ "${t:-0}" = 0 ] && echo 1 || echo "$t"; }
+  one () { # 標籤 角色 地址
+    if [ "$(auth_has "$2" "$3")" = "true" ]; then printf '   ✓ %-30s %-10s %s\n' "$1" "$(thr "$2")-of-n" "$3"
+    else printf '   ✗ %-30s %s 不在 %s 清單上\n' "$1" "$3" "$2"; ok=1; fi
+  }
+  echo ">> 帳本授權清單（Ledger.isAuthority 對照 web/.env.local 的金鑰）"
+  one "身分事件"           IDENTITY_VERIFIER "$(addr_of "$(env_get IDENTITY_VERIFIER_PK)")"
+  one "核發事件"           CARBON_VERIFIER   "$(addr_of "$(env_get CARBON_VERIFIER_PK)")"
+  one "憑證文件雜湊"       DOCUMENT_SIGNER   "$(addr_of "$(env_get DOCUMENT_SIGNER_PK)")"
+  one "收單回執"           RECEIPT_SIGNER    "$(addr_of "$(env_get RELAYER_PK)")"
+  local relayer; relayer=$(addr_of "$(env_get RELAYER_PK)")
+  local crole; crole=$(cast call --rpc-url "$RPC_URL" "$L" "COMMITTER_ROLE()(bytes32)" 2>/dev/null)
+  if [ "$(cast call --rpc-url "$RPC_URL" "$L" "hasRole(bytes32,address)(bool)" "$crole" "$relayer" 2>/dev/null)" = "true" ]; then
+    printf '   ✓ %-30s %-10s %s\n' "承諾上鏈（ledger:commit）" "" "$relayer"
+  else printf '   ✗ %-30s %s 沒有 COMMITTER_ROLE\n' "承諾上鏈（ledger:commit）" "$relayer"; ok=1; fi
+  # 多簽角色：列出門檻，並核對治理持有人都在清單上
+  local r who
+  for r in SOVEREIGN OPERATOR AUDITOR; do printf '   · %-30s 門檻 %s\n' "${r} 角色" "$(thr "$r")"; done
+  # gov_owner_lists 在沒有治理金鑰時會 exit；先在子 shell 試一次，免得檢查把整支腳本帶走
+  if ( gov_owner_lists >/dev/null 2>&1 ); then
+    gov_owner_lists
+    for who in ${NATIONAL_OWNERS//,/ }; do [ "$(auth_has SOVEREIGN "$who")" = "true" ] || { printf '   ✗ 國家 Safe 持有人 %s 不在 SOVEREIGN 清單上\n' "$who"; ok=1; }; done
+    for who in ${OPERATOR_OWNERS//,/ }; do [ "$(auth_has OPERATOR "$who")" = "true" ] || { printf '   ✗ 營運 Safe 持有人 %s 不在 OPERATOR 清單上\n' "$who"; ok=1; }; done
+    [ "$ok" = 0 ] && echo "   ✓ 國家／營運 Safe 的持有人都在 SOVEREIGN／OPERATOR 清單上（網站不持有這些金鑰，事件走提案）"
+  fi
   return $ok
 }
 

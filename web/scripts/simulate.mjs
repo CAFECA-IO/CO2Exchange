@@ -199,6 +199,12 @@ if (!fs.existsSync(depFile)) {
   process.exit(1);
 }
 const D = JSON.parse(fs.readFileSync(depFile, "utf8"));
+// 帳本 v2（設計 v4）的部署沒有市場合約：委託單是簽章事件。第 5 期改寫成送簽名委託單之前，這支不能用。
+if (D.ledgerVersion === 2) {
+  console.error("這是帳本 v2 的部署（script/DeployLedger.s.sol），市場在鏈下帳本裡。%s 還是舊的送交易版本，第 5 期才會改成送簽名委託單。", "simulate.mjs");
+  console.error("本機要展示資料請用：cd web && npm run ledger:seed");
+  process.exit(1);
+}
 
 // ───────────────────────── 金鑰 ─────────────────────────
 //

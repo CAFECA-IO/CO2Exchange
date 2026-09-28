@@ -15,6 +15,16 @@
 #   bash script/demo-box.sh seed      # 鋪市場資料（本機＝回填；外部＝縮時，從現在開始）
 #   bash script/demo-box.sh live      # 持續跑（前景，Ctrl-C 結束）
 #   bash script/demo-box.sh status    # 現在是什麼狀態
+#   bash script/demo-box.sh commit    # 帳本版：提交一期承諾（先完整查核，不過就不送）
+#   bash script/demo-box.sh commit-loop  # 帳本版：每 COMMIT_EVERY 秒提交一期（前景，Ctrl-C 結束）
+#
+# ## 帳本版（預設）與舊版
+#
+# 預設是設計 v4 的帳本：鏈上只有 Ledger 合約，資料是鏈下的簽章事件，每小時一期承諾上鏈。
+#   rebuild：新鏈（時間＝現在）→ DeployLedger → ledger:seed 回填 LEDGER_DAYS 天的事件 → 提交第一期
+#   seed：   只在本機鏈（入金靠 MockTWD 鑄幣）；外部鏈的展示資料等第 5 期的簽名委託單
+#   live：   等於 commit-loop（模擬器與做市商第 5 期才改成送簽名委託單）
+# `LEGACY=1` 走舊的全合約流程（DemoFlowV4 + simulate.mjs）。
 #
 # 環境變數：
 #   RPC_URL=http://127.0.0.1:28545   目標鏈。與 web/.env.local 同名同義
@@ -24,6 +34,8 @@
 #   金鑰：外部鏈一律讀 web/.env.local（bootstrap.sh keys 產生）。shell 裡的同名變數會蓋過它
 #   WEB=http://localhost:10010
 #   STATE=          給 anvil --state 的檔案（只有本機鏈用得到）
+#   LEDGER_DAYS=60 LEDGER_USERS=40   帳本版 rebuild 回填的規模
+#   COMMIT_EVERY=3600                 帳本版承諾的間隔（秒）
 set -euo pipefail
 
 # 變數展開後面接中文字時一定要用 ${VAR} 大括號。macOS 內建的 bash 3.2 會把後面的
@@ -48,6 +60,11 @@ RPC_URL=${RPC_URL:-http://127.0.0.1:28545}
 WEB=${WEB:-http://localhost:10010}
 LOG=${LOG:-$ROOT/.demo-box}
 mkdir -p "$LOG"
+LEGACY=${LEGACY:-0}
+ledger_mode () { [ "$LEGACY" != 1 ]; }
+LEDGER_DAYS=${LEDGER_DAYS:-60}
+LEDGER_USERS=${LEDGER_USERS:-40}
+COMMIT_EVERY=${COMMIT_EVERY:-3600}
 
 export PATH="$HOME/.foundry/bin:$PATH"
 
@@ -144,8 +161,10 @@ start_anvil () {
   if [ -n "${STATE:-}" ]; then rm -f "$STATE"; fi
 
   # 回填只能把鏈的時間往前推，不能倒退，所以鏈要從 DAYS 天前開始。
+  # 帳本版不需要：回填的是事件的邏輯時間，鏈的時間就是現在（收單區塊確實是現在才收的）。
   local TS; TS=$(( $(date +%s) - DAYS * 86400 ))
-  echo ">> 開 anvil（起始時間 $(days_ago "$DAYS")，--prune-history，:${ANVIL_PORT}）"
+  if ledger_mode; then TS=$(date +%s); fi
+  echo ">> 開 anvil（起始時間 $(date -u -d "@$TS" +%F 2>/dev/null || date -u -r "$TS" +%F)，--prune-history，:${ANVIL_PORT}）"
   # setsid 讓 anvil 脫離這個 shell 的 process group。只用 nohup 不夠：
   # 終端機關掉、或排程工具收掉整個 process group 的時候，anvil 會跟著被帶走。
   # shellcheck disable=SC2086
@@ -162,6 +181,20 @@ start_anvil () {
 }
 
 do_deploy () {
+  if ledger_mode && is_local; then
+    # 本機展示：國家 Safe 2-of-3、營運 Safe 1-of-2 的持有人是 anvil 帳戶 5–9（DeployLedger 的預設）。
+    # 另外把部署者（anvil 0）登記成主權與營運的簽章者之一：營運門檻 1，後台的費率設定就能直接簽；
+    # 主權門檻仍是 2，ledger-seed 會用本機助記詞裡的持有人湊滿門檻。
+    local A0=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+    echo ">> 部署帳本合約（DeployLedger）"
+    SOVEREIGN_SIGNER=${SOVEREIGN_SIGNER:-$A0} OPERATOR_SIGNER=${OPERATOR_SIGNER:-$A0} \
+      forge script script/DeployLedger.s.sol --rpc-url "$RPC_URL" --broadcast > "$LOG/deploy.log" 2>&1 \
+      || { echo "!! 部署失敗，看 $LOG/deploy.log"; exit 1; }
+    grep -q "ONCHAIN EXECUTION COMPLETE" "$LOG/deploy.log" || { echo "!! 部署沒有完成，看 $LOG/deploy.log"; exit 1; }
+    echo ">> 清掉上一次部署的 web/data/（搬到 data.bak-<時間>）"
+    ( cd web && node scripts/data-reset.mjs ) | sed 's/^/   /'
+    return
+  fi
   if is_local; then
     echo ">> 部署（DemoFlowV4，含一張最小的示範桌子）"
     forge script script/DemoFlowV4.s.sol --rpc-url "$RPC_URL" --broadcast --sig "demo()" \
@@ -189,7 +222,41 @@ do_deploy () {
   ( cd web && node scripts/data-reset.mjs ) | sed 's/^/   /'
 }
 
+do_commit () {
+  ( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/ledger-commit.mjs )
+}
+
+# 每 COMMIT_EVERY 秒一期。某一期失敗（查核不過、RPC 斷線）不中止迴圈：下一輪會重算，
+# 而沒有送出的那一期不會留下任何半套狀態——承諾是一筆交易，送成或沒送。
+# 但**連續失敗要出聲**：超過逃生艙期限沒有新承諾，使用者就能直接從合約提領。
+commit_loop () {
+  local fails=0
+  echo ">> 每 ${COMMIT_EVERY} 秒提交一期承諾（log：$LOG/commit.log）。Ctrl-C 結束。"
+  while true; do
+    if do_commit >> "$LOG/commit.log" 2>&1; then
+      fails=0; echo "   $(date -u +'%F %T') ✓ $(tail -1 "$LOG/commit.log")"
+    else
+      fails=$((fails + 1)); echo "   $(date -u +'%F %T') ✗ 第 ${fails} 次失敗：$(grep '✗' "$LOG/commit.log" | tail -1)"
+      [ "$fails" -ge 3 ] && echo "   ⚠️ 連續 ${fails} 期沒有提交。太久沒有承諾，合約的逃生艙會開啟（見 status）。"
+    fi
+    sleep "$COMMIT_EVERY"
+  done
+}
+
 do_seed () {
+  if ledger_mode; then
+    if ! is_local; then
+      echo "!! 帳本版的展示資料目前只能在本機鏈鋪（入金靠 MockTWD 鑄幣）。" >&2
+      echo "   外部鏈上的市場資料要等第 5 期：做市商與模擬器改送簽名委託單。" >&2
+      exit 1
+    fi
+    echo ">> 帳本回填：${LEDGER_USERS} 人、${LEDGER_DAYS} 天的事件（事件時間回溯，收單區塊是現在）"
+    ( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/ledger-seed.mjs \
+        --days "$LEDGER_DAYS" --users "$LEDGER_USERS" ) | tail -5
+    echo ">> 提交第一期承諾"
+    do_commit | tail -4
+    return
+  fi
   if is_local; then
     echo ">> 回填 $(days_ago $(( DAYS - 1 ))) → 現在（每輪 ${TICK}）"
     ( cd web && RPC_URL="$RPC_URL" node scripts/simulate.mjs \
@@ -240,9 +307,25 @@ seed)
   do_seed
   ;;
 
+commit)
+  banner
+  rpc_up || { echo "!! $RPC_URL 沒有回應"; exit 1; }
+  do_commit
+  ;;
+
+commit-loop)
+  banner
+  rpc_up || { echo "!! $RPC_URL 沒有回應"; exit 1; }
+  commit_loop
+  ;;
+
 live)
   banner
   rpc_up || { echo "!! $RPC_URL 沒有回應"; exit 1; }
+  if ledger_mode; then
+    echo ">> 帳本版的持續模式：每小時提交承諾。模擬器與做市商第 5 期才改成送簽名委託單。"
+    commit_loop
+  fi
   echo ">> 持續模式。提醒：年度需求額度大約一小時會用完，之後只剩做市商還在買。"
   echo "   本機展示機請改用排程每天 rebuild，見 README「五、日常怎麼營運 › 持續運作」。"
   cd web && RPC_URL="$RPC_URL" exec node scripts/simulate.mjs "${@:2}"
@@ -271,9 +354,25 @@ status)
   # 健康檢查要問的是「這個行程活著嗎」，不是「資料是不是新的」。
   curl -fs --max-time 5 "${WEB}/api/config" >/dev/null 2>&1 \
     && echo "前端       在跑（${WEB}）" || echo "前端       沒在跑"
+  # 帳本版：最新一期、距今多久、逃生艙還有多久
+  DEP="deployments/$((${ID:-0})).json"
+  if [ -n "$ID" ] && [ -f "$DEP" ] && command -v python3 >/dev/null 2>&1 \
+     && [ "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('ledgerVersion',0))" "$DEP")" = 2 ]; then
+    L=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['ledger'])" "$DEP")
+    SOLV=$(cast call --rpc-url "$RPC_URL" "$L" "solvency()(uint256,uint256,uint64,uint64)" 2>/dev/null | tr '\n' ' ' | sed 's/\[[^]]*\]//g')
+    if [ -n "$SOLV" ]; then
+      set -- $SOLV
+      AGE=$(( $(date +%s) - ${4:-0} ))
+      [ "${3:-0}" = 0 ] && echo "帳本承諾   還沒有提交過任何一期" \
+        || echo "帳本承諾   第 ${3} 期，$(( AGE / 60 )) 分鐘前（帳本欠 ${1}、合約持有 ${2}）"
+      ESC=$(cast call --rpc-url "$RPC_URL" "$L" "escapeActive()(bool)" 2>/dev/null)
+      [ "$ESC" = "true" ] && echo "逃生艙     ⚠️ 已開啟：太久沒有新承諾，使用者可以直接從合約提領"
+    fi
+  fi
   pgrep -f "simulate.mjs" >/dev/null && echo "模擬器     在跑" || echo "模擬器     沒在跑"
+  pgrep -f "ledger-commit.mjs" >/dev/null && echo "承諾提交   正在送一期" || true
   ;;
 
 *)
-  sed -n '2,26p' "$0"; exit 1;;
+  sed -n '2,40p' "$0"; exit 1;;
 esac

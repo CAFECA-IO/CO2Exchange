@@ -5,6 +5,10 @@
 //   node --experimental-strip-types scripts/ledger-commit.mjs --plan     # 只算、不送
 //   node --experimental-strip-types scripts/ledger-commit.mjs --verify   # 查核者：重播全部，逐期比對鏈上的 anchor
 //
+// 沒有新事件就不提交——但距離上一期超過 HEARTBEAT_AFTER 秒（預設 24 小時）時，照樣提交一期**空的**：
+// 合約在 72 小時沒有新承諾之後開啟逃生艙（使用者可直接從合約提領），安靜的日子不該觸發它。
+// 空的一期 lastSeq 與上一期相同、logRoot 是空樹，其餘 root 不變；它證明的是「這段時間帳本沒有動」。
+//
 // 送出之前一定先做完整驗證，任何一項不過就不送：
 //   ① 已經上鏈的每一期，重播算出的 anchor 都等於鏈上那一個（否則帳本被動過）
 //   ② 每一筆簽章都重驗過，而且**不讀任何歷史狀態**（不需要 archive 節點）：
@@ -56,9 +60,18 @@ const [authorities, committed, cashOnChain, headBlock] = await Promise.all([
 ]);
 console.log(`帳本 ${events.length} 筆；鏈上已提交 ${committed.length} 期；授權 ${authorities.grants.length} 筆`);
 
-const next = !VERIFY && events.length > Number(committed.at(-1)?.lastSeq ?? 0n)
+const HEARTBEAT_AFTER = BigInt(process.env.HEARTBEAT_AFTER ?? 86400);
+const hasNew = events.length > Number(committed.at(-1)?.lastSeq ?? 0n);
+let heartbeat = false;
+if (!VERIFY && !hasNew && committed.length) {
+  const [, , , committedAt] = await pub.readContract({ address: D.ledger, abi: LEDGER_ABI, functionName: "solvency" });
+  const { timestamp } = await pub.getBlock({ blockNumber: headBlock });
+  heartbeat = timestamp - committedAt >= HEARTBEAT_AFTER;
+}
+const next = !VERIFY && (hasNew || heartbeat)
   ? [{ epoch: BigInt(committed.length + 1), lastSeq: BigInt(events.length), upToBlock: headBlock }]
   : [];
+if (heartbeat) console.log(`  距離上一期超過 ${HEARTBEAT_AFTER} 秒，提交一期空的（避免逃生艙誤開）`);
 // 金鑰簿：CAFECA 帳戶的公鑰與有效區間全部來自事件（帳本的 userKey 鏡像＋鏈上 KeyAdded／KeyRemoved／模組事件），
 // 不讀合約的歷史狀態——不需要 archive 節點。
 const KEYRING = D.cafecaKeyring ?? setting("CAFECA_KEYRING") ?? null;
@@ -102,7 +115,7 @@ const input = {
 };
 const onchain = await pub.readContract({ address: D.ledger, abi: LEDGER_ABI, functionName: "anchorOf", args: [input] });
 if (onchain !== e.anchor) fail(`合約算的 anchor ${onchain} 與重播 ${e.anchor} 不同（公式不一致）`);
-console.log(`\n第 ${e.epoch} 期：事件 ${e.firstSeq}–${e.lastSeq}、到區塊 ${e.upToBlock}\n  anchor ${e.anchor}\n  碳權 ${e.roots.totalKg} kg、結算幣 ${e.roots.totalCash}（合約持有 ${held}）`);
+console.log(`\n第 ${e.epoch} 期：${e.lastSeq >= e.firstSeq ? `事件 ${e.firstSeq}–${e.lastSeq}` : "空的一期（沒有新事件）"}、到區塊 ${e.upToBlock}\n  anchor ${e.anchor}\n  碳權 ${e.roots.totalKg} kg、結算幣 ${e.roots.totalCash}（合約持有 ${held}）`);
 if (PLAN) { console.log("\n（--plan，沒有送出）"); process.exit(0); }
 
 let pk;

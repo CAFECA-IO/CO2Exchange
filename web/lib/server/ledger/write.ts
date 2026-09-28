@@ -125,8 +125,18 @@ export async function appendAuthority<K extends Kind>(kind: K, body: AuthBody<K>
   return outcome(event, receipt);
 }
 
-/// k-of-n 角色的事件：門檻 1 就直接簽（和 appendAuthority 相同）；門檻大於 1 就建立提案，
-/// 由持有人各自簽署後再寫進帳本（`npm run ledger:authority`）。
+/// 本站有沒有這個角色的金鑰，而且那把金鑰在收單區塊有授權。
+function siteCanSign(auth: Authorities, role: Role, atBlock: bigint): boolean {
+  let signer: PrivateKeyAccount;
+  try { signer = signerFor(role); } catch { return false; }
+  return isAuthorized(auth, role, signer.address, atBlock);
+}
+
+/// k-of-n 角色的事件：門檻 1 而且本站的金鑰在授權清單上，就直接簽（和 appendAuthority 相同）；
+/// 否則建立提案，由持有人各自簽署後再寫進帳本（`npm run ledger:authority`）。
+///
+/// 「門檻 1 但本站沒有授權」是正式部署的常態：營運 Safe 1-of-2，登記的是兩位持有人的 EOA，
+/// 網站的服務金鑰不在清單上（bootstrap.sh 不登記 OPERATOR_SIGNER）。那也走提案，一個人簽就能送。
 export async function appendAuthorityOrPropose<K extends Kind>(
   kind: K, body: AuthBody<K>, meta: { createdBy: string; note?: string },
 ): Promise<{ appended: Appended } | { proposal: Proposal; required: number }> {
@@ -136,7 +146,7 @@ export async function appendAuthorityOrPropose<K extends Kind>(
   if (!role) throw new ApiError("INVALID_PARAM", `${kind} 不是授權事件`);
   const auth = await authorities();
   const required = thresholdAt(auth, role, atBlock);
-  if (required <= 1) return { appended: await appendAuthority(kind, body) };
+  if (required <= 1 && siteCanSign(auth, role, atBlock)) return { appended: await appendAuthority(kind, body) };
   const proposal = createProposal(LEDGER_DIR, domains(), { kind, body: body as Record<string, unknown>, createdBy: meta.createdBy, note: meta.note });
   return { proposal, required };
 }

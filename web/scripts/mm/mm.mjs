@@ -67,6 +67,11 @@ const pub = createPublicClient({ chain, transport: http(RPC), pollingInterval: L
 const depFile = process.env.DEPLOYMENT_FILE ?? path.resolve(process.cwd(), "..", "deployments", `${chainId}.json`);
 if (!fs.existsSync(depFile)) { console.error(`找不到部署檔 ${depFile}`); process.exit(1); }
 const D = JSON.parse(fs.readFileSync(depFile, "utf8"));
+// 帳本 v2（設計 v4）的部署沒有市場合約：委託單是簽章事件。第 5 期改寫成送簽名委託單之前，這支不能用。
+if (D.ledgerVersion === 2) {
+  console.error("這是帳本 v2 的部署（script/DeployLedger.s.sol），市場在鏈下帳本裡。mm.mjs 還是舊的送交易版本，第 5 期才會改成送簽名委託單。");
+  process.exit(1);
+}
 const DEPLOYMENT_KEY = `${chainId}:${D.listing}:${D.deployedAt ?? ""}`.toLowerCase();
 
 /// 模擬交易只准在這些鏈上開。正式鏈不在清單裡，後台按了也不會啟動——
