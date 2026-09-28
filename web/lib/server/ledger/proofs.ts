@@ -6,6 +6,7 @@ import { epochIndexOf, publicEpoch } from "@/lib/ledger/publish";
 import { ApiError } from "../api";
 import { deployment, publicClient } from "../chain";
 import { ledgerView } from "./view";
+import { chainIndex } from "../fingerprint";
 
 /// 證據的伺服器端（設計 v4 第 6 期）：使用者的證明檔、出金確認要帶的證據（見 fiat.ts）。
 ///
@@ -21,7 +22,7 @@ export async function commitments(): Promise<OnchainCommitment[]> {
   const key = `${d.ledger}|${d.deployedAt ?? ""}`;
   const epoch = await publicClient.readContract({ address: d.ledger!, abi: PROOF_ABI, functionName: "epoch" });
   if (commitCache && commitCache.key === key && commitCache.epoch === epoch) return commitCache.value;
-  const value = await readCommitments(publicClient, d.ledger!, { fromBlock: BigInt(d.deployedAtBlock ?? 0) });
+  const value = await readCommitments(publicClient, d.ledger!, { fromBlock: BigInt(d.deployedAtBlock ?? 0), index: chainIndex() });
   commitCache = { key, epoch, value };
   return value;
 }

@@ -6,8 +6,12 @@
 //   node --experimental-strip-types scripts/ledger-commit.mjs --verify   # 查核者：重播全部，逐期比對鏈上的 anchor
 //
 // 沒有新事件就不提交——但距離上一期超過 HEARTBEAT_AFTER 秒（預設 24 小時）時，照樣提交一期**空的**：
-// 合約在 72 小時沒有新承諾之後開啟逃生艙（使用者可直接從合約提領），安靜的日子不該觸發它。
+// 讓揭露頁與證明檔的「最新一期」不會停在很久以前。
 // 空的一期 lastSeq 與上一期相同、logRoot 是空樹，其餘 root 不變；它證明的是「這段時間帳本沒有動」。
+//
+// 效能（提交與 --plan）：鏈上事件經過 web/data/chain-index 的增量索引，只讀新的區塊；已上鏈的各期用快速重播
+// （逐期比對 logRoot、只重建最後一期已上鏈與這一期的樹、只重驗最後兩期的簽章，見 lib/ledger/replay.ts）。
+// **--verify 不用任何快取**：直接讀鏈、每一期完整重算、每一筆簽章都重驗。
 //
 // 送出之前一定先做完整驗證，任何一項不過就不送：
 //   ① 已經上鏈的每一期，重播算出的 anchor 都等於鏈上那一個（否則帳本被動過）
@@ -39,7 +43,11 @@ const chain = defineChain({ id: chainId, name: "c", nativeCurrency: { name: "N",
 const pub = createPublicClient({ chain, transport: http(RPC), pollingInterval: LOCAL ? 50 : 1000 });
 const D = JSON.parse(fs.readFileSync(process.env.DEPLOYMENT_FILE ?? path.resolve(process.cwd(), "..", "deployments", `${chainId}.json`), "utf8"));
 if ((D.ledgerVersion ?? 0) < 3) { console.error("部署檔不是目前版本的帳本（需要 ledgerVersion 3：新台幣入出金版）。請重新部署"); process.exit(1); }
-const range = { fromBlock: BigInt(D.deployedAtBlock ?? 0) };
+const DATA0 = process.env.DATA_DIR ?? path.resolve(process.cwd(), "data");
+const { deploymentIndex } = await import("../lib/ledger/logindex.ts");
+const IDX = VERIFY || process.argv.includes("--no-index") ? undefined
+  : deploymentIndex({ dataDir: DATA0, chainId, ledger: D.ledger, deployedAt: D.deployedAt, local: LOCAL });
+const range = { fromBlock: BigInt(D.deployedAtBlock ?? 0), index: IDX };
 const domains = { chainId, ledger: D.ledger };
 const DATA = process.env.DATA_DIR ?? path.resolve(process.cwd(), "data");
 const store = openStore(process.env.LEDGER_DIR ?? path.join(DATA, "ledger"));
@@ -51,7 +59,7 @@ if (!integrity.ok) fail(`帳本檔案本身不一致：${integrity.problem}`);
 // 提交前先把還沒鏡像的鏈上存提補進帳本：它們由 ChainRef 背書，誰補都一樣，而漏掉的存入會讓③不過。
 // 查核（--verify）與試算（--plan）不寫帳本。
 if (!VERIFY && !PLAN) {
-  const { added } = await mirrorCash({ store, client: pub, ledger: D.ledger, fromBlock: range.fromBlock });
+  const { added } = await mirrorCash({ store, client: pub, ledger: D.ledger, fromBlock: range.fromBlock, index: IDX });
   if (added.length) console.log(`  補鏡像 ${added.length} 筆鏈上存提`);
 }
 const events = store.read();
@@ -75,9 +83,15 @@ if (heartbeat) console.log(`  距離上一期超過 ${HEARTBEAT_AFTER} 秒，提
 // 金鑰簿：CAFECA 帳戶的公鑰與有效區間全部來自事件（帳本的 userKey 鏡像＋鏈上 KeyAdded／KeyRemoved／模組事件），
 // 不讀合約的歷史狀態——不需要 archive 節點。
 const KEYRING = D.cafecaKeyring ?? setting("CAFECA_KEYRING") ?? null;
-const { book, problems: keyProblems } = await loadKeyBook(pub, { keyring: KEYRING, events, toBlock: headBlock });
+const { book, problems: keyProblems } = await loadKeyBook(pub, { keyring: KEYRING, events, toBlock: headBlock, index: IDX });
 if (keyProblems.length) fail(`CAFECA 金鑰鏡像有問題：${keyProblems[0]}${keyProblems.length > 1 ? `（另有 ${keyProblems.length - 1} 筆）` : ""}`);
-const r = await replay(events, { domains, authorities, keys: book, boundaries: [...committed, ...next] });
+// 快速模式：最後一期已上鏈的承諾照樣完整重算（和鏈上比對），更早的各期逐期比對 logRoot
+const trust = !VERIFY && !process.argv.includes("--full") && committed.length >= 1
+  ? { beforeEpoch: committed.at(-1).epoch, verifyFromSeq: (committed.at(-2)?.lastSeq ?? 0n) + 1n }
+  : undefined;
+const t0 = Date.now();
+const r = await replay(events, { domains, authorities, keys: book, boundaries: [...committed, ...next], trust });
+if (trust) console.log(`  快速重播：第 1–${trust.beforeEpoch - 1n} 期比對 logRoot，第 ${trust.beforeEpoch} 期起完整重算；簽章從第 ${trust.verifyFromSeq} 筆重驗（${Date.now() - t0} ms；完整查核用 --verify）`);
 
 // ① 既有各期
 for (const [i, c] of committed.entries()) {
@@ -87,7 +101,7 @@ if (committed.length) console.log(`  ✓ 已上鏈的 ${committed.length} 期 an
 // ② 簽章
 const bad = [...r.sig.entries()].filter(([, v]) => !v.ok);
 if (bad.length) fail(`${bad.length} 筆簽章或授權驗不過，例如第 ${bad[0][0]} 筆：${bad[0][1].reason}`);
-console.log(`  ✓ ${r.sig.size} 筆簽章離線重驗通過（授權 k-of-n、CAFECA 金鑰 ${[...book.keys.values()].flat().length} 把、收單區塊都在所屬期別內）`);
+console.log(`  ✓ ${r.sig.size} 筆簽章離線重驗通過${trust ? "（快速模式：最後兩期）" : ""}（授權 k-of-n、CAFECA 金鑰 ${[...book.keys.values()].flat().length} 把、收單區塊都在所屬期別內）`);
 // ③ 存提
 const key = (x) => `${x.kind}|${x.ref.txHash.toLowerCase()}|${x.ref.logIndex}|${x.account.toLowerCase()}|${x.amount}`;
 const upTo = next[0]?.upToBlock ?? committed.at(-1)?.upToBlock ?? headBlock;

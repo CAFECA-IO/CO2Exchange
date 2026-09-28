@@ -49,6 +49,9 @@ const pub = createPublicClient({ chain, transport: http(RPC), pollingInterval: L
 const D = JSON.parse(fs.readFileSync(process.env.DEPLOYMENT_FILE ?? path.resolve(process.cwd(), "..", "deployments", `${chainId}.json`), "utf8"));
 if (!D.ledger) { console.error("部署檔不是帳本部署（script/DeployLedger.s.sol）。請先 bash script/bootstrap.sh deploy"); process.exit(1); }
 const DATA = process.env.DATA_DIR ?? path.resolve(process.cwd(), "data");
+// 鏈上事件的增量索引（web/data/chain-index），和網站共用
+const { deploymentIndex } = await import("../lib/ledger/logindex.ts");
+const IDX = deploymentIndex({ dataDir: DATA, chainId, ledger: D.ledger, deployedAt: D.deployedAt, local: chainId === 31337 || chainId === 1337 });
 
 // ── 金鑰 ──
 let op, idv, cv, receiptSigner, MNEMONIC;
@@ -83,11 +86,11 @@ const store = openStore(process.env.LEDGER_DIR ?? path.join(DATA, "ledger"));
 let authCache = null;
 const authorities = async () => {
   if (authCache && Date.now() - authCache.at < 60_000) return authCache.value;
-  const value = await readAuthorities(pub, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0) });
+  const value = await readAuthorities(pub, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0), index: IDX });
   authCache = { at: Date.now(), value };
   return value;
 };
-const agent = createAgent({ store, client: pub, domains: { chainId, ledger: D.ledger }, receiptSigner, authorities, fromBlock: BigInt(D.deployedAtBlock ?? 0) });
+const agent = createAgent({ store, client: pub, domains: { chainId, ledger: D.ledger }, receiptSigner, authorities, fromBlock: BigInt(D.deployedAtBlock ?? 0), index: IDX });
 
 const low = (a) => String(a).toLowerCase();
 const nowSec = () => BigInt(Math.floor(Date.now() / 1000));

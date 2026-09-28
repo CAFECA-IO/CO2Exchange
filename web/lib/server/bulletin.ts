@@ -1,6 +1,7 @@
 import "server-only";
 import type { Address } from "viem";
 import { ledgerBulletin } from "./ledger/read";
+import { memoView } from "./ledger/view";
 
 /// 公告欄。
 ///
@@ -53,6 +54,14 @@ export type Bulletin = {
   participants: { address: Address; issued: number; bought: number; sold: number; retired: number }[];
 };
 
+/// API 回給畫面的公告欄：每一類只帶最新的 `limit` 筆（帳本越大，全量回傳越不可行），
+/// 另給每一類的總數與「累計成交量」的日線（首頁的市場概況用，不必為了畫一條線把全部移轉公告搬過去）。
+export type BulletinPage = Bulletin & {
+  counts: Record<AnnouncementKind, number>;
+  limit: number;
+  cumulativeTransfers: { t: number; kg: number }[];
+};
+
 /// 五個工作日：只跳過週六日。國定假日需接行政院行事曆，Phase 0 不做，
 /// 所以這個日期是「不早於」的下限，介面要照這樣講。
 export function addWorkingDays(from: number, days: number): number {
@@ -66,6 +75,18 @@ export function addWorkingDays(from: number, days: number): number {
   return Math.floor(d.getTime() / 1000);
 }
 
-export async function bulletin(): Promise<Bulletin> {
-  return ledgerBulletin();
+export async function bulletin(limit = 200): Promise<BulletinPage> {
+  const full = ledgerBulletin();
+  return memoView(`bulletinPage:${limit}`, () => {
+    const counts: Record<AnnouncementKind, number> = { issue: 0, list: 0, transfer: 0, retire: 0 };
+    const kept: Announcement[] = [];
+    // announcements 已經依時間由新到舊排好
+    for (const a of full.announcements) { counts[a.kind] += 1; if (counts[a.kind] <= limit) kept.push(a); }
+    const day = 86_400;
+    const byDay = new Map<number, number>();
+    for (const a of full.announcements) if (a.kind === "transfer") { const d = Math.floor(a.ts / day) * day; byDay.set(d, (byDay.get(d) ?? 0) + a.amountKg); }
+    let run = 0;
+    const cumulativeTransfers = [...byDay.keys()].sort((x, y) => x - y).map((t) => ({ t, kg: (run += byDay.get(t)!) }));
+    return { ...full, announcements: kept, counts, limit, cumulativeTransfers };
+  });
 }

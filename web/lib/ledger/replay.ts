@@ -83,6 +83,8 @@ export async function verifySignatures(
 }
 
 export type EpochBoundary = { epoch: bigint; lastSeq: bigint; upToBlock: bigint };
+/// 鏈上承諾的欄位（快速模式沿用）。和 chain.ts 的 OnchainCommitment 相同，這裡另寫一份免得循環 import
+type ChainEpoch = { anchor: Hex; logRoot: Hex; balanceRoot: Hex; registryRoot: Hex; identityRoot: Hex; totalKg: bigint; totalCash: bigint; totalsHash: Hex };
 export type EpochResult = EpochBoundary & {
   firstSeq: bigint; logRoot: Hex; anchor: Hex; prev: Hex; rulesVersion: number;
   roots: Omit<Roots, "balanceTree" | "registry" | "identity">;
@@ -100,14 +102,30 @@ function sortAndCheck(events: Event[]): Event[] {
 ///
 /// `boundaries` 通常是鏈上已經提交的那幾期（epoch、lastSeq、upToBlock 都在鏈上）；
 /// 再加一期「現在」就是下一次要提交的內容。
+///
+/// ## 快速模式（`trust`，只給每小時的承諾工具用）
+///
+/// 已經上鏈、而且提交之前已經完整查核過的那幾期，不必每小時重做一遍：
+///   · 那幾期的事件**逐期重算 logRoot**，和鏈上那一期的 logRoot 比對——事件被改過一個位元就對不上；
+///     對得上才沿用鏈上的 anchor 與四個 root（`boundaries` 裡帶的鏈上欄位），不重建餘額樹與登錄簿樹。
+///   · 簽章只重驗 `verifyFromSeq` 之後的事件（之前的在提交那一期時驗過，logRoot 證明它們沒被換過）。
+///   · 狀態照樣從創世套用每一筆事件（引擎本身很便宜），`beforeEpoch` 那一期與之後照常算 root 與 anchor——
+///     所以最後一期已上鏈的承諾仍然是完整重算、和鏈上比對的。
+/// 帳本一年有八千多期，每一期都重建一次樹，每小時的提交就要跑好幾分鐘；快速模式只重建最後兩期。
+/// **查核（ledger:verify）不用快速模式**：查核者不相信之前任何一次的結果。
 export async function replay(
   events: Event[],
-  opts: { domains: Domains; authorities: Authorities; keys?: KeyBook; boundaries: EpochBoundary[] },
+  opts: {
+    domains: Domains; authorities: Authorities; keys?: KeyBook;
+    boundaries: (EpochBoundary & Partial<ChainEpoch>)[];
+    trust?: { beforeEpoch: bigint; verifyFromSeq: bigint };
+  },
 ): Promise<{ state: State; epochs: EpochResult[]; sig: Map<string, SigCheck>; runningHash: Hex; last: Roots | null }> {
   const sorted = sortAndCheck(events);
-  const sig = await verifySignatures(sorted, opts);
+  const trust = opts.trust;
+  const sig = await verifySignatures(trust ? sorted.filter((e) => e.seq >= trust.verifyFromSeq) : sorted, opts);
   const state = genesis();
-  const ctx = { sigOk: (seq: bigint) => sig.get(String(seq))?.ok === true };
+  const ctx = { sigOk: (seq: bigint) => (trust && seq < trust.verifyFromSeq) || sig.get(String(seq))?.ok === true };
   const epochs: EpochResult[] = [];
   let prev: Hex = ZERO;
   let from = 0n;
@@ -118,6 +136,18 @@ export async function replay(
     if (b.lastSeq > BigInt(sorted.length)) throw new Error(`第 ${b.epoch} 期宣稱到第 ${b.lastSeq} 筆，但帳本只有 ${sorted.length} 筆`);
     const slice = sorted.slice(Number(from), Number(b.lastSeq));
     apply(state, slice, ctx);
+    if (trust && b.epoch < trust.beforeEpoch && b.anchor && b.logRoot && b.balanceRoot) {
+      const logRoot = logTree(slice).root;
+      // 對不上就給一個不可能等於鏈上的 anchor，呼叫端的「逐期比對」自然會擋下來
+      const anchor = logRoot === b.logRoot ? b.anchor : (`0x${"ee".repeat(32)}` as Hex);
+      epochs.push({
+        epoch: b.epoch, lastSeq: b.lastSeq, upToBlock: b.upToBlock, firstSeq: from + 1n, logRoot, anchor, prev, rulesVersion: RULES_VERSION,
+        roots: { balanceRoot: b.balanceRoot, registryRoot: b.registryRoot!, identityRoot: b.identityRoot!, totalKg: b.totalKg!, totalCash: b.totalCash!, totalsHash: b.totalsHash! },
+      });
+      prev = anchor;
+      from = b.lastSeq;
+      continue;
+    }
     const roots = rootsOf(state, b.epoch);
     last = roots;
     const logRoot = logTree(slice).root;

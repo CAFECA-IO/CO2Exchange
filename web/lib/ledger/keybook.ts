@@ -1,5 +1,5 @@
 import { type Address, type Hex, type PublicClient } from "viem";
-import { readKeyLogs, readModuleLogs } from "./chain.ts";
+import { readKeyLogs, readModuleLogs, type Range } from "./chain.ts";
 import type { Event, EventOf } from "./events.ts";
 import { buildKeyBook, emptyKeyBook, type KeyBook } from "./signatures.ts";
 
@@ -14,6 +14,8 @@ export async function loadKeyBook(client: PublicClient, opts: {
   fromBlock?: bigint;
   toBlock?: bigint;
   rpIdHash?: Hex;
+  /// 增量索引（見 logindex.ts）。查核不給
+  index?: Range["index"];
 }): Promise<{ book: KeyBook; problems: string[] }> {
   const mirrors = opts.events.filter((e): e is EventOf<"userKey"> => e.kind === "userKey");
   if (!opts.keyring) {
@@ -22,7 +24,7 @@ export async function loadKeyBook(client: PublicClient, opts: {
       problems: mirrors.length ? [`帳本裡有 ${mirrors.length} 筆 CAFECA 金鑰鏡像，但沒有設定 keyring 位址（CAFECA_KEYRING）`] : [],
     };
   }
-  const range = { fromBlock: opts.fromBlock ?? 0n, toBlock: opts.toBlock };
+  const range: Range = { fromBlock: opts.fromBlock ?? 0n, toBlock: opts.toBlock, index: opts.index };
   const accounts = [...new Set(mirrors.map((m) => m.account.toLowerCase()))] as Address[];
   const [keyLogs, moduleLogs] = await Promise.all([
     readKeyLogs(client, opts.keyring, range),

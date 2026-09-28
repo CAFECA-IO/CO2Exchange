@@ -1,5 +1,5 @@
 import type { Address, PublicClient } from "viem";
-import { readCashEvents } from "./chain.ts";
+import { readCashEvents, type Range } from "./chain.ts";
 import type { Event } from "./events.ts";
 import type { ReceiptSigner, Store } from "./store.ts";
 
@@ -16,27 +16,38 @@ import type { ReceiptSigner, Store } from "./store.ts";
 
 const keyOf = (ref: { txHash: string; logIndex: number }) => `${ref.txHash.toLowerCase()}:${ref.logIndex}`;
 
+/// 帳本裡已經記過的鏈上事件，依帳本資料夾留在記憶體裡、只讀新增的那幾筆。
+/// 常駐的網站每一次入出金都呼叫 mirrorCash——每次都把整份帳本讀一遍，帳本越大越慢。
+/// 用 head 的雜湊鏈確認沒有被重建：接不上就從頭讀。
+const knownByStore = new Map<string, { seq: bigint; running: string; keys: Set<string> }>();
+
 export async function mirrorCash(opts: {
   store: Store;
   client: PublicClient;
   ledger: Address;
   fromBlock: bigint;
   receiptSigner?: ReceiptSigner;
+  /// 增量索引（見 logindex.ts）
+  index?: Range["index"];
 }): Promise<{ added: Event[] }> {
   const { store, client, ledger, fromBlock, receiptSigner } = opts;
   const atBlock = await client.getBlockNumber({ cacheTime: 0 });
-  const onchain = await readCashEvents(client, ledger, { fromBlock, toBlock: atBlock });
+  const onchain = await readCashEvents(client, ledger, { fromBlock, toBlock: atBlock, index: opts.index });
   if (onchain.length === 0) return { added: [] };
 
   // 已經記過的鏈上事件。鎖裡再補上鎖外沒看到的那幾筆（別的行程剛寫的）。
-  const known = new Set<string>();
-  let knownSeq = 0n;
+  const memoKey = `${store.dir}|${ledger.toLowerCase()}`;
+  let memo = knownByStore.get(memoKey);
   const refresh = () => {
     const h = store.head();
-    if (h.seq <= knownSeq) return;
-    for (const e of store.read(knownSeq + 1n)) if ("ref" in e && e.ref) known.add(keyOf(e.ref));
-    knownSeq = h.seq;
+    if (memo && h.seq === memo.seq && h.runningHash === memo.running) return;
+    // 帳本變短了（被重建）就從頭讀
+    if (!memo || h.seq < memo.seq) memo = { seq: 0n, running: "", keys: new Set() };
+    for (const e of store.read(memo.seq + 1n)) if ("ref" in e && e.ref) memo.keys.add(keyOf(e.ref));
+    memo.seq = h.seq; memo.running = h.runningHash;
+    knownByStore.set(memoKey, memo);
   };
+  const known = { has: (k: string) => memo!.keys.has(k), add: (k: string) => memo!.keys.add(k) };
   refresh();
 
   const added: Event[] = [];
@@ -47,7 +58,7 @@ export async function mirrorCash(opts: {
       receiptSigner,
       skipIf: () => { refresh(); return known.has(k); },
     });
-    if (r) { added.push(r.event); known.add(k); knownSeq = r.event.seq; }
+    if (r) { added.push(r.event); known.add(k); }
   }
   return { added };
 }

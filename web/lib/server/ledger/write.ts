@@ -4,7 +4,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { auth } from "@/auth";
 import { authTypedData, userDigest, userMessageOf, userTypedData, type Domains } from "@/lib/ledger/typed";
 import { isAuthorized, roleFor, thresholdAt, type Authorities, type Role } from "@/lib/ledger/authorities";
-import { readAuthorities } from "@/lib/ledger/chain";
+import { readAuthorities, readKeyLogs } from "@/lib/ledger/chain";
 import { liveErc1271 } from "@/lib/ledger/replay";
 import { decodeCafecaSignature, keyIdOf, verifyWebAuthn } from "@/lib/ledger/signatures";
 import { CAFECA_ABI } from "@/lib/ledger/chain";
@@ -16,6 +16,7 @@ import { ApiError } from "../api";
 import { devKeyOf } from "../dev-key";
 import { cafecaConfig } from "../cafeca/config";
 import { LEDGER_DIR, ledgerStore, ledgerView } from "./view";
+import { chainIndex } from "../fingerprint";
 import { createProposal, listProposals, progressOf, type Proposal } from "@/lib/ledger/proposals";
 
 /// 帳本的寫入面（設計 v4 第 3 期）：網站上所有會改變登錄簿、身分、市場狀態的動作，
@@ -82,7 +83,7 @@ async function authorities(): Promise<Authorities> {
   const d = deployment();
   const key = `${d.ledger}|${d.deployedAt ?? ""}`;
   if (authCache && authCache.key === key && Date.now() - authCache.at < 60_000) return authCache.value;
-  const value = await readAuthorities(publicClient, d.ledger!, { fromBlock: BigInt(d.deployedAtBlock ?? 0) });
+  const value = await readAuthorities(publicClient, d.ledger!, { fromBlock: BigInt(d.deployedAtBlock ?? 0), index: chainIndex() });
   authCache = { key, at: Date.now(), value };
   return value;
 }
@@ -193,23 +194,18 @@ export async function appendUser<K extends UserKind>(kind: K, body: UserBody<K>,
 
 // ── CAFECA 帳戶的公鑰鏡像（簽章模型：查核從事件重建金鑰，不用 archive 節點） ──
 
-const KEY_ADDED = CAFECA_ABI.find((x) => x.type === "event" && x.name === "KeyAdded")!;
-
 async function keyringAddress(): Promise<Address | null> {
   const k = (await cafecaConfig().catch(() => null))?.contracts.keyring;
   return k && /^0x[0-9a-fA-F]{40}$/.test(k) ? (k as Address) : null;
 }
 
-/// 找這把金鑰最近一次的 KeyAdded（從現在往回分段找；Boltchain 單次最多 10,000 塊）。
+/// 找這把金鑰最近一次的 KeyAdded。經過增量索引（keyring 的 KeyAdded／KeyRemoved，和查核的金鑰簿同一份）：
+/// 原本每收一張 CAFECA 簽的單，都從現在往回一段一段找，金鑰越舊要打的 RPC 越多。
 async function latestKeyAdded(keyring: Address, account: Address, keyId: Hex, toBlock: bigint) {
-  const step = 9_000n;
-  for (let hi = toBlock; hi >= 0n; hi -= step) {
-    const lo = hi >= step ? hi - step + 1n : 0n;
-    const logs = await publicClient.getLogs({ address: keyring, event: KEY_ADDED as never, args: { account, keyId } as never, fromBlock: lo, toBlock: hi });
-    if (logs.length) return logs[logs.length - 1] as unknown as { transactionHash: Hex; blockNumber: bigint; logIndex: number; args: { kind: number } };
-    if (lo === 0n) break;
-  }
-  return null;
+  const logs = await readKeyLogs(publicClient, keyring, { fromBlock: 0n, toBlock, index: chainIndex() });
+  const a = account.toLowerCase(), k = keyId.toLowerCase();
+  const hit = logs.filter((l) => l.kind === "added" && l.account.toLowerCase() === a && l.keyId.toLowerCase() === k).at(-1);
+  return hit ? { transactionHash: hit.txHash, blockNumber: hit.block, logIndex: hit.logIndex } : null;
 }
 
 async function checkCafecaAndMirror(account: Address, digest: Hex, signature: Hex, atBlock: bigint) {
@@ -263,7 +259,7 @@ export async function devSign<K extends UserKind>(signer: PrivateKeyAccount, kin
 export async function syncCash(): Promise<number> {
   const d = deployment();
   const { added } = await mirrorCash({
-    store: ledgerStore(), client: publicClient, ledger: d.ledger!, fromBlock: BigInt(d.deployedAtBlock ?? 0), receiptSigner,
+    store: ledgerStore(), client: publicClient, ledger: d.ledger!, fromBlock: BigInt(d.deployedAtBlock ?? 0), receiptSigner, index: chainIndex(),
   });
   return added.length;
 }

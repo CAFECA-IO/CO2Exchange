@@ -30,6 +30,9 @@ const depFile = process.env.DEPLOYMENT_FILE ?? path.resolve(process.cwd(), "..",
 const D = JSON.parse(fs.readFileSync(depFile, "utf8"));
 if ((D.ledgerVersion ?? 0) < 3) { console.error("部署檔不是目前版本的帳本（需要 ledgerVersion 3：新台幣入出金版）。請重新部署"); process.exit(1); }
 const DATA = process.env.DATA_DIR ?? path.resolve(process.cwd(), "data");
+// 鏈上事件的增量索引（web/data/chain-index），和網站共用
+const { deploymentIndex } = await import("../lib/ledger/logindex.ts");
+const IDX = deploymentIndex({ dataDir: DATA, chainId, ledger: D.ledger, deployedAt: D.deployedAt, local: chainId === 31337 || chainId === 1337 });
 const LEDGER_DIR = process.env.LEDGER_DIR ?? path.join(DATA, "ledger");
 const store = openStore(LEDGER_DIR);
 const OUT = arg("out") ?? path.join(DATA, "public");
@@ -38,7 +41,7 @@ const MIRROR = arg("mirror");
 const integrity = store.check();
 if (!integrity.ok) { console.error(`✗ 帳本檔案本身不一致：${integrity.problem}`); process.exit(1); }
 const events = store.read();
-const commitments = await readCommitments(pub, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0) });
+const commitments = await readCommitments(pub, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0), index: IDX });
 console.log(`帳本 ${events.length} 筆；鏈上 ${commitments.length} 期`);
 
 // ── 公開檔 ──

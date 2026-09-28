@@ -1,5 +1,6 @@
 import "server-only";
 import { ledgerTrades } from "./ledger/read";
+import { memoView } from "./ledger/view";
 
 /// 行情全部由帳本的成交推導，沒有任何捏造的數字。成交價是每噸的結算幣最小單位。
 
@@ -68,6 +69,10 @@ export function toCandles(trades: Trade[], bucketMinutes: number): Candle[] {
 
 export async function ticker(rangeHours = 24 * 7): Promise<Ticker> {
   const all = await readTrades();
+  return memoView(`ticker:${rangeHours}`, () => tickerOf(all, rangeHours));
+}
+
+function tickerOf(all: Trade[], rangeHours: number): Ticker {
   const now = all.length ? all[all.length - 1].ts : Math.floor(Date.now() / 1000);
   const from = now - rangeHours * 3600;
   const trades = all.filter((t) => t.ts >= from);

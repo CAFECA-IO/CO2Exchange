@@ -38,6 +38,9 @@ const pub = createPublicClient({ chain, transport: http(RPC) });
 const D = JSON.parse(fs.readFileSync(process.env.DEPLOYMENT_FILE ?? path.resolve(process.cwd(), "..", "deployments", `${chainId}.json`), "utf8"));
 if ((D.ledgerVersion ?? 0) < 3) { console.error("部署檔不是目前版本的帳本（需要 ledgerVersion 3：新台幣入出金版）"); process.exit(1); }
 const DATA = process.env.DATA_DIR ?? path.resolve(process.cwd(), "data");
+// 鏈上事件的增量索引（web/data/chain-index），和網站共用
+const { deploymentIndex } = await import("../lib/ledger/logindex.ts");
+const IDX = deploymentIndex({ dataDir: DATA, chainId, ledger: D.ledger, deployedAt: D.deployedAt, local: chainId === 31337 || chainId === 1337 });
 const store = openStore(process.env.LEDGER_DIR ?? path.join(DATA, "ledger"));
 
 const yuan = (s) => {
@@ -86,7 +89,7 @@ async function run(call, label) {
   }
   const { sender, owners } = await signers();
   const tx = await F.execOperatorSafe({ pub, sender, safe: D.operatorSafe, to: call.to, data: call.data, owners });
-  const { added } = await mirrorCash({ store, client: pub, ledger: D.ledger, fromBlock: BigInt(D.deployedAtBlock ?? 0) });
+  const { added } = await mirrorCash({ store, client: pub, ledger: D.ledger, fromBlock: BigInt(D.deployedAtBlock ?? 0), index: IDX });
   console.log(`${label}：${tx}（帳本鏡像 ${added.length} 筆）`);
 }
 
@@ -99,7 +102,7 @@ try {
     }
     case "list": {
       const s = stateNow();
-      const commits = await readCommitments(pub, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0) });
+      const commits = await readCommitments(pub, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0), index: IDX });
       const snap = commits.length ? snapshotAt(store.read(), commits.at(-1)) : null;
       const rows = [...s.pendingWithdraw].filter(([, v]) => v > 0n);
       if (!rows.length) console.log("沒有待出金");
@@ -128,7 +131,7 @@ try {
       const [account, amt, ref] = args;
       if (!isAddress(account) || !amt || !ref) throw new Error("用法：settle <地址> <元> <匯款交易參考號>");
       const amount = yuan(amt);
-      const commits = await readCommitments(pub, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0) });
+      const commits = await readCommitments(pub, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0), index: IDX });
       if (!commits.length) throw new Error("還沒有任何一期承諾上鏈");
       const snap = snapshotAt(store.read(), commits.at(-1));
       const proof = balanceProofArgs(snap, account);

@@ -1,7 +1,7 @@
 import "server-only";
 import path from "node:path";
 import { apply, genesis, type State } from "@/lib/ledger/engine";
-import { chainHash, type Event } from "@/lib/ledger/events";
+import { chainHash, eventHash, type Event } from "@/lib/ledger/events";
 import { openStore, type Store } from "@/lib/ledger/store";
 import { deployment } from "../chain";
 import { DATA_DIR } from "../fingerprint";
@@ -68,4 +68,30 @@ export function ledgerView(): View {
   const view: View = { state, events, rejected, head: { seq: head.seq, runningHash: head.runningHash }, asOf: last ? Number(last.at) : Math.floor(Date.now() / 1000) };
   cache = { deploymentKey: key, view };
   return view;
+}
+
+/// 從帳本檢視推導出來的東西（公告欄、行情、各國統計……），依帳本的 head 快取。
+///
+/// 這些都是「整份帳本掃一遍」的計算，原本每個請求都重算一次：公告欄一千多筆事件時一次兩百毫秒，
+/// 而且隨帳本線性變慢。帳本沒有新事件，結果就不會變——所以 head 沒動就直接回上一次的結果，
+/// head 一動整批作廢（只留目前這一個 head 的結果，記憶體不會越積越多）。
+let derived: { key: string; values: Map<string, unknown> } | null = null;
+export function memoView<T>(name: string, fn: (v: View) => T): T {
+  const v = ledgerView();
+  const d = deployment();
+  const key = `${d.ledger}|${d.deployedAt ?? ""}|${v.head.seq}|${v.head.runningHash}`;
+  if (!derived || derived.key !== key) derived = { key, values: new Map() };
+  if (derived.values.has(name)) return derived.values.get(name) as T;
+  const out = fn(v);
+  derived.values.set(name, out);
+  return out;
+}
+
+/// 事件雜湊（公告欄、行情的「交易」欄）。事件內容不會變，算一次就記在事件物件上
+///（WeakMap：帳本重建、舊的事件物件被丟掉時跟著回收）。
+const hashMemo = new WeakMap<Event, string>();
+export function eventHashCached(e: Event): string {
+  let h = hashMemo.get(e);
+  if (!h) { h = eventHash(e); hashMemo.set(e, h); }
+  return h;
 }

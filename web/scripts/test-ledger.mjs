@@ -250,4 +250,47 @@ await t("入金鏡像帶銀行參考號雜湊：它進事件內容（改了就�
   const { keccak256, toBytes } = await import("viem");
   assert.notEqual(eventHash(dep), eventHash({ ...dep, bankRef: keccak256(toBytes("other")) }));
 });
+await t("帳本檔案的增量讀取：接著上一次讀到的地方往下讀；寫到一半的最後一行不讀；檔案換了就整份重讀", async () => {
+  const fs = await import("node:fs"), os = await import("node:os"), path = await import("node:path");
+  const { openStore } = await import("../lib/ledger/store.ts");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "co2x-store-"));
+  const st = openStore(dir);
+  const mk = (i) => ({ kind: "policy", individualTransfer: true, individualRetire: false, treasury: "0x0000000000000000000000000000000000000001", signer: "0x0000000000000000000000000000000000000002", signature: "0x", atBlock: BigInt(i) });
+  for (let i = 1; i <= 3; i++) await st.append(mk(i));
+  assert.equal(st.read().length, 3);
+  for (let i = 4; i <= 5; i++) await st.append(mk(i));
+  assert.deepEqual(st.read(4n).map((e) => e.seq), [4n, 5n], "只讀新的兩筆");
+  assert.deepEqual(st.read(6n), []);
+  fs.appendFileSync(path.join(dir, "events.jsonl"), '{"seq":"6n","kind":"pol');   // 寫到一半
+  assert.deepEqual(st.read(6n), [], "不完整的最後一行不讀");
+  assert.equal(st.read().length, 5);
+  // 檔案整份換掉（例如被重建）：序號接不上就重讀
+  const other = openStore(fs.mkdtempSync(path.join(os.tmpdir(), "co2x-store-")));
+  for (let i = 1; i <= 7; i++) await other.append(mk(i));
+  fs.copyFileSync(path.join(other.dir, "events.jsonl"), path.join(dir, "events.jsonl"));
+  assert.deepEqual(st.read(6n).map((e) => e.seq), [6n, 7n]);
+  assert.equal(st.read().length, 7);
+  assert.deepEqual(st.read(2n, 3n).map((e) => e.seq), [2n, 3n]);
+  fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(other.dir, { recursive: true, force: true });
+});
+await t("鏈上事件的增量索引：舊的區塊段從檔案拿、只讀新的；夠深的才寫檔；換部署就重讀", async () => {
+  const fs = await import("node:fs"), os = await import("node:os"), path = await import("node:path");
+  const { indexedLogs } = await import("../lib/ledger/logindex.ts");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "co2x-idx-"));
+  const chain = Array.from({ length: 100 }, (_, i) => ({ blockNumber: BigInt(i + 1), v: i + 1 }));
+  const calls = [];
+  const fetch = async (lo, hi) => { calls.push([lo, hi]); return chain.filter((x) => x.blockNumber >= lo && x.blockNumber <= hi); };
+  const q = (toBlock, key = "k") => indexedLogs({ dir, name: "cash", key, confirmations: 10n, fromBlock: 1n, toBlock, blockOf: (x) => x.blockNumber, fetch });
+  assert.equal((await q(50n)).length, 50);
+  assert.deepEqual(calls.at(-1), [1n, 50n]);
+  assert.equal((await q(80n)).length, 80);
+  assert.deepEqual(calls.at(-1), [41n, 80n], "從上次寫檔的深度（50 − 10）之後讀");
+  assert.equal((await q(30n)).length, 30, "要的範圍比索引舊：不打鏈");
+  assert.deepEqual(calls.at(-1), [41n, 80n]);
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, "cash.json"), "utf8"));
+  assert.equal(saved.scannedTo, "70");
+  assert.equal((await q(80n, "another-deploy")).length, 80);
+  assert.deepEqual(calls.at(-1), [1n, 80n], "部署不同：整份重讀");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 console.log(`\n${n} 個測試通過（事件 ${events.length} 筆，拒絕 ${s.rejected.length} 筆，成交 ${s.fills.length} 筆）`);

@@ -31,6 +31,8 @@ export function createAgent(opts: {
   /// 讀授權清單（authority 事件用）。常駐程式通常快取一段時間。
   authorities?: () => Promise<Authorities>;
   fromBlock?: bigint;
+  /// 鏈上事件的增量索引（logindex.ts）
+  index?: import("./chain.ts").Range["index"];
 }) {
   const { store, client, domains, receiptSigner } = opts;
   let cache: { seq: bigint; running: Hex; state: State } = { seq: 0n, running: GENESIS, state: genesis() };
@@ -108,7 +110,7 @@ export function createAgent(opts: {
 
   /// 把鏈上的入金／出金確認鏡像進帳本（營運 Safe 確認之後呼叫）。
   async function mirror(ledger: Address): Promise<number> {
-    const { added } = await mirrorCash({ store, client, ledger, fromBlock: opts.fromBlock ?? 0n, receiptSigner });
+    const { added } = await mirrorCash({ store, client, ledger, fromBlock: opts.fromBlock ?? 0n, receiptSigner, index: opts.index });
     return added.length;
   }
 }

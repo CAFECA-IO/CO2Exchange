@@ -1,6 +1,7 @@
 import { keccak256, parseAbi, toBytes, type Address, type Hex, type PublicClient } from "viem";
 import { ROLES, type Authorities, type Grant, type Role, type Threshold } from "./authorities.ts";
 import type { EpochBoundary } from "./replay.ts";
+import { indexedLogs, type IndexOpts } from "./logindex.ts";
 
 /// 從帳本合約讀兩樣東西：授權金鑰清單的歷史、已經提交的承諾。
 ///
@@ -29,22 +30,27 @@ export const LEDGER_ABI = parseAbi([
 
 const ROLE_BY_HASH = new Map<string, Role>(ROLES.map((r) => [keccak256(toBytes(r)).toLowerCase(), r]));
 
-type Range = { fromBlock: bigint; toBlock?: bigint };
+/// `index`：給了就經過磁碟上的增量索引（lib/ledger/logindex.ts），只向鏈上讀新的區塊。查核不要給。
+export type Range = { fromBlock: bigint; toBlock?: bigint; index?: Omit<IndexOpts, "name"> };
 
 /// 分段讀事件。Boltchain 的 `eth_getLogs` 單次最多 10,000 個區塊（實測），一次讀全部會直接被拒。
 /// 分段大小可用環境變數 `LOGS_CHUNK` 調整。
 export const LOGS_CHUNK = BigInt(typeof process !== "undefined" && process.env?.LOGS_CHUNK ? process.env.LOGS_CHUNK : 9_000);
 
-export async function getLogsPaged<T>(
-  client: PublicClient, range: Range, fetch: (fromBlock: bigint, toBlock: bigint) => Promise<T[]>,
+export async function getLogsPaged<T extends { blockNumber: bigint | null }>(
+  client: PublicClient, range: Range, fetch: (fromBlock: bigint, toBlock: bigint) => Promise<T[]>, name?: string,
 ): Promise<T[]> {
   const to = range.toBlock ?? (await client.getBlockNumber({ cacheTime: 0 }));
-  const out: T[] = [];
-  for (let from = range.fromBlock; from <= to; from += LOGS_CHUNK) {
-    const end = from + LOGS_CHUNK - 1n < to ? from + LOGS_CHUNK - 1n : to;
-    out.push(...(await fetch(from, end)));
-  }
-  return out;
+  const paged = async (lo: bigint, hi: bigint) => {
+    const out: T[] = [];
+    for (let from = lo; from <= hi; from += LOGS_CHUNK) {
+      const end = from + LOGS_CHUNK - 1n < hi ? from + LOGS_CHUNK - 1n : hi;
+      out.push(...(await fetch(from, end)));
+    }
+    return out;
+  };
+  if (!range.index || !name) return paged(range.fromBlock, to);
+  return indexedLogs<T>({ ...range.index, name, fromBlock: range.fromBlock, toBlock: to, blockOf: (l) => l.blockNumber ?? 0n, fetch: paged });
 }
 
 /// 授權清單的歷史 → 每一把金鑰、每一個角色的有效區間。
@@ -54,7 +60,7 @@ export async function readAuthorities(client: PublicClient, ledger: Address, ran
     address: ledger,
     events: LEDGER_ABI.filter((x) => x.type === "event" && (x.name === "AuthorityGranted" || x.name === "AuthorityRevoked" || x.name === "ThresholdSet")),
     fromBlock, toBlock,
-  }));
+  }), "authorities");
   logs.sort((a, b) => (a.blockNumber === b.blockNumber ? a.logIndex - b.logIndex : a.blockNumber! < b.blockNumber! ? -1 : 1));
   const grants: Grant[] = [];
   const thresholds: Threshold[] = [];
@@ -93,7 +99,7 @@ export async function readCommitments(client: PublicClient, ledger: Address, ran
   const logs = await getLogsPaged(client, range, (fromBlock, toBlock) => client.getLogs({
     address: ledger, event: LEDGER_ABI.find((x) => x.type === "event" && x.name === "Committed") as never,
     fromBlock, toBlock,
-  }));
+  }), "committed");
   return (logs as unknown as { args: { anchor: Hex; commitment: Record<string, unknown> }; blockNumber: bigint; transactionHash: Hex; logIndex: number }[]).map((l) => {
     const a = l.args;
     const c = a.commitment as {
@@ -110,7 +116,7 @@ export async function readCashEvents(client: PublicClient, ledger: Address, rang
     address: ledger,
     events: LEDGER_ABI.filter((x) => x.type === "event" && (x.name === "CashDeposited" || x.name === "CashWithdrawn")),
     fromBlock, toBlock,
-  }));
+  }), "cash");
   return logs.map((l) => ({
     kind: l.eventName === "CashDeposited" ? ("cashDeposit" as const) : ("cashWithdraw" as const),
     account: (l.args as { account: Address }).account,
@@ -135,7 +141,7 @@ export async function readKeyLogs(client: PublicClient, keyring: Address, range:
   const logs = await getLogsPaged(client, range, (fromBlock, toBlock) => client.getLogs({
     address: keyring, events: CAFECA_ABI.filter((x) => x.type === "event" && (x.name === "KeyAdded" || x.name === "KeyRemoved")),
     fromBlock, toBlock,
-  }));
+  }), `keys-${keyring.toLowerCase().slice(2, 10)}`);
   return logs.map((l) => ({
     kind: l.eventName === "KeyAdded" ? ("added" as const) : ("removed" as const),
     account: (l.args as { account: Address }).account, keyId: (l.args as { keyId: Hex }).keyId,
@@ -149,10 +155,12 @@ export async function readModuleLogs(client: PublicClient, accounts: Address[], 
   const out = [];
   for (let i = 0; i < accounts.length; i += 50) {
     const batch = accounts.slice(i, i + 50);
+    // 帳戶清單會變：索引檔以這一批帳戶的雜湊命名，多了新帳戶就是另一份（新的那份從頭讀一次）
+    const tag = keccak256(toBytes(batch.map((a) => a.toLowerCase()).sort().join(","))).slice(2, 10);
     const logs = await getLogsPaged(client, range, (fromBlock, toBlock) => client.getLogs({
       address: batch, events: CAFECA_ABI.filter((x) => x.type === "event" && (x.name === "ModuleInstalled" || x.name === "ModuleUninstalled")),
       fromBlock, toBlock,
-    }));
+    }), `modules-${tag}`);
     for (const l of logs) {
       const a = l.args as { moduleTypeId: bigint; module: Address };
       out.push({ kind: l.eventName === "ModuleInstalled" ? ("installed" as const) : ("uninstalled" as const), account: l.address as Address, moduleType: a.moduleTypeId, module: a.module, block: l.blockNumber!, logIndex: l.logIndex! });

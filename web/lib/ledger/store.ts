@@ -45,17 +45,46 @@ export function openStore(dir: string) {
     }
   }
 
-  function read(fromSeq = 1n, toSeq?: bigint): Event[] {
-    let raw: string;
-    try { raw = fs.readFileSync(EVENTS, "utf8"); } catch { return []; }
-    const out: Event[] = [];
-    for (const line of raw.split("\n")) {
-      if (!line.trim()) continue;
-      const e = JSON.parse(line, reviver) as Event;
-      if (e.seq < fromSeq) continue;
-      if (toSeq !== undefined && e.seq > toSeq) continue;
-      out.push(e);
+  /// 檔案最後一筆完整事件的位置。常駐的行程（網站、做市、模擬器）每來一筆新事件就讀一次「新的那幾筆」，
+  /// 原本每次都把整份 events.jsonl 讀進來解析——帳本十萬筆的時候，每一筆新事件都要解析十萬行。
+  /// 有了它，接著上一次讀到的地方往下讀就好。接不上（檔案換了、被截短、序號對不上）就整份重讀。
+  let tail: { seq: bigint; offset: number; ino: number } | null = null;
+
+  /// 解析 buf 裡的完整行（最後一行沒有換行字元的，視為寫到一半，不讀）。回傳事件與最後一個換行之後的位移。
+  function parseLines(buf: Buffer, base: number): { events: Event[]; end: number } {
+    const events: Event[] = [];
+    let start = 0, end = base;
+    for (let i = buf.indexOf(10); i !== -1; i = buf.indexOf(10, start)) {
+      const line = buf.toString("utf8", start, i);
+      start = i + 1; end = base + start;
+      if (line.trim()) events.push(JSON.parse(line, reviver) as Event);
     }
+    return { events, end };
+  }
+
+  function read(fromSeq = 1n, toSeq?: bigint): Event[] {
+    let st: fs.Stats;
+    try { st = fs.statSync(EVENTS); } catch { tail = null; return []; }
+    let events: Event[] | null = null;
+    if (tail && fromSeq === tail.seq + 1n && st.ino === tail.ino && st.size >= tail.offset) {
+      const fd = fs.openSync(EVENTS, "r");
+      try {
+        const buf = Buffer.alloc(st.size - tail.offset);
+        fs.readSync(fd, buf, 0, buf.length, tail.offset);
+        const r = parseLines(buf, tail.offset);
+        if (r.events.length === 0 || r.events[0].seq === fromSeq) {
+          events = r.events;
+          if (r.events.length) tail = { seq: r.events[r.events.length - 1].seq, offset: r.end, ino: st.ino };
+        }
+      } finally { fs.closeSync(fd); }
+    }
+    if (!events) {
+      const r = parseLines(fs.readFileSync(EVENTS), 0);
+      const last = r.events[r.events.length - 1];
+      tail = last ? { seq: last.seq, offset: r.end, ino: st.ino } : null;
+      events = r.events.filter((e) => e.seq >= fromSeq);
+    }
+    const out = toSeq === undefined ? events : events.filter((e) => e.seq <= toSeq);
     return out.sort((a, b) => (a.seq < b.seq ? -1 : a.seq > b.seq ? 1 : 0));
   }
 

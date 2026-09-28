@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Card, Notice, fmtKg, fmtTwd } from "@/components/ui";
 import { useReload } from "@/lib/client/useReload";
 import { flagOf } from "@/lib/deployment";
-import type { Announcement, Bulletin } from "@/lib/server/bulletin";
+import type { Announcement, BulletinPage } from "@/lib/server/bulletin";
 import { fetchJson } from "@/lib/client/fetchJson";
 
 /// 公開資訊（公告欄）。
@@ -44,7 +44,9 @@ function Tx({ hash }: { hash: string }) {
 }
 
 export default function RegistryPage() {
-  const [b, setB] = useState<Bulletin | null>(null);
+  const [b, setB] = useState<BulletinPage | null>(null);
+  // 每一類最多帶幾筆。帳本越大，全量回傳越不可行；要看更舊的就按「顯示更多」
+  const [limit, setLimit] = useState(200);
   const [err, setErr] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("額度總覽");
   const [reloadKey] = useReload();
@@ -53,16 +55,24 @@ export default function RegistryPage() {
     let ignore = false;
     (async () => {
       try {
-        const j = await fetchJson<Bulletin>("/api/bulletin");
+        const j = await fetchJson<BulletinPage>(`/api/bulletin?limit=${limit}`);
         if (!ignore) { setB(j); setErr(null); }
       } catch (e) {
         if (!ignore) setErr(e instanceof Error ? e.message : "讀取失敗");
       }
     })();
     return () => { ignore = true; };
-  }, [reloadKey]);
+  }, [reloadKey, limit]);
 
   const rows = (kind: Announcement["kind"]) => b?.announcements.filter((a) => a.kind === kind) ?? [];
+  const total = (kind: Announcement["kind"]) => b?.counts[kind] ?? 0;
+  /// 列出的筆數少於總數時，給一句話與「顯示更多」
+  const more = (kind: Announcement["kind"]) => (total(kind) > rows(kind).length ? (
+    <div className="mt-3 flex items-center justify-between gap-3 text-xs text-ink-300">
+      <span>列出最新 {rows(kind).length} 筆，共 {total(kind)} 筆</span>
+      <button className="text-tide underline" onClick={() => setLimit((n) => Math.min(n * 2, 5000))}>顯示更多</button>
+    </div>
+  ) : null);
 
   return (
     <div className="space-y-6">
@@ -140,7 +150,7 @@ export default function RegistryPage() {
           )}
 
           {tab === "核發資訊" && (
-            <Card title={`核發紀錄（${rows("issue").length}）`}>
+            <Card title={`核發紀錄（${total("issue")}）`}>
               <div className="space-y-3">
                 {rows("issue").map((a) => (
                   <div key={a.no} className="rounded-[--radius-card] border border-ink-500 bg-ink-800 p-3 text-sm">
@@ -161,12 +171,13 @@ export default function RegistryPage() {
                   </div>
                 ))}
                 {rows("issue").length === 0 && <p className="text-sm text-ink-300">尚無核發紀錄。</p>}
+                {more("issue")}
               </div>
             </Card>
           )}
 
           {tab === "移轉紀錄" && (
-            <Card title={`移轉紀錄（${rows("transfer").length}）`}>
+            <Card title={`移轉紀錄（${total("transfer")}）`}>
               <p className="mb-3 text-xs leading-6 text-ink-300">
                 此處的移轉為本站鏈上請求權的移轉，不動官方登錄簿。依溫室氣體減量額度交易拍賣及移轉管理辦法第 26 條，
                 每一額度單位在官方登錄簿的移轉以一次為限；該次移轉於最終買方申請註銷時，自專案方帳戶直接移轉至買方帳戶。
@@ -201,12 +212,13 @@ export default function RegistryPage() {
                   </tbody>
                 </table>
                 {rows("transfer").length === 0 && <p className="text-sm text-ink-300">尚無移轉紀錄。</p>}
+                {more("transfer")}
               </div>
             </Card>
           )}
 
           {tab === "使用及註銷" && (
-            <Card title={`註銷紀錄（${rows("retire").length}）`}>
+            <Card title={`註銷紀錄（${total("retire")}）`}>
               <p className="mb-3 text-xs leading-6 text-ink-300">
                 依同辦法第 27 條，中央主管機關於註銷次日起五個工作日內公開註銷用途，
                 事業須待公開後始得對外進行環境聲明或宣告。下表的「可對外宣告日」為公告日加五個工作日，
@@ -233,6 +245,7 @@ export default function RegistryPage() {
                   </div>
                 ))}
                 {rows("retire").length === 0 && <p className="text-sm text-ink-300">尚無註銷紀錄。</p>}
+                {more("retire")}
               </div>
             </Card>
           )}

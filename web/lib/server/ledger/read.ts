@@ -1,7 +1,7 @@
 import "server-only";
 import type { Address } from "viem";
 import { countryOfBatch, type Batch, type State } from "@/lib/ledger/engine";
-import { eventHash, type Event } from "@/lib/ledger/events";
+import type { Event } from "@/lib/ledger/events";
 import { tcerSerial } from "@/lib/tcer";
 import type { Bid, Order } from "../market";
 import type { Candle, Trade } from "../ticker";
@@ -11,7 +11,7 @@ import { computePortfolio, type Holding, type Movement, type Portfolio } from ".
 import { addWorkingDays, type Announcement, type Bulletin } from "../bulletin";
 import { nextDisclosureDate, type Custody } from "../reserve";
 import { tagOf } from "../mm";
-import { ledgerView, type View } from "./view";
+import { eventHashCached, ledgerView, memoView, type View } from "./view";
 
 /// 讀取面的帳本版本（設計 v4）。每一個函式都回傳**和鏈上版本相同的形狀**，
 /// 所以畫面與 API 不必知道資料是從哪裡來的——切換只發生在 lib/server 的入口。
@@ -24,7 +24,7 @@ const low = (a: string) => a.toLowerCase();
 
 function hashOf(v: View, seq: bigint): string {
   const e = v.events[Number(seq) - 1];
-  return e ? eventHash(e) : "";
+  return e ? eventHashCached(e) : "";
 }
 
 type BatchInfo = { batch: Batch; project: string; methodology: string; location: string; country: string; scheme: string; domestic: boolean };
@@ -41,7 +41,11 @@ function batchInfo(s: State, batchId: bigint): BatchInfo | null {
 
 // ── 掛單簿 ──
 
+/// 依帳本 head 快取（見 view.ts 的 memoView）。回傳值是共用的，呼叫端不要改它
 export function ledgerOrders(limit = 60): Order[] {
+  return memoView(`orders:${limit}`, () => ledgerOrdersUncached(limit));
+}
+function ledgerOrdersUncached(limit = 60): Order[] {
   const { state } = ledgerView();
   return [...state.book.values()]
     .filter((o) => o.side === "sell" && o.remainingKg > 0n)
@@ -59,7 +63,11 @@ export function ledgerOrders(limit = 60): Order[] {
     });
 }
 
+/// 依帳本 head 快取（見 view.ts 的 memoView）。回傳值是共用的，呼叫端不要改它
 export function ledgerBids(limit = 60): Bid[] {
+  return memoView(`bids:${limit}`, () => ledgerBidsUncached(limit));
+}
+function ledgerBidsUncached(limit = 60): Bid[] {
   const { state } = ledgerView();
   return [...state.book.values()]
     .filter((o) => o.side === "buy" && o.remainingKg > 0n)
@@ -89,7 +97,11 @@ export function ledgerHoldings(account: Address) {
 
 // ── 行情 ──
 
+/// 依帳本 head 快取（見 view.ts 的 memoView）。回傳值是共用的，呼叫端不要改它
 export function ledgerTrades(): Trade[] {
+  return memoView("trades", () => ledgerTradesUncached());
+}
+function ledgerTradesUncached(): Trade[] {
   const v = ledgerView();
   return v.state.fills.map((f) => ({
     ts: Number(f.at), pricePerTonne: Number(f.pricePerTonne), kg: Number(f.amountKg), cost: Number(f.cost),
@@ -97,7 +109,11 @@ export function ledgerTrades(): Trade[] {
   }));
 }
 
+/// 依帳本 head 快取（見 view.ts 的 memoView）。回傳值是共用的，呼叫端不要改它
 export function ledgerByCountry(rangeHours: number): { rangeHours: number; asOf: number; countries: CountryStat[] } {
+  return memoView(`byCountry:${rangeHours}`, () => ledgerByCountryUncached(rangeHours));
+}
+function ledgerByCountryUncached(rangeHours: number): { rangeHours: number; asOf: number; countries: CountryStat[] } {
   const v = ledgerView();
   const s = v.state;
   const asOf = v.asOf;
@@ -152,7 +168,11 @@ export function ledgerByCountry(rangeHours: number): { rangeHours: number; asOf:
 
 // ── 我的資產 ──
 
+/// 依帳本 head 快取（見 view.ts 的 memoView）。回傳值是共用的，呼叫端不要改它
 export function ledgerPortfolio(account: Address): Portfolio {
+  return memoView(`portfolio:${account.toLowerCase()}`, () => ledgerPortfolioUncached(account));
+}
+function ledgerPortfolioUncached(account: Address): Portfolio {
   const v = ledgerView();
   const s = v.state;
   const me = low(account);
@@ -189,7 +209,11 @@ export function ledgerPortfolio(account: Address): Portfolio {
 
 // ── 公告欄 ──
 
+/// 依帳本 head 快取（見 view.ts 的 memoView）。回傳值是共用的，呼叫端不要改它
 export function ledgerBulletin(): Bulletin {
+  return memoView("bulletin", () => ledgerBulletinUncached());
+}
+function ledgerBulletinUncached(): Bulletin {
   const v = ledgerView();
   const s = v.state;
   const rows: Announcement[] = [];
@@ -255,7 +279,11 @@ export function ledgerBulletin(): Bulletin {
 }
 
 /// 託管揭露：對帳報告與各國流通量都來自帳本；記帳 TWD 的發行量是鏈上的（營運方宣稱的信託餘額）。
+/// 依帳本 head 快取（見 view.ts 的 memoView）。回傳值是共用的，呼叫端不要改它
 export function ledgerCustody(tokenSupply: bigint): Custody {
+  return memoView(`custody:${tokenSupply}`, () => ledgerCustodyUncached(tokenSupply));
+}
+function ledgerCustodyUncached(tokenSupply: bigint): Custody {
   const { state } = ledgerView();
   const live = new Map<string, number>();
   for (const b of state.batches.values()) {

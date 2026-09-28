@@ -182,8 +182,13 @@ do_deploy () {
   ( cd web && node scripts/data-reset.mjs ) | sed 's/^/   /'
 }
 
+# 提交一期，成功就寫出公開檔（web/data/public/epochs/<期別>.json；已存在的不重寫）。
+# `seed`、`commit`、`commit-loop` 都走這裡，公開檔不會漏期。
 do_commit () {
-  ( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/ledger-commit.mjs )
+  ( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/ledger-commit.mjs ) || return 1
+  mkdir -p "$LOG"
+  ( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/ledger-publish.mjs >> "$LOG/publish.log" 2>&1 ) \
+    || echo "   ⚠️ 公開檔沒有寫出來，看 $LOG/publish.log"
 }
 
 # 每 COMMIT_EVERY 秒一期。某一期失敗（查核不過、RPC 斷線）不中止迴圈：下一輪會重算，
@@ -195,9 +200,6 @@ commit_loop () {
   while true; do
     if do_commit >> "$LOG/commit.log" 2>&1; then
       fails=0; echo "   $(date -u +'%F %T') ✓ $(tail -1 "$LOG/commit.log")"
-      # 每一期的公開檔（web/data/public/epochs/<期別>.json）。已上鏈的期別不會再變，已存在的不重寫
-      ( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/ledger-publish.mjs >> "$LOG/publish.log" 2>&1 ) \
-        || echo "   ⚠️ 公開檔沒有寫出來，看 $LOG/publish.log"
     else
       fails=$((fails + 1)); echo "   $(date -u +'%F %T') ✗ 第 ${fails} 次失敗：$(grep '✗' "$LOG/commit.log" | tail -1)"
       [ "$fails" -ge 3 ] && echo "   ⚠️ 連續 ${fails} 期沒有提交。沒有新承諾，營運方就不能確認新的出金（見 status）。"

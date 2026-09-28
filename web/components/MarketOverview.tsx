@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { AreaChart, BarList, Donut, StatTile } from "./charts";
 import { Card } from "./ui";
-import type { Bulletin } from "@/lib/server/bulletin";
+import type { BulletinPage } from "@/lib/server/bulletin";
 import { fetchJson } from "@/lib/client/fetchJson";
 
 /// 首頁的市場概況。
@@ -19,7 +19,7 @@ const tonnes = (kg: number) => kg / 1000;
 const fmtT = (kg: number) => `${tonnes(kg).toLocaleString("zh-TW", { maximumFractionDigits: 1 })} 噸`;
 
 export function MarketOverview() {
-  const [b, setB] = useState<Bulletin | null>(null);
+  const [b, setB] = useState<BulletinPage | null>(null);
   const [orders, setOrders] = useState<Order[] | null>(null);
 
   useEffect(() => {
@@ -27,7 +27,8 @@ export function MarketOverview() {
     (async () => {
       try {
         const [bj, mj] = await Promise.all([
-          fetchJson<Bulletin>("/api/bulletin"),
+          // 只要彙總與累計成交量的日線，不要公告明細（limit=0）
+          fetchJson<BulletinPage>("/api/bulletin?limit=0"),
           fetchJson<{ orders: Order[] }>("/api/market"),
         ]);
         if (!live) return;
@@ -56,11 +57,7 @@ export function MarketOverview() {
     .slice(0, 6);
 
   // 累計成交量：把每一筆移轉公告加起來，看的是市場有沒有在長大
-  const transfers = b.announcements.filter((a) => a.kind === "transfer").sort((a, x) => a.ts - x.ts);
-  const cumulative = transfers.reduce<{ t: number; v: number }[]>((out, tr) => {
-    out.push({ t: tr.ts, v: (out.at(-1)?.v ?? 0) + tonnes(tr.amountKg) });
-    return out;
-  }, []);
+  const cumulative = b.cumulativeTransfers.map((p) => ({ t: p.t, v: tonnes(p.kg) }));
 
   return (
     <section className="space-y-4">

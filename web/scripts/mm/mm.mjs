@@ -81,6 +81,9 @@ const pub = createPublicClient({ chain, transport: http(RPC), pollingInterval: L
 const depFile = process.env.DEPLOYMENT_FILE ?? path.resolve(process.cwd(), "..", "deployments", `${chainId}.json`);
 if (!fs.existsSync(depFile)) { console.error(`找不到部署檔 ${depFile}`); process.exit(1); }
 const D = JSON.parse(fs.readFileSync(depFile, "utf8"));
+// 鏈上事件的增量索引（web/data/chain-index），和網站共用
+const { deploymentIndex } = await import("../../lib/ledger/logindex.ts");
+const IDX = deploymentIndex({ dataDir: DATA, chainId, ledger: D.ledger, deployedAt: D.deployedAt, local: chainId === 31337 || chainId === 1337 });
 if ((D.ledgerVersion ?? 0) < 3) {
   console.error("這個部署不是目前版本的帳本（需要 ledgerVersion 3：新台幣入出金版）。請重新部署：bash script/bootstrap.sh deploy");
   process.exit(1);
@@ -131,11 +134,11 @@ const domains = { chainId, ledger: D.ledger };
 let authCache = null;
 const authorities = async () => {
   if (authCache && Date.now() - authCache.at < 60_000) return authCache.value;
-  const value = await readAuthorities(pub, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0) });
+  const value = await readAuthorities(pub, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0), index: IDX });
   authCache = { at: Date.now(), value };
   return value;
 };
-const agent = createAgent({ store, client: pub, domains, receiptSigner, authorities, fromBlock: BigInt(D.deployedAtBlock ?? 0) });
+const agent = createAgent({ store, client: pub, domains, receiptSigner, authorities, fromBlock: BigInt(D.deployedAtBlock ?? 0), index: IDX });
 
 // ───────────────────────── 鏈上交易（只有營運 Safe 的入出金確認） ─────────────────────────
 
@@ -279,7 +282,7 @@ function manageSimulation(cfg) {
 /// 出金請求進了承諾之後，由營運 Safe 確認出金（公司自有資金匯回公司帳戶）。待出金全部確認才算收回完成。
 async function settleRecall(state) {
   if (!state.recall) return;
-  const commits = await readCommitments(pub, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0) });
+  const commits = await readCommitments(pub, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0), index: IDX });
   const last = commits.at(-1);
   if (last) {
     const snap = snapshotAt(store.read(), last);

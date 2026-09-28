@@ -212,6 +212,20 @@ npm run ledger:verify               # 查核者模式：重播全部，逐期比
 
 送出前的查核任何一項不過就不送——那代表帳本被動過、或有簽章在收單當時沒有授權。
 
+**每小時的提交用快速模式**：更早的各期逐期比對 `logRoot`（事件改一個位元就對不上），最後一期已上鏈的承諾與這一期完整重算，
+簽章只重驗最後兩期（更早的在提交那一期時驗過）。帳本一年八千多期，每一期都重建樹的話每小時要跑好幾分鐘。
+`--full` 強制完整重算；**`--verify` 永遠是完整查核**（直接讀鏈、不用任何快取、每一筆簽章都重驗）。
+
+### 鏈上事件的增量索引（`web/data/chain-index/`）
+
+承諾、授權清單、入出金確認、CAFECA 金鑰事件、Timelock 排程，讀過的區塊段記在 `web/data/chain-index/*.json`，
+網站與各個工具（提交、`npm run fiat`、做市、模擬器、發布）下一次只向鏈上讀新的區塊。比最新區塊舊 12 塊以上的才寫進檔案，
+更新的那一段每次重讀。鍵含鏈、合約與部署時間，換部署自動作廢；檔案壞了或刪掉，下一次從部署區塊重讀一次就回來了。
+查核（`--verify`）與監理鏡像的重播不用它。不想用：`npm run ledger:commit -- --no-index`。
+
+公告欄、行情、各國統計等「整份帳本掃一遍」的結果依帳本 head 快取（沒有新事件就不重算），
+`/api/bulletin` 每一類只回最新 `limit` 筆（預設 200，`counts` 是總數）。
+
 ### 發布與監理鏡像
 
 ```bash
@@ -339,7 +353,7 @@ forge test                                   # 34：帳本合約、記帳 TWD、
 cd web
 npm run check:boundary                       # 前端沒有直接連節點
 npm run check:api-envelope                   # 每支 API 都走制式信封與錯誤碼
-npm run test:ledger                          # 24：引擎規則、重播、雜湊鏈、出金請求／退回／確認
+npm run test:ledger                          # 26：引擎規則、重播、雜湊鏈、出金請求／退回／確認、帳本檔增量讀取、鏈上事件索引
 npm run test:cafeca                          # 23：登入 nonce、SignIn digest、委託單 EIP-712、設定檔解析
 npm run test:keys && npm run test:mm         # 金鑰來源、做市策略
 npm run test:sealed                          # 11：個人資料加密、AAD、換金鑰、data:protect 遷移
@@ -384,6 +398,7 @@ npm run test:ledger-write
 | 存身分申請或收款帳戶時 `DATA_KEY_MISSING` | 外部鏈上沒設 `DATA_KEY`。`bash script/bootstrap.sh keys` 產生後重啟網站 |
 | `DATA_KEY_MISMATCH`「加密的個人資料解不開」 | 換了 `DATA_KEY` 卻沒把舊的放進 `DATA_KEY_PREVIOUS`。放回去、重啟，再 `npm run data:protect -- --rekey` |
 | 前端報 `0x` 開頭的八位十六進位 | `web/lib/error-abi.ts` 沒跟上合約：`cd web && npm run gen:errors` |
+| 懷疑鏈上事件的索引不對（例如節點曾經回報錯誤的資料） | 刪掉 `web/data/chain-index/`，下一次整份重讀；`npm run ledger:verify` 本來就不用它 |
 | 重新部署後畫面有資料但對不上 | `web/data/` 是舊部署的。`cd web && npm run data:reset`（搬到 `data.bak-<時間戳>`，不是刪除） |
 
 **shell 腳本的坑**：變數展開後面接中文字一定要用 `${VAR}`——macOS 內建的 bash 3.2 會把後面的多位元組字元當成識別字的一部分，

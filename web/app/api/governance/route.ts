@@ -3,7 +3,8 @@ import { accessControlAbi, safeViewAbi, timelockAbi } from "@/lib/abis";
 import { deployment, publicClient } from "@/lib/server/chain";
 import { requireRole } from "@/lib/server/roles";
 import { handleError, ok } from "@/lib/server/api";
-import { readAuthorities } from "@/lib/ledger/chain";
+import { getLogsPaged, readAuthorities } from "@/lib/ledger/chain";
+import { chainIndex } from "@/lib/server/fingerprint";
 import { thresholdAt } from "@/lib/ledger/authorities";
 import { openProposals } from "@/lib/server/ledger/write";
 
@@ -26,7 +27,9 @@ export async function GET() {
       publicClient.readContract({ address: d.timelock, abi: timelockAbi, functionName: "getMinDelay" }),
     ]);
     const timelockOps = async () => {
-      const scheduled = await publicClient.getLogs({ address: d.timelock, event: timelockAbi[3], fromBlock: BigInt(d.deployedAtBlock ?? 0) });
+      // 分段讀（Boltchain 一次最多 10,000 塊），經過增量索引
+      const scheduled = await getLogsPaged(publicClient, { fromBlock: BigInt(d.deployedAtBlock ?? 0), index: chainIndex() },
+        (fromBlock, toBlock) => publicClient.getLogs({ address: d.timelock, event: timelockAbi[3], fromBlock, toBlock }), "timelock-scheduled");
       return Promise.all(scheduled.map(async (l) => {
         const id = l.args.id!;
         const [st, ts] = await Promise.all([
@@ -41,7 +44,7 @@ export async function GET() {
     const ledger = d.ledger;
     const COMMITTER = keccak256(toBytes("COMMITTER_ROLE"));
     const [natOwners, natThreshold, opOwners, opThreshold, delay] = await common();
-    const auth = await readAuthorities(publicClient, ledger, { fromBlock: BigInt(d.deployedAtBlock ?? 0) });
+    const auth = await readAuthorities(publicClient, ledger, { fromBlock: BigInt(d.deployedAtBlock ?? 0), index: chainIndex() });
     const head = await publicClient.getBlockNumber({ cacheTime: 0 });
     const tlRoles = { proposer: await has(d.timelock, PROPOSER, d.nationalSafe), executor: await has(d.timelock, EXECUTOR, d.nationalSafe), canceller: await has(d.timelock, CANCELLER, d.nationalSafe) };
     return ok({

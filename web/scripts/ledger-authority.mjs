@@ -33,9 +33,12 @@ const D = JSON.parse(fs.readFileSync(process.env.DEPLOYMENT_FILE ?? path.resolve
 if ((D.ledgerVersion ?? 0) < 3) { console.error("部署檔不是目前版本的帳本（需要 ledgerVersion 3：新台幣入出金版）。請重新部署"); process.exit(1); }
 const domains = { chainId, ledger: D.ledger };
 const DATA = process.env.DATA_DIR ?? path.resolve(process.cwd(), "data");
+// 鏈上事件的增量索引（web/data/chain-index），和網站共用
+const { deploymentIndex } = await import("../lib/ledger/logindex.ts");
+const IDX = deploymentIndex({ dataDir: DATA, chainId, ledger: D.ledger, deployedAt: D.deployedAt, local: chainId === 31337 || chainId === 1337 });
 const LEDGER_DIR = process.env.LEDGER_DIR ?? path.join(DATA, "ledger");
 const now = () => pub.getBlockNumber({ cacheTime: 0 });
-const auth = () => readAuthorities(pub, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0) });
+const auth = () => readAuthorities(pub, D.ledger, { fromBlock: BigInt(D.deployedAtBlock ?? 0), index: IDX });
 const print = (p, progress) => console.log(`${p.id}  ${p.kind.padEnd(14)} ${p.role.padEnd(10)} ${p.status.padEnd(9)} ${progress ? `${progress.collected}/${progress.required}` : ""}  ${p.note}`);
 
 try {

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { CHAIN_ID, deployment } from "./chain";
+import { deploymentIndex } from "@/lib/ledger/logindex";
 
 /// 部署指紋：web/data/ 裡的紀錄是用「帳戶地址」當鍵的，而地址是合約部署的產物。
 /// 鏈重開、換鏈、或 factory 重新部署之後，那些鍵指向的帳戶在新鏈上並不存在，
@@ -100,4 +101,10 @@ export function assertDataFresh(): void {
 
 export function isStaleData(e: unknown): e is StaleDataError {
   return e instanceof StaleDataError || (e instanceof Error && e.name === "StaleDataError");
+}
+
+/// 鏈上事件的增量索引（lib/ledger/logindex.ts）：放在 web/data/chain-index，換部署就自動作廢。
+export function chainIndex() {
+  const d = deployment();
+  return deploymentIndex({ dataDir: DATA_DIR, chainId: CHAIN_ID, ledger: d.ledger!, deployedAt: d.deployedAt, local: CHAIN_ID === 31337 || CHAIN_ID === 1337 });
 }
