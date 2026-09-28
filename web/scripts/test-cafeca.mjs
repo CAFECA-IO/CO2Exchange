@@ -121,6 +121,29 @@ test("每一個欄位都進雜湊——少算一個就是可以被搬用的簽�
   }
 });
 
+test("SignIn 有第八個欄位 channel（CAFECA README）：型別字串與錢包一致", async () => {
+  // 不靠 digest.ts：照 README 的型別字串自己算一次 EIP-712，兩邊必須相同
+  const { keccak256, toBytes, encodeAbiParameters, hashDomain, concat } = await import("viem");
+  const TYPE = "SignIn(string domain,string uri,string nonce,uint256 issuedAt,uint256 expiresAt,string statement,string claims,string channel)";
+  const m = { ...base, channel: "" };
+  const h = (x) => keccak256(toBytes(x));
+  const structHash = keccak256(encodeAbiParameters(
+    ["bytes32", "bytes32", "bytes32", "bytes32", "uint256", "uint256", "bytes32", "bytes32", "bytes32"].map((type) => ({ type })),
+    [h(TYPE), h(m.domain), h(m.uri), h(m.nonce), m.issuedAt, m.expiresAt, h(m.statement), h(m.claims), h(m.channel)],
+  ));
+  const sep = hashDomain({
+    domain: { name: "CAFECA Sign-In", version: "1", chainId: 8018, verifyingContract: ACCOUNT },
+    types: { EIP712Domain: [{ name: "name", type: "string" }, { name: "version", type: "string" }, { name: "chainId", type: "uint256" }, { name: "verifyingContract", type: "address" }] },
+  });
+  assert.equal(signInDigest(8018, ACCOUNT, m), keccak256(concat(["0x1901", sep, structHash])));
+});
+
+test("channel 進雜湊：空字串和沒有這個欄位（舊版錢包）是不同的 digest，換通道也換 digest", () => {
+  const withEmpty = signInDigest(8018, ACCOUNT, { ...base, channel: "" });
+  assert.notEqual(withEmpty, signInDigest(8018, ACCOUNT, base));
+  assert.notEqual(withEmpty, signInDigest(8018, ACCOUNT, { ...base, channel: "ch_123" }));
+});
+
 console.log("委託單 EIP-712");
 
 const BANK = "0x3333333333333333333333333333333333333333";

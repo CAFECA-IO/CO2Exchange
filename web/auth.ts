@@ -42,7 +42,11 @@ providers.push(
       // 本站發的、有沒有用過；這裡驗的是「是不是發給你的」。少了這一道，
       // 一組在別處取得的有效回應可以從任何瀏覽器送進來。
       const bound = (await cookies()).get(NONCE_COOKIE)?.value;
-      if (!bound || bound !== res?.message?.nonce) return null;
+      if (!bound || bound !== res?.message?.nonce) {
+        // 最常見的是按了兩次登入（第二次換發了 nonce，第一個視窗簽的是舊的）或 cookie 被擋
+        console.warn("[cafeca] 登入驗證失敗：", bound ? "回應的 nonce 不是這個瀏覽器最近拿到的那一個" : "瀏覽器沒有帶 nonce cookie");
+        return null;
+      }
 
       try {
         const u = await verifySignIn(res);

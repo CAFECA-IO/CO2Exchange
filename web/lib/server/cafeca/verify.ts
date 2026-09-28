@@ -32,6 +32,8 @@ const recoveryAbi = parseAbi(["function isPending(address) view returns (bool)"]
 export type WireMessage = {
   domain: string; uri: string; nonce: string;
   issuedAt: number; expiresAt: number; statement: string; claims: string;
+  /// SignIn 的第八個欄位（CAFECA README）。舊版錢包沒有。
+  channel?: string;
 };
 
 export type SignInResponse = {
@@ -143,6 +145,8 @@ export async function verifySignIn(res: SignInResponse): Promise<CafecaUser> {
     expiresAt: BigInt(expiresAt),
     statement: String(m!.statement ?? ""),
     claims: String(m!.claims ?? ""),
+    // 有這個欄位就照原樣進雜湊（空字串也算）；沒有才是舊版的七個欄位
+    ...(m!.channel !== undefined ? { channel: String(m!.channel) } : {}),
   });
 
   const signature = res.signature;
