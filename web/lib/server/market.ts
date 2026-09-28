@@ -4,6 +4,7 @@ import { creditAbi, erc20Abi, kycRegistryAbi, listingAbi, poolAbi, poolManagerAb
 import { errorAbi } from "@/lib/error-abi";
 import { deployment, publicClient } from "./chain";
 import { countryCode, hasV4 } from "@/lib/deployment";
+import { tagOf, type ParticipantTag } from "./mm";
 
 /// v4 的價格上下界。方向只看 zeroForOne，與精準輸入／輸出無關。
 const MIN_SQRT = 4295128739n;
@@ -14,6 +15,8 @@ export type Order = {
   project: { name: string; methodology: string; location: string }; vintageYear: number;
   /// 核發國（ISO 3166-1 alpha-2）與機制名稱。決定買到之後能拿來做什麼。
   country: string; scheme: string; domestic: boolean;
+  /// 平台做市（mm）或模擬人物（sim）的掛單。一般使用者為 null。
+  tag: ParticipantTag | null;
 };
 
 /// SKIP_V4 部署時回 null —— 呼叫端據此隱藏 v4 相關 UI。
@@ -100,6 +103,7 @@ export async function listOrders(limit = 60, maxScan = 400): Promise<Order[]> {
         pricePerTonne: o.pricePerTonne.toString(), minFillKg: Number(o.minFillKg),
         project: { name: p.name, methodology: p.methodology, location: p.location }, vintageYear: b.vintageYear,
         country: countryCode(p.country), scheme: p.scheme, domestic: countryCode(p.country) === "TW",
+        tag: tagOf(o.seller),
       });
     }
   }
@@ -115,6 +119,7 @@ export type Bid = {
   remainingKg: number;
   pricePerTonne: string;
   minFillKg: number;
+  tag: ParticipantTag | null;
 };
 
 /// 買單側。比賣單簡單得多——買單只帶核發國，不牽涉批次與專案，
@@ -144,6 +149,7 @@ export async function listBids(limit = 60, maxScan = 400): Promise<Bid[]> {
         bidId: id, buyer: b.buyer, country: countryCode(b.country),
         remainingKg: Number(b.remainingKg), pricePerTonne: b.pricePerTonne.toString(),
         minFillKg: Number(b.minFillKg),
+        tag: tagOf(b.buyer),
       });
     }
   }

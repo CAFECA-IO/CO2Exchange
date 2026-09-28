@@ -7,6 +7,7 @@ import type { Custody } from "@/lib/server/reserve";
 import { fetchJson } from "@/lib/client/fetchJson";
 import { BankSolvency } from "@/components/BankSolvency";
 import { useCash } from "@/components/AccountProvider";
+import { MarketMakerDisclosure } from "@/components/MarketMakerDisclosure";
 
 /// 託管與資產稽核揭露。
 ///
@@ -199,6 +200,8 @@ export default function CustodyPage() {
           )}
         </>
       )}
+
+      <MarketMakerDisclosure />
     </div>
   );
 }

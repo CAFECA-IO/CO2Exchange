@@ -536,6 +536,46 @@ WantedBy=multi-user.target
 bash script/demo-box.sh status
 ```
 
+### 後台做市
+
+市場要有人隨時報價，買方與賣方才找得到對手。平台以自有資金設一個**做市帳戶**，
+在參考價兩側掛買單與賣單；它由一支常駐程式執行，管理員在 **/admin →「後台做市」** 控制。
+
+```bash
+cd web && npm run mm                  # 前景跑，先確認設定沒問題
+bash script/mm-service.sh install     # 裝成常駐服務（macOS launchd／Linux systemd），當掉會自己重啟
+bash script/mm-service.sh logs
+```
+
+**做市的邊界（寫在程式裡，不是靠自律）：**
+
+| 規則 | 為什麼 |
+|---|---|
+| 只被動報價，不主動吃任何人的單 | 做市是提供對手，不是跟使用者搶單 |
+| 不與平台控制的帳戶成交（營運金鑰、模擬人物、其他做市帳戶） | 平台自己跟自己成交是**製造成交量**，在正式市場屬於虛偽交易。被動報價擋不住別人來吃，所以另一半在模擬器那一側：它載入掛單簿時就看不見做市帳戶的單 |
+| 買價低於簿子上最佳賣價、賣價高於最佳買價 | 不製造交叉的簿子 |
+| 參考價只用成交價與**非平台**的報價 | 拿自己的單決定自己的價是自我參照 |
+| 做市與營運金鑰的單在掛單簿上標「平台做市」「平台自營」，揭露頁列出地址與規則 | 市場參與者有權知道對手裡哪些是平台自己 |
+
+**風控參數**（都在 /admin 調，下一輪生效）：撥款上限（累計撥款不超過它；**虧掉的不會自動補**，
+否則停損沒有意義）、持有部位上限、單筆上限、每側檔數、價差與每檔加寬、報價上下限、
+單日停損（台北時間；碰到就撤掉全部報價並停下，要人按「恢復」）。最內層半邊價差要大於
+交易手續費，否則每一次賣出成交都是虧損——狀態區會警告。
+
+**收回資金**：撤掉所有報價，把做市帳戶的結算幣全部轉回營運金鑰；持有的碳權留在做市帳戶。
+
+**金鑰與權限**：做市帳戶的助記詞在 repo 根目錄的 `.mm.env`（第一次跑時產生，權限 600，
+已在 `.gitignore`），**網站不讀它**——網站只寫 `web/data/mm/config.json`、讀 `status.json`，
+不送任何做市交易。撥款與 gas 從 `DEPLOYER_PK`（沒有就 `RELAYER_PK`）出，做市帳戶的身分登錄
+由 `IDENTITY_VERIFIER_PK` 簽（法人、身分雜湊標明是平台做市帳戶）。Boltchain 上 TWDC 鑄不出來，
+所以 `DEPLOYER` 要先有 TWDC，撥款才撥得出去。
+
+**模擬交易（僅測試鏈）**：同一頁可以開「模擬交易」，常駐程式會另起一個模擬器子行程讓虛擬人物
+彼此買賣（持續模式；年度額度改成每「一年份的輪數」重置——預設每輪 6 小時、1,460 輪算一年——不會一小時就把市場跑乾）。只准在
+`SIMULATION_CHAINS`（預設 `31337,1337,8018`）列出的鏈上開，**網站與常駐程式各擋一次**；
+正式鏈不要放進這個清單。開著的時候每一頁頂端有「測試環境」橫幅，模擬人物的單標「模擬」。
+紀錄在 `web/data/mm/simulation.log`。
+
 ---
 
 ## 六、未來怎麼更新
@@ -1059,6 +1099,11 @@ creation bytecode 直接 CREATE —— 官方版本是 solc 0.7.6 編的，本�
 | `seed` / `simulate` 報 `invalid private key, expected hex or 32 bytes, got string` | shell 裡有一個不是私鑰的同名變數（常見是照舊文件 `export DEPLOYER_PK=0x…` 留下的佔位字），蓋過了 `web/.env.local`。`unset DEPLOYER_PK RELAYER_PK` 再跑；新版會直接說是哪一個變數 |
 | 登入後第一筆 KYC 註冊 `InvalidAttestation`；核發、憑證文件雜湊也失敗 | 角色授給了 deployer 而不是 `web/.env.local` 裡那幾把服務金鑰。`bash script/bootstrap.sh roles` 看哪一行 ✗。部署完 deployer 已放棄 admin，補授要走 Timelock；還沒有資料的話重跑 `bootstrap.sh deploy` 最快 |
 | 外部鏈 `seed` 跑完只有核發與掛單、沒有成交 | TWDC 本站鑄不出來，人物帳戶的入金是從 `DEPLOYER` 的 TWDC 餘額轉的。先把測試用 TWDC 轉到 `DEPLOYER` 地址 |
+| /admin「後台做市」顯示「常駐程式沒有回應」 | `npm run mm` 沒在跑或當掉了。`bash script/mm-service.sh status` / `logs`。狀態檔不會自己變舊，所以畫面以心跳判斷 |
+| 做市「已停止報價」 | 碰到單日停損，或按過「收回資金」。原因寫在狀態區；確認後按「恢復」 |
+| 做市一直只有買單、沒有賣單 | 正常：一開始只有現金，要等有人賣給它的買單、有了庫存才會掛賣單 |
+| 撥款失敗「營運金鑰的結算幣不夠」 | TWDC 鑄不出來，要先轉到 `DEPLOYER` 地址 |
+| 開不了模擬交易（FORBIDDEN） | 這條鏈不在 `SIMULATION_CHAINS`。這是刻意的：正式市場不可以有平台自己的虛擬成交 |
 | `govern.sh status` 印出 `does not have any code` | 這個部署沒有 v4（hook / poolManager / router 是 0），屬正常。已修成跳過並標示「v4=未部署」 |
 | 重新部署後畫面有資料但對不上鏈 | `web/data/` 的舊紀錄，見下 |
 | 磁碟莫名其妙滿了 | `~/.foundry/anvil/tmp/` 的歷史狀態，見[建立模擬資料](#建立模擬資料) |

@@ -5,6 +5,7 @@ import { useAccount, useCash } from "@/components/AccountProvider";
 import { Button, Card, Field, Notice, fmtKg, inputCls } from "@/components/ui";
 import { PURPOSE_LABEL, TIER_LABEL, flagOf } from "@/lib/deployment";
 import { fetchJson, postJson } from "@/lib/client/fetchJson";
+import { MarketMakerPanel } from "@/components/admin/MarketMakerPanel";
 
 type KycReq = { id: string; account: string; tier: number; idNumberMasked: string; name: string; submittedBy: string; status: string; reason?: string; txHash?: string; createdAt: string; decidedBy?: string };
 type Cert = { certId: number; batchId: number; amountKg: number; beneficiary: string; purpose: number; retiredAt: number; owner: string; pdfHash: string | null; onchainHash: string | null; anchored: boolean };
@@ -16,7 +17,7 @@ type Gov = {
   timelock: { address: string; delay: number; proposer: boolean; executor: boolean; canceller: boolean; operations: { id: string; target: string; data: string; state: string; readyAt: number; txHash: string }[] };
 };
 
-const tabs = ["KYC 審核", "憑證文件", "費率設定", "治理狀態"] as const;
+const tabs = ["KYC 審核", "憑證文件", "費率設定", "後台做市", "治理狀態"] as const;
 
 /// 定義在元件內部的話，每次 render 都是一個新的元件型別，React 會把整棵子樹卸載重建。
 function Bool({ v }: { v: boolean | null }) {
@@ -84,7 +85,7 @@ export default function AdminPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2">{tabs.map((t) => <button key={t} onClick={() => setTab(t)} className={`rounded-lg px-3 py-1.5 text-sm ${tab === t ? "bg-tide text-white" : "border border-ink-500"}`}>{t}</button>)}</div>
+      <div className="flex flex-wrap gap-2">{tabs.map((t) => <button key={t} onClick={() => setTab(t)} className={`rounded-lg px-3 py-1.5 text-sm ${tab === t ? "bg-tide text-white" : "border border-ink-500"}`}>{t}</button>)}</div>
       {msg && <Notice kind={msg.kind}>{msg.text}</Notice>}
 
       {tab === "KYC 審核" && (
@@ -216,6 +217,8 @@ export default function AdminPage() {
           )}
         </Card>
       )}
+
+      {tab === "後台做市" && <MarketMakerPanel />}
 
       {tab === "治理狀態" && (gov ? (
         <div className="grid gap-4 md:grid-cols-2">

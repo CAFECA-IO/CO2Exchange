@@ -12,3 +12,4 @@ Claude outputs/
 
 # bootstrap.sh 產生的治理 Safe owner 私鑰。絕對不要提交。
 .governance*.env
+.mm*.env

@@ -7,6 +7,7 @@ import { useAccount } from "@/components/AccountProvider";
 import { AccountGate } from "@/components/AccountGate";
 import { AgreementCheck, useAgreementGate } from "@/components/AgreementGate";
 import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/components/ui";
+import { ParticipantBadge } from "@/components/ParticipantBadge";
 import { bidWriteAbi, erc1155ApprovalAbi, erc20Abi, listingAbi, listingWriteAbi, poolAbi, routerAbi } from "@/lib/abis";
 import { flagOf } from "@/lib/deployment";
 import { type Call } from "@/lib/client/cafeca";
@@ -28,9 +29,10 @@ type Order = {
   orderId: number; seller: string; batchId: number; remainingKg: number; pricePerTonne: string;
   minFillKg: number; project: { name: string; methodology: string; location: string }; vintageYear: number;
   country: string; scheme: string; domestic: boolean;
+  tag?: "mm" | "sim" | "op" | null;
 };
 type Batch = { batchId: number; kg: number; vintageYear: number; project: string; country: string; scheme: string };
-type Bid = { bidId: number; buyer: Address; country: string; remainingKg: number; pricePerTonne: string; minFillKg: number };
+type Bid = { bidId: number; buyer: Address; country: string; remainingKg: number; pricePerTonne: string; minFillKg: number; tag?: "mm" | "sim" | "op" | null };
 type Market = {
   orders: Order[]; bids: Bid[]; spotPricePerTonne: number | null; listingFeeBps: number;
   poolKey: { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address } | null;
@@ -396,6 +398,7 @@ export default function TradePage() {
                             <CountryTag code={o.country} />
                             {o.project.name}
                             {mine && <span className="rounded bg-ink-600 px-1.5 py-0.5 text-[10px] text-ink-300">我的掛單</span>}
+                            {!mine && <ParticipantBadge tag={o.tag} />}
                           </span>
                           <span className="block truncate text-xs text-ink-300">{o.scheme} · {o.vintageYear} · 批次 #{o.batchId}</span>
                         </span>
@@ -439,6 +442,7 @@ export default function TradePage() {
                                 <span className="flex items-center gap-1.5 truncate text-ink-50">
                                   {b.country ? <CountryTag code={b.country} /> : <span className="rounded bg-ink-600 px-1.5 py-0.5 text-[10px] text-ink-300">不限核發國</span>}
                                   {mine && <span className="rounded bg-ink-600 px-1.5 py-0.5 text-[10px] text-ink-300">我的買單</span>}
+                                  {!mine && <ParticipantBadge tag={b.tag} />}
                                 </span>
                                 {b.minFillKg > 0 && <span className="block truncate text-xs text-ink-300">最少成交 {fmtKg(b.minFillKg)}</span>}
                               </span>

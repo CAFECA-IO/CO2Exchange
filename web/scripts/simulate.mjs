@@ -81,6 +81,18 @@ const TICK = parseDuration(arg("tick", "6h"), 6 * 3600);
 /// 縮時模式下每一輪之間實際等待幾秒。0 = 全速跑完（幾分鐘內結束，K 線會擠在一個點上）；
 /// 設大一點並讓它在背景跑好幾天，橫軸才拉得開。
 const PACE = Number(arg("pace", 0));
+/// 不跟這些地址成交（逗號分隔）。後台做市程式啟動模擬時會把做市帳戶放進來：
+/// 模擬人物是平台控制的帳戶，它們跟做市帳戶成交就是平台自己跟自己交易——製造成交量。
+const AVOID = new Set(String(arg("avoid", process.env.SIM_AVOID ?? "")).split(",").map((a) => a.trim().toLowerCase()).filter(Boolean));
+
+/// 持續模式的「額度年」。
+///
+/// 人物的年度採購額度與專案的年度核發上限是照**一年約 TICKS_PER_YEAR 輪**設計的（每輪 TICK）。
+/// 持續模式每 --interval 秒就跑一輪，比設計快上百倍，用日曆年重置的話一個小時就把全年額度
+/// 用完，之後市場只剩做市商——看起來像停了。所以持續模式下改成每 TICKS_PER_YEAR 輪算一年。
+let CONTINUOUS = false;
+const TICKS_PER_YEAR = Math.max(1, Math.round((365 * 86400) / TICK));
+const quotaYear = (now) => (CONTINUOUS ? `c${Math.floor(tickNo / TICKS_PER_YEAR)}` : new Date(now * 1000).getUTCFullYear());
 
 // ───────────────────────── 人物 ─────────────────────────
 
@@ -281,7 +293,15 @@ async function send(w, params, needResult = false) {
   if (w.nonce < 0) w.nonce = await pub.getTransactionCount({ address: w.account.address });
   let request = { ...params, account: w.account }, result;
   if (needResult) ({ request, result } = await pub.simulateContract({ ...params, account: w.account }));
-  const hash = await w.client.writeContract({ ...request, nonce: w.nonce });
+  let hash;
+  try {
+    hash = await w.client.writeContract({ ...request, nonce: w.nonce });
+  } catch (e) {
+    // 同一把金鑰可能也被別的程式用著（後台做市程式從營運金鑰撥款）。本地記的 nonce
+    // 一旦落後，之後每一筆都會用同一個過期的號碼失敗——下一筆改問鏈上。
+    if (/nonce/i.test(String(e.shortMessage ?? e.message))) w.nonce = -1;
+    throw e;
+  }
   w.nonce += 1;
   const rc = await pub.waitForTransactionReceipt({ hash, retryCount: 3 });
   if (rc.status !== "success") throw new Error(`交易失敗 ${hash}`);
@@ -361,7 +381,7 @@ async function loadMarket() {
   const firstOrder = Number(nextOrder) > 400 ? Number(nextOrder) - 400 : 1;
   for (let id = firstOrder; id < Number(nextOrder); id++) {
     const o = await pub.readContract({ address: D.listing, abi: listingAbi, functionName: "orderOf", args: [BigInt(id)] });
-    if (o.active && o.remainingKg > 0n) {
+    if (o.active && o.remainingKg > 0n && !AVOID.has(o.seller.toLowerCase())) {
       orders.set(id, {
         seller: o.seller, batchId: Number(o.batchId), remainingKg: Number(o.remainingKg),
         price: o.pricePerTonne, minFillKg: Number(o.minFillKg),
@@ -373,7 +393,7 @@ async function loadMarket() {
   const firstBid = Number(nextBid) > 400 ? Number(nextBid) - 400 : 1;
   for (let id = firstBid; id < Number(nextBid); id++) {
     const b = await pub.readContract({ address: D.listing, abi: listingAbi, functionName: "bidOf", args: [BigInt(id)] });
-    if (b.active && b.remainingKg > 0n) {
+    if (b.active && b.remainingKg > 0n && !AVOID.has(b.buyer.toLowerCase())) {
       bids.set(id, {
         buyer: b.buyer,
         country: Buffer.from(b.country.slice(2), "hex").toString("utf8").replace(/\0/g, ""),
@@ -481,7 +501,13 @@ async function ensureGas(w) {
   }
   // 營運金鑰的 nonce 走它自己那一份（opWallet），不要和人物帳戶搶。
   if (opWallet.nonce < 0) opWallet.nonce = await pub.getTransactionCount({ address: operator.address });
-  const hash = await opClient.sendTransaction({ to: addr, value: GAS_TOPUP, nonce: opWallet.nonce });
+  let hash;
+  try {
+    hash = await opClient.sendTransaction({ to: addr, value: GAS_TOPUP, nonce: opWallet.nonce });
+  } catch (e) {
+    if (/nonce/i.test(String(e.shortMessage ?? e.message))) opWallet.nonce = -1;
+    throw e;
+  }
   opWallet.nonce += 1;
   await pub.waitForTransactionReceipt({ hash });
   return w;
@@ -578,7 +604,7 @@ async function actIssue(p, now, rng) {
   }
   // 一個專案一年核發不出比它實際減下來更多的量。沒有這條限制，模擬器會無限印額度，
   // 掛單簿變成一面永遠填不完的牆——那不是市場，那是水龍頭。
-  const year = new Date(now * 1000).getUTCFullYear();
+  const year = quotaYear(now);
   if (p.issuedYear !== year) { p.issuedYear = year; p.issuedTonnes = 0; }
   const remainTonnes = p.projectScaleTonnes - p.issuedTonnes;
   if (remainTonnes < 200) return false;
@@ -692,7 +718,7 @@ const foreignToPersona = (m, p) => m.country !== p.country;
 /// 為什麼要有這個：只有賣單的簿子是半邊的市場。想買的人只能吃現有的價，
 /// 沒有地方表達「我願意出這個價、要這麼多」。真實的交易所兩邊都有掛單。
 async function actPlaceBid(p, now, rng) {
-  const year = new Date(now * 1000).getUTCFullYear();
+  const year = quotaYear(now);
   if (p.buyYear !== year) { p.buyYear = year; p.boughtThisYear = 0; }
   const quota = p.role === "maker" ? Infinity : p.annualNeedTonnes * 1.3;
   const left = quota - (p.boughtThisYear ?? 0);
@@ -804,7 +830,7 @@ async function actBuy(p, now, rng, date) {
   // 年度採購預算。沒有這條，一個履約對象會整年不停地買——他手上的額度被註銷掉之後
   // 又「不夠了」，於是再買，一年下來買進的量是他實際需求的十幾倍，市場就被他抽乾。
   // 實際上買多少是年初就編好的：需求量加一點緩衝，買夠了就收手。
-  const year = date.getUTCFullYear();
+  const year = quotaYear(now);
   if (p.buyYear !== year) { p.buyYear = year; p.boughtThisYear = 0; }
   const quota = p.role === "maker" ? Infinity : p.annualNeedTonnes * 1.3;
   if (p.boughtThisYear >= quota) return false;
@@ -1152,15 +1178,29 @@ who("對帳報告", K.reporter, reporter);
 console.log(`  結算幣    ${CASH_MINTABLE ? "可鑄（MockTWD）" : `不可鑄；營運金鑰持有 ${(Number(cash.get(operator.address) ?? 0n) / 1e6).toLocaleString()}`}\n`);
 
 // 人物名冊寫成檔案，介面上看到誰在買賣時可以對照
-const rosterPath = path.resolve(process.cwd(), "data", "sim-personas.json");
+const rosterPath = path.join(process.env.DATA_DIR ?? path.resolve(process.cwd(), "data"), "sim-personas.json");
 fs.mkdirSync(path.dirname(rosterPath), { recursive: true });
+// 這一次沒有用到、但之前跑過的人物也留在名冊裡（標 active: false）。
+// 名冊同時是「哪些地址是模擬人物」的依據：網站靠它在掛單簿上標「模擬」，做市程式靠它
+// 避開平台自己的帳戶。上一次跑 30 人、這一次跑 10 人的話，另外 20 人的掛單還在簿子上，
+// 名冊只寫這次的 10 人，那 20 人的單就會被當成真實使用者。
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const current = personas.map(({ account, ...p }) => ({ ...p, active: true }));
+let previous = [];
+try {
+  const old = JSON.parse(fs.readFileSync(rosterPath, "utf8"));
+  const have = new Set(current.map((p) => p.address.toLowerCase()));
+  previous = (old.personas ?? []).filter((p) => p.address && !have.has(p.address.toLowerCase())).map((p) => ({ ...p, active: false }));
+} catch { /* 第一次跑 */ }
 fs.writeFileSync(rosterPath, JSON.stringify({
   note: "模擬用虛構人物，與任何真實公司或個人無關",
   seed: SEED,
+  chainId,
   generatedAt: new Date().toISOString(),
-  // account 是 viem 的簽章物件，序列化沒有意義（而且裡面有私鑰推導的東西）
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  personas: personas.map(({ account, ...p }) => p),
+  personas: [...current, ...previous],
+  // 人物的地址只由助記詞與 walletIndex（100 起）決定，跟這次跑幾個人無關。整段位址空間都列出來，
+  // 就算名冊曾經被別的版本覆寫過，這些地址的單也一定會被認成模擬人物。
+  addressSpace: Array.from({ length: Math.max(USERS, 100) }, (_, i) => mnemonicToAccount(MNEMONIC, { addressIndex: 100 + i }).address),
 }, null, 2));
 
 if (FROM) {
@@ -1213,6 +1253,7 @@ if (FROM) {
   console.log(`人物名冊：web/data/sim-personas.json`);
 } else {
   // ── 持續模式 ──
+  CONTINUOUS = true;
   console.log(`持續模式：每 ${INTERVAL} 秒一輪，依真實時間推進。Ctrl-C 結束。\n`);
   let stop = false;
   process.on("SIGINT", () => { stop = true; console.log("\n收到中斷，跑完這一輪就停。"); });

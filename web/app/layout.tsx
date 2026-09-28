@@ -4,6 +4,7 @@ import { AccountProvider } from "@/components/AccountProvider";
 import { Nav } from "@/components/Nav";
 import { Footer } from "@/components/Footer";
 import { Faith } from "@/components/Faith";
+import { SimulationBanner } from "@/components/SimulationBanner";
 
 export const metadata: Metadata = {
   title: { default: "TideBit-DeFi 碳權交易所", template: "%s｜TideBit-DeFi 碳權交易所" },
@@ -66,6 +67,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="flex min-h-full flex-col bg-ink-800 font-sans text-ink-50">
         <AccountProvider>
           <Nav />
+          <SimulationBanner />
           <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">{children}</main>
           <Footer />
           {/*
