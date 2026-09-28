@@ -1,14 +1,13 @@
-// 共用：瀏覽器、虛擬 passkey、登入、建帳戶、KYC（含管理員核准）
+// 共用：瀏覽器、使用者 context、開發用登入
 import { chromium } from "playwright";
 
 export const BASE = process.env.BASE_URL ?? "http://localhost:10010";
 
 /// 每一次執行給一般使用者一組新的 email。
 ///
-/// 伺服器現在記得「這個 email 綁過哪個鏈上帳戶」，並在登入時自動還原。
-/// 固定 email 因此等於跨執行共用同一個帳戶：第二次跑的 alice 會帶著上一次的
-/// 餘額與持倉開始，於是「領取 mTWD 之後餘額是 100,000」這種檢查就會爆掉——
-/// 爆的不是功能，是測試自己留下的狀態。
+/// 開發用登入從這個字串推出一個固定地址，而帳本會記得那個地址的身分、餘額與持倉。
+/// 固定字串因此等於跨執行共用同一個帳戶：第二次跑會帶著上一次的狀態開始，
+/// 「申請身分」「入金之後餘額是多少」這種步驟就會爆掉——爆的不是功能，是測試自己留下的狀態。
 /// 管理員與查驗機構不能這樣做：它們的權限是 ADMIN_ADDRESSES / VERIFIER_ADDRESSES 白名單，
 /// 而開發用登入是從這個字串推出一個固定地址，所以那兩個標籤必須維持不變。
 const RUN = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -23,209 +22,34 @@ export async function launch() {
   return chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 }
 
-/// 新的瀏覽器 context = 新的使用者（獨立 cookie 與 localStorage）+ 虛擬 authenticator
+/// 新的瀏覽器 context = 新的使用者（獨立 cookie 與 localStorage）
 export async function newUser(browser, label) {
   const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
   const page = await context.newPage();
   page.on("pageerror", (e) => console.log(`[${label} pageerror]`, e.message));
-  const cdp = await context.newCDPSession(page);
-  await cdp.send("WebAuthn.enable");
-  await cdp.send("WebAuthn.addVirtualAuthenticator", {
-    options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true },
-  });
   return { context, page, label };
 }
 
-export async function waitOk(page, text, timeout = 90_000) {
-  const okLoc = page.locator(`text=${text}`).first();
-  const errLoc = page.locator('[data-testid="notice-error"]').first();
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    // 回傳整段通知文字：像「上架批次 #123」這種通知裡帶著呼叫端要的編號，
-    // 讓它自己再去翻一次畫面只會多一個時間差。
-    if (await okLoc.isVisible().catch(() => false)) return (await okLoc.textContent())?.trim() ?? "";
-    if (await errLoc.isVisible().catch(() => false)) throw new Error(`頁面錯誤：${(await errLoc.textContent()).trim()}`);
-    await page.waitForTimeout(300);
-  }
-  if (process.env.E2E_DEBUG) {
-    await page.screenshot({ path: `/tmp/e2e-fail-${Date.now()}.png`, fullPage: true }).catch(() => {});
-    console.log("[debug body]", (await page.locator("body").innerText()).slice(0, 2500));
-  }
-  throw new Error(`timeout waiting: ${text}`);
-}
-
-/// 登入。看起來只有三行，但這裡踩過一個會間歇性失敗的坑，值得寫下來。
+/// 登入：走開發用登入（NextAuth 的 `dev` credentials，非 production 才有）。
 ///
-/// NextAuth 的 CSRF token 是在頁面載入之後**非同步**抓的。冷啟動的 context
-/// （每個 newUser 都是）如果在它回來之前就送出表單，伺服器會回 MissingCSRF，
-/// 而畫面上什麼都不會發生——測試只會說「等不到『登出』」，完全指不到原因。
-/// 整組 e2e 大約每十次會中一次，而且每次中的位置不同。
+/// 畫面上的登入只剩「以 CAFECA 登入」，那要真的 CAFECA 錢包，瀏覽器測試模擬不出來。
+/// 開發用登入從字串推出一個固定地址，交易由伺服器代簽（`devSigning`），
+/// 所以登入之後整個交易流程在畫面上照常走——走不到的只有 CAFECA 錢包那一個視窗。
 ///
-/// 所以先等那個 cookie 真的出現再送出。等不到也不要卡死：再送一次多半就成了，
-/// 第二次仍然失敗才是真的有問題。
-export async function login(page, email) {
+/// 用 context 的 request（與頁面共用 cookie）直接打 csrf → callback，不經過畫面：
+/// 這樣也沒有「表單在 CSRF token 回來之前就送出」那個間歇性的坑。
+export async function login(page, label) {
+  const req = page.context().request;
+  const { csrfToken } = await (await req.get(`${BASE}/api/auth/csrf`)).json();
+  await req.post(`${BASE}/api/auth/callback/dev`, { form: { csrfToken, address: label, json: "true" }, maxRedirects: 0 });
+  const me = await (await req.get(`${BASE}/api/me`)).json();
+  const address = me?.data?.address;
+  if (!address) throw new Error(`開發用登入失敗：${label}（伺服器要跑在非 production、且沒有關掉開發用登入）`);
   await page.goto(BASE);
-  await page.waitForFunction(() => document.cookie.includes("csrf") || !!document.querySelector("form"), null, { timeout: 15_000 }).catch(() => {});
-  const submit = async () => {
-    await page.getByPlaceholder("0x… 或 alice").fill(email);
-    await page.getByRole("button", { name: "登入", exact: true }).click();
-    return page.locator("text=登出").waitFor({ timeout: 20_000 }).then(() => true, () => false);
-  };
-  if (await submit()) return;
-  await page.goto(BASE);
-  if (await submit()) return;
-  throw new Error(`登入失敗（兩次都沒出現「登出」）：${email}`);
+  return address;
 }
 
-/// ⚠️ **這支已經不成立，會直接丟例外。**
-///
-/// 帳戶不再是本站部署的 `PasskeyAccount`，而是使用者的 CAFECA 身分合約；
-/// 交易也不再由本站的 passkey 簽字，而是透過 CAFECA 的簽章通道。
-/// 一個 Chrome 虛擬 authenticator 模擬得出 WebAuthn，模擬不出那個錢包。
-///
-/// 所以會動用到交易的 e2e（faith）需要一個 CAFECA 錢包的測試替身才能重寫。**在那之前它不會通過**，
-/// 帳本的交易流程改由 scripts/e2e-ledger-*.mjs 以開發用登入測（npm run test:ledger-write 等）。
-/// 而這裡選擇明確地失敗並說出原因，而不是讓它們在某個 selector 上逾時——
-/// 一個說不出原因的紅燈，跟沒有測試差不多。
-export async function createPasskeyAccount() {
-  throw new Error(
-    "createPasskeyAccount 已不適用：帳戶改為 CAFECA 身分合約，交易改走簽章通道。" +
-    "這些 e2e 需要 CAFECA 錢包的測試替身才能重寫（見 README「身分：以 CAFECA 登入」）。",
-  );
-}
-
-export async function applyKyc(page, tier, idNumber, name) {
-  await page.goto(`${BASE}/kyc`);
-  await page.locator("select").first().selectOption(tier === "corporate" ? "2" : "1");
-  await page.getByPlaceholder(tier === "corporate" ? "12345678" : "A123456789").fill(idNumber);
-  await page.getByPlaceholder("王小明 / 某某股份有限公司").fill(name);
-  await page.getByRole("button", { name: "驗證並綁定帳戶" }).click();
-  await waitOk(page, "申請已送出");
-}
-
-/// 管理員核准所有待審 KYC
-export async function adminApproveAllKyc(adminPage) {
-  await adminPage.goto(`${BASE}/admin`);
-  await adminPage.locator('[data-testid="kyc-row"]').first().waitFor({ timeout: 30_000 });
-  for (let i = 0; i < 10; i++) {
-    const rows = adminPage.locator('[data-testid="kyc-row"]');
-    const before = await rows.count();
-    if (before === 0) break;
-    await rows.first().getByRole("button", { name: "核准", exact: true }).click();
-    await waitOk(adminPage, "核准完成");
-    // 「核准完成」只代表 API 回來了，清單是之後才重抓的。固定睡 300ms 不夠——
-    // 慢的時候第二圈會按到同一列，伺服器回「已處理過」，測試就掛在一個
-    // **測試自己造成**的錯誤上。等列數真的變少再繼續。
-    await adminPage.waitForFunction(
-      (n) => document.querySelectorAll('[data-testid="kyc-row"]').length < n,
-      before,
-      { timeout: 30_000 },
-    );
-  }
-}
-
-export async function waitKycActive(page) {
-  await page.goto(`${BASE}/kyc`);
-  await page.locator("text=前往交易").waitFor({ timeout: 30_000 });
-}
-
-/// 勾選畫面上所有待簽的定型化契約。條文改版後會再次出現，所以每次操作前都跑一次。
-/// scope 可以是 page，也可以是對話框的 locator——確認單裡也有待簽的契約。
-export async function agreeAll(scope) {
-  const boxes = scope.locator('[data-testid^="agree-"]');
-  for (let i = 0; i < (await boxes.count()); i++) {
-    const b = boxes.nth(i);
-    if (await b.isVisible().catch(() => false) && !(await b.isChecked())) await b.check();
-  }
-}
-
-/// 交易所式掛單簿：先在左側點一筆掛單，右側「買進」面板填數量，
-/// 再在送出前的確認單上簽契約、按簽章。
-/// （2026-09-20 改版：數量改以噸為單位，下單前多一張確認單。）
-/// country 用核發國篩選（例如 "TW" = 只看國內專案），比對專案名字可靠：
-/// 專案名是模擬器隨機生出來的，回填一整年之後書上有哪些名字每次都不一樣，
-/// 用固定字串去 match 等於在賭運氣——測試掛掉的時候查半天，發現功能是好的。
-export async function buyFromBook(page, { match, country, tonnes = 1 } = {}) {
-  const buyTab = page.locator('[data-testid="tab-buy"]');
-  if (await buyTab.isVisible().catch(() => false)) await buyTab.click();
-  const limitTab = page.locator('[data-testid="mode-limit"]');
-  if (await limitTab.isVisible().catch(() => false)) await limitTab.click();
-  if (country) {
-    const chip = page.locator(`[data-testid="filter-${country}"]`);
-    await chip.waitFor({ timeout: 30_000 });
-    await chip.click();
-  }
-  const row = match
-    ? page.locator("li button", { hasText: match }).first()
-    : page.locator('li button[aria-pressed]').first();
-  await row.waitFor({ timeout: 30_000 });
-  await row.click();
-  const qty = page.getByLabel(/數量（噸/);
-  await qty.waitFor({ timeout: 10_000 });
-  await qty.fill(String(tonnes));
-  await page.locator('[data-testid="submit-buy"]').click();
-
-  const dialog = page.getByRole("dialog", { name: "確認買進" });
-  await dialog.waitFor({ timeout: 10_000 });
-  await agreeAll(dialog);
-  // 自然人買方要額外確認「不得申請註銷」（買賣契約第五條（五））
-  const ack = dialog.locator('[data-testid="natural-ack"]');
-  if (await ack.isVisible().catch(() => false)) await ack.check();
-  await dialog.getByRole("button", { name: "以 passkey 簽章買進" }).click();
-  await waitOk(page, `購買 ${tonnes.toLocaleString("zh-TW", { maximumFractionDigits: 3 })} 噸完成`);
-}
-
-/// 市價買進：切到市價 → 填數量 → 確認單。成交後會立刻拆解成具體批次。
-export async function marketBuy(page, { tonnes = 1 } = {}) {
-  await page.locator('[data-testid="tab-buy"]').click();
-  await page.locator('[data-testid="mode-market"]').click();
-  await page.locator('[data-testid="market-qty"]').fill(String(tonnes));
-  // 等實際報價回來再送出。授權金額是**從報價算的**，不是用現貨價乘一乘——
-  // 池子是曲線，成交價是沿路的平均價，薄的時候差兩成以上。
-  // 沒等到報價就送出，授權會退回用現貨估，正好重現原本那個 bug。
-  await page.locator('[data-testid="mbuy-cost"]').waitFor({ timeout: 15_000 });
-  await page.locator('[data-testid="submit-market-buy"]').click();
-  const dialog = page.getByRole("dialog", { name: "確認市價買進" });
-  await dialog.waitFor({ timeout: 10_000 });
-  await agreeAll(dialog);
-  const ack = dialog.locator('[data-testid="natural-ack"]');
-  if (await ack.isVisible().catch(() => false)) await ack.check();
-  await dialog.getByRole("button", { name: "以 passkey 簽章買進" }).click();
-  await waitOk(page, `市價買進 ${tonnes.toLocaleString("zh-TW", { maximumFractionDigits: 3 })} 噸完成`);
-}
-
-/// 在交易頁上架賣出：切到「賣出」分頁 → 數量與單價 →（必要時）進階設定 → 確認單。
-export async function sellOnBook(page, { tonnes = 1, price, usageDeadline = "2027-12-31" } = {}) {
-  await page.locator('[data-testid="tab-sell"]').click();
-  const panel = page.locator('[data-testid="sell-row"]');
-  await panel.waitFor({ timeout: 30_000 });
-  await panel.getByLabel(/數量（噸/).fill(String(tonnes));
-  if (price != null) await panel.getByLabel("單價 mTWD / 噸").fill(String(price));
-  await panel.getByRole("button", { name: /進階設定/ }).click();
-  await panel.getByLabel("使用期限").fill(usageDeadline);
-  await page.locator('[data-testid="submit-sell"]').click();
-
-  const dialog = page.getByRole("dialog", { name: "確認上架賣出" });
-  await dialog.waitFor({ timeout: 10_000 });
-  await agreeAll(dialog);
-  await dialog.getByRole("button", { name: "以 passkey 簽章上架" }).click();
-  const ok = await waitOk(page, "上架批次 #");
-  // 回傳批次編號：買方要**指名**買這一張掛單的時候，這是唯一穩定的鍵。
-  return Number(/#(\d+)/.exec(ok)?.[1]);
-}
-
-/// 註銷：在 /retire 選標的、填受益人與數量，再在確認單上簽章。
-export async function retireOnPage(page, { beneficiary, tonnes = 1 } = {}) {
-  await page.goto(`${BASE}/retire`);
-  const qty = page.getByLabel(/數量（噸/);
-  await qty.waitFor({ timeout: 30_000 });
-  await qty.fill(String(tonnes));
-  await page.getByPlaceholder("某某股份有限公司").fill(beneficiary);
-  await agreeAll(page);
-  await page.getByRole("button", { name: "註銷並取得憑證" }).click();
-
-  const dialog = page.getByRole("dialog", { name: "確認註銷" });
-  await dialog.waitFor({ timeout: 10_000 });
-  await dialog.getByRole("button", { name: "以 passkey 簽章註銷" }).click();
-  await waitOk(page, "註銷批次 #");
-}
+// 以前這裡還有建 passkey 帳戶、在畫面上填 KYC、在掛單簿上點買點賣的步驟。
+// 帳戶改為 CAFECA 身分、交易改成帳本委託之後，那些畫面與按鈕都換了；
+// 帳本的交易流程改由 scripts/e2e-ledger-*.mjs 以 API 逐項測（npm run test:ledger-write 等），
+// 這裡的瀏覽器測試只測畫面本身該守住的東西（地球、門檻畫面的韌性、費思）。

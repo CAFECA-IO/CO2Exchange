@@ -18,12 +18,13 @@ const ok = (c, m) => { if (!c) throw new Error(m); console.log("  ✓", m); };
 const STUB_PORT = 10099;
 const PORT = Number(process.env.FAITH_PORT ?? 10011);
 const BASE = `http://localhost:${PORT}`;
+/// 「沒有金鑰」那一半的受測對象：本來那個實例（npm run e2e 前先開的 dev server）
+const MAIN = process.env.BASE_URL ?? "http://localhost:10010";
 /// lib.mjs 在 import 的當下就決定 BASE，所以要**先**設環境變數再動態 import。
-/// 不這樣做的話，`applyKyc`、`waitKycActive` 這些共用步驟會跑去打 :10010——
+/// 不這樣做的話，`login` 這些共用步驟會跑去打 :10010——
 /// 那個實例上這個使用者根本沒登入，而錯誤訊息只會說某個元素等不到。
 process.env.BASE_URL = BASE;
-const { adminApproveAllKyc, applyKyc, createPasskeyAccount, launch, login, newUser, unwrap, waitKycActive, who } =
-  await import("./lib.mjs");
+const { launch, login, newUser, unwrap, who } = await import("./lib.mjs");
 
 const stub = await startStub(STUB_PORT);
 
@@ -76,9 +77,9 @@ try {
     await fetch(`${BASE}${p}`, { signal: AbortSignal.timeout(180_000) }).catch(() => {});
   }
 
-  // ── ① 沒有金鑰的那一半：本來那個 :10010 實例 ─────────────────
+  // ── ① 沒有金鑰的那一半：本來那個實例 ─────────────────
   {
-    const r = await fetch("http://localhost:10010/api/faith", {
+    const r = await fetch(`${MAIN}/api/faith`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ messages: [{ role: "user", content: "嗨" }], path: "/" }),
     });
@@ -94,19 +95,23 @@ try {
   page.setDefaultNavigationTimeout(120_000);
   admin.page.setDefaultNavigationTimeout(120_000);
 
-  await login(page, who("faith-user"));
-  const address = await createPasskeyAccount(page);
-  await applyKyc(page, "corporate", "55667788", "費思測試股份有限公司");
+  // 帳戶：開發用登入（伺服器代簽），身分與入金走 API——這支測的是費思，不是 KYC 畫面。
+  const address = await login(page, who("faith-user"));
   await login(admin.page, "admin@example.com");
-  await adminApproveAllKyc(admin.page);
-  await waitKycActive(page);
+  const call = (p, path, body) => p.evaluate(async ([path, body]) => {
+    const r = await fetch(path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {});
+    const j = await r.json();
+    if (!j.ok) throw new Error(`${path}: ${j.error?.code} ${j.error?.message ?? ""}`);
+    return j.data;
+  }, [path, body]);
+  const k = await call(page, "/api/kyc", { account: address, tier: 2, idNumber: "55667788", name: "費思測試股份有限公司" });
+  if (k.status === "pending") await call(admin.page, "/api/kyc/decide", { id: k.id, approve: true });
+  // 入金一點錢，否則確認卡上會顯示「新台幣不夠」——那也是對的，但這裡要測成交路徑。
+  await call(page, "/api/ledger", { op: "devDeposit", amount: String(500_000n * 1_000_000n) });
   console.log("✔ 測試帳戶就緒", address);
 
   await page.goto(`${BASE}/trade`);
-
-  // 領一點錢，否則確認卡上會顯示「結算幣不夠」——那也是對的，但這裡要測成交路徑。
-  await page.getByRole("button", { name: /領取測試用/ }).first().click().catch(() => {});
-  await page.waitForTimeout(3000);
+  await page.locator("text=買進與賣出").first().waitFor({ timeout: 60_000 });
 
   // 開費思
   await page.locator('[data-testid="faith-open"]').click();
@@ -124,7 +129,7 @@ try {
   const card = page.locator('[data-testid="faith-confirm"]');
   await card.waitFor({ timeout: 40_000 });
   const cardText = await card.innerText();
-  ok(/公噸/.test(cardText) && /mTWD/.test(cardText), "確認卡上有具體的數量與金額，不是「依市價」");
+  ok(/公噸/.test(cardText) && /元/.test(cardText), "確認卡上有具體的數量與金額，不是「依市價」");
   ok(/你要付/.test(cardText), "而且標出使用者實際要付多少");
 
   const before = await page.evaluate(async (a) => (await (await fetch(`/api/portfolio?account=${a}`)).json()).data, address);
@@ -136,12 +141,12 @@ try {
   await page.getByRole("button", { name: "取消" }).first().click();
   ok(!(await card.isVisible().catch(() => false)), "取消之後確認卡收起來");
 
-  // ── ③b 按下確認才真的送出（這一段會跳虛擬 passkey 並上鏈）────────
+  // ── ③b 按下確認才真的送出（開發帳戶由伺服器代簽，送進帳本拿簽收收據）────────
   await page.locator('[data-testid="faith-input"]').fill("幫我買一點台灣的額度");
   await page.keyboard.press("Enter");
   await card.waitFor({ timeout: 40_000 });
   await page.locator('[data-testid="faith-do"]').click();
-  await page.locator('[data-testid="faith-log"]').getByText(/已送出，交易 0x/).waitFor({ timeout: 90_000 });
+  await page.locator('[data-testid="faith-log"]').getByText(/已收單（帳本第 \d+ 筆/).waitFor({ timeout: 90_000 });
   const afterBuy = await page.evaluate(async (a) => (await (await fetch(`/api/portfolio?account=${a}`)).json()).data, address);
   ok(JSON.stringify(afterBuy) !== JSON.stringify(before), "按下確認之後才真的成交（持倉變了）");
   ok(!(await card.isVisible().catch(() => false)), "成交之後確認卡收起來，不會被按第二次");
@@ -179,12 +184,15 @@ try {
       return { preview: (await res.json()).data, order: o };
     });
     if (!r.skip) {
-      const paid = r.preview.rows.find((x) => x.label === "你要付")?.value ?? "";
-      const expect = (0.25 * Number(r.order.pricePerTonne)) / 1e6;
+      const paid = r.preview.rows.find((x) => x.label.startsWith("你要付"))?.value ?? "";
+      const kg = Math.min(r.order.remainingKg, 250);
+      const expect = (kg / 1000) * Number(r.order.pricePerTonne) / 1e6;
       ok(Math.abs(Number(paid.replace(/[^\d.]/g, "")) - expect) < 0.01,
-         `金額由伺服器依鏈上單價算出（${paid}，單價 ${Number(r.order.pricePerTonne) / 1e6}）`);
-      ok(!r.preview.calls.some((c) => c.target.toLowerCase() === "0x000000000000000000000000000000000000dead"),
-         "calldata 的目標一律來自部署檔，不是前端給的");
+         `金額由伺服器依帳本裡的單價算出（${paid}，單價 ${Number(r.order.pricePerTonne) / 1e6} 元）`);
+      const f = r.preview.ledger?.fields ?? {};
+      ok(r.preview.ledger?.kind === "place" && f.side === "buy" && String(f.pricePerTonne) === String(r.order.pricePerTonne) && String(f.batchId) === String(r.order.batchId),
+         "要簽的帳本欄位（批次、單價）一律由伺服器從帳本組，不是前端給的");
+      ok(!("to" in f) && !("account" in f), "欄位裡沒有任何地址可以被塞進來（帳戶是登入者本人）");
     }
   }
 
@@ -193,7 +201,8 @@ try {
     await page.evaluate((a) => { window.__addr = a; }, address);
     const r = await page.evaluate(async () => {
       const h = (await (await fetch(`/api/portfolio?account=${window.__addr}`)).json()).data;
-      const b = (h.batches ?? h.holdings?.batches ?? [])[0];
+      // 買到的那一批：只能在國內批次註銷（國外批次走各國登錄簿），挑 TW 的
+      const b = (h.batches ?? []).find((x) => x.country === "TW") ?? (h.batches ?? [])[0];
       if (!b) return { skip: true };
       const res = await fetch("/api/faith/act", {
         method: "POST", headers: { "content-type": "application/json" },
@@ -201,7 +210,9 @@ try {
       });
       return { status: res.status, body: await res.json() };
     });
-    if (!r.skip && r.status === 200) {
+    ok(!r.skip, "③b 買到的額度出現在持有裡");
+    ok(r.status === 200, `註銷可以提議（${r.body?.error?.code ?? r.status}）`);
+    {
       r.body = r.body.data ?? r.body;
       ok(r.body.warnings.some((w) => w.includes("不可逆")), "註銷的確認卡明說不可逆");
       ok(r.body.rows.some((x) => x.label === "受益人"), "並且列出受益人");

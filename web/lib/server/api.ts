@@ -114,7 +114,7 @@ function classify(e: unknown): { code: ErrorCode; message?: string; details?: un
       code: "DEPLOYMENT_MISMATCH",
       message:
         `部署檔與鏈對不上：合約地址上沒有程式碼（${rpc}）。` +
-        `通常是鏈重開後沒有重新部署。請重跑 forge script script/DeployV4.s.sol --rpc-url anvil --broadcast，` +
+        `通常是鏈重開後沒有重新部署。請重跑 forge script script/DeployLedger.s.sol --rpc-url anvil --broadcast（或 script/bootstrap.sh），` +
         `並確認 CHAIN_ID 與 deployments/<chainId>.json 對應到同一條鏈。`,
     };
   }
@@ -139,7 +139,7 @@ function classify(e: unknown): { code: ErrorCode; message?: string; details?: un
         message:
           `部署檔與鏈對不上：${which}（${rv.contractAddress}）上的合約沒有 ${rv.functionName ?? "這個函式"}，` +
           `呼叫直接被拒絕。多半是鏈重開後換了一支部署腳本——地址會重複使用，但合約換了一個。` +
-          `請重跑 forge script script/DeployV4.s.sol --rpc-url anvil --broadcast，` +
+          `請重跑 forge script script/DeployLedger.s.sol --rpc-url anvil --broadcast（或 script/bootstrap.sh），` +
           `並確認 CHAIN_ID 與 deployments/<chainId>.json 對應到同一條鏈。`,
         details: { contract: which, address: rv.contractAddress, functionName: rv.functionName },
       };

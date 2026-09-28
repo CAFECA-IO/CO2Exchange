@@ -3,6 +3,16 @@ import { launch, BASE } from "./lib.mjs";
 
 const ok = (c, m) => { if (!c) throw new Error(m); console.log("  ✓", m); };
 
+// 這支測的是「有資料時畫面長什麼樣」，所以要一條有成交歷史的鏈（npm run ledger:seed，或模擬器跑過一陣子）。
+// 資料太薄時先講清楚，不要讓它在「等不到走勢圖」這種地方逾時——那看起來像畫面壞了。
+{
+  const r = await (await fetch(`${BASE}/api/market/by-country?hours=8760`)).json();
+  const tw = r?.data?.countries?.find((c) => c.country === "TW");
+  if (!tw || tw.priceSeries.length < 2) {
+    throw new Error("這條鏈的資料太薄（臺灣近一年的成交不到兩個時間點）。先跑 npm run ledger:seed 再測地球與介紹頁。");
+  }
+}
+
 const browser = await launch();
 
 // ── 首頁 ──────────────────────────────────────────────────────────
@@ -52,7 +62,7 @@ const browser = await launch();
   await page.getByRole("button", { name: "成交均價" }).click();
   await page.waitForTimeout(500);
   const priceRow = await rows.first().innerText();
-  ok(/mTWD \/ 噸/.test(priceRow), `成交均價的單位是 mTWD / 噸：${priceRow.split("\n")[0]}`);
+  ok(/元 \/ 噸/.test(priceRow), `成交均價的單位是 元 / 噸（新台幣）：${priceRow.split("\n")[0]}`);
   ok(await page.getByRole("button", { name: "掛單量" }).count() === 0, "「掛單量」不再是可比較的量");
 
   // 走勢小圖。它是圖，但數字不能只活在圖裡——最新價、漲跌、最高最低都要是文字，
@@ -207,7 +217,9 @@ const browser = await launch();
   await page.locator("#wallet").scrollIntoViewIfNeeded();
   await page.waitForTimeout(600);
   const current = await page.locator('[data-testid="chapter-list"] button[aria-current="true"]').innerText();
-  ok(/錢包/.test(current), `捲到哪就標到哪（目前：${current.replace(/\s+/g, " ").trim()}）`);
+  // 比對 #wallet 那一章自己的標題，不寫死字串——章名改過（「帳戶在 CAFECA……」），測試不該跟著壞
+  const walletTitle = (await page.locator("#wallet h2").first().innerText()).trim();
+  ok(current.replace(/\s+/g, " ").includes(walletTitle.slice(0, 6)), `捲到哪就標到哪（目前：${current.replace(/\s+/g, " ").trim()}）`);
   ok(await page.locator('[data-testid="chapter-search"]').isVisible(), "捲到頁尾了，目錄與搜尋還在畫面上");
 
   // 全文搜尋：查一個只出現在別章的詞，命中要標明屬於哪一章

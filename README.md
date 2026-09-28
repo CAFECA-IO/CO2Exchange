@@ -365,6 +365,11 @@ anvil --port 38548 & npm run test:ledger-mm       # 11：做市與模擬器
 anvil --port 38549 & npm run test:ledger-proof    # 10：npm run fiat、證明檔、公開檔、監理鏡像、沒有逃生門
 # 68：網站 API → 帳本 → 收款帳戶、出金、/admin 出入金 → 承諾 → 查核；最後掃 web/data 沒有明文個資。前置見 scripts/e2e-ledger-write.mjs 開頭
 npm run test:ledger-write
+
+# 瀏覽器（Playwright）：先開 dev server（npm run dev，預設 http://localhost:10010），鏈上要有成交歷史（npm run ledger:seed）
+# 地球與介紹頁、門檻畫面的韌性、費思（自己起第二個實例接假模型，不需要金鑰）。
+# 以開發用登入進站、伺服器代簽，所以不需要 CAFECA 錢包。網址用 localhost，不要用 127.0.0.1（Next dev 會擋跨來源的開發資源，頁面不會 hydrate）
+npm run e2e
 ```
 
 `npm run gen:ledger-fixture` / `gen:tree-fixture` 產生 `test/fixtures/` 給 forge 用，確保 TypeScript 與 Solidity 兩份雜湊逐位元組一致。
@@ -379,6 +384,7 @@ npm run test:ledger-write
 | 啟動就報「不是帳本部署（沒有 ledger 欄位）」 | `deployments/<chainId>.json` 是舊的全合約版本。重新部署：`bash script/bootstrap.sh deploy`（本機 `demo-box.sh rebuild`） |
 | 登入一直說「驗證沒有通過」 | `SITE_ORIGIN` 與瀏覽器網址列不是**逐字**相同（含 scheme 與 port）。真正原因在伺服器 console 的 `[cafeca] 登入驗證失敗：…` |
 | 「nonce 格式錯誤」 | CAFECA 錢包要求 `[A-Za-z0-9_-]{8,128}`；本站發的是固定 61 字元。瀏覽器快取了舊版前端就重新整理 |
+| 本機（開發用登入）每一頁都說「讀不到 CAFECA 設定檔」 | 舊版：開發用帳戶也去問 CAFECA。更新後開發帳戶不連 CAFECA |
 | 登入了但每個按鈕按下去都失敗 | 沒有開啟 CAFECA 簽章通道。回首頁重新登入一次 |
 | 下單說「被帳本規則拒絕」 | 事件已簽收但不生效（身分、餘額、轄區、用途……），理由寫在訊息裡 |
 | 匯款了但帳本餘額沒變 | 營運方還沒對帳確認（Phase 0 人工，通常一個營業日內）；確認之後鏡像才入帳。`npm run fiat -- list` / `/admin`「出入金」 |

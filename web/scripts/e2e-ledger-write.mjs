@@ -42,6 +42,8 @@ async function login(label) {
   if (!me.address) throw new Error(`登入 ${label} 失敗`);
   return {
     label, address: me.address, api,
+    /// 不解析 JSON 的請求（PDF 下載）
+    raw: (path) => fetch(`${BASE}${path}`, { headers: { cookie: cookie() } }),
     post: (path, body) => api(path, { method: "POST", body: JSON.stringify(body) }),
     /// prepare → （伺服器代簽）submit
     async act(kind, fields) {
@@ -166,6 +168,18 @@ let batchId;
   ok(certs.length === 1 && certs[0].amountKg === 10_000 && certs[0].txHash.startsWith("0x"), "憑證讀自帳本（txHash 欄位是事件雜湊）");
   const certId = certs[0].certId;
   await admin.post(`/api/certificates/${certId}/pdf`, {});
+  {
+    const mine = await buyer.raw(`/api/certificates/${certId}/pdf`);
+    ok(mine.status === 200 && mine.headers.get("content-type") === "application/pdf", "憑證持有人下載得到自己的 PDF");
+    const other = await corp.raw(`/api/certificates/${certId}/pdf`);
+    const oj = await other.json().catch(() => ({}));
+    ok(other.status === 403 && oj.error?.code === "FORBIDDEN", "別人換個 id 下載不到這張憑證的 PDF");
+    const anon = await fetch(`${BASE}/api/certificates/${certId}/pdf`);
+    ok(anon.status === 401, "未登入下載不到");
+    ok((await admin.raw(`/api/certificates/${certId}/pdf`)).status === 200, "管理員下載得到");
+    const none = await buyer.raw(`/api/certificates/999999/pdf`);
+    ok(none.status === 404, "不存在的憑證回 404");
+  }
   const a = await admin.post(`/api/certificates/${certId}/anchor`, {});
   ok(a.documentHash && a.txHash, "管理員產生 PDF 並把雜湊寫進帳本（certDocument）");
   let code = null;

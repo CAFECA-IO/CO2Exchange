@@ -33,9 +33,9 @@ try {
     });
     await u.page.goto(`${BASE}/trade`);
     // 重試的退避是 0.4s，所以幾秒內就該看到正常的門檻畫面
-    await u.page.locator("main").getByText(/建立你的鏈上錢包|這台裝置還不能簽署交易/).first().waitFor({ timeout: 20_000 });
+    await u.page.locator("main").getByText(/買進與賣出|還不能下單或送出交易/).first().waitFor({ timeout: 20_000 });
     ok(n >= 2, `暫時性失敗會自動重試（/api/account 共 ${n} 次），使用者不必知道`);
-    ok(!(await u.page.getByText("讀不到你的錢包狀態").isVisible().catch(() => false)),
+    ok(!(await u.page.getByText("讀不到你的帳戶狀態").isVisible().catch(() => false)),
        "而且不會為了一次抖動就跳錯誤畫面");
     await u.context.close();
   }
@@ -54,46 +54,49 @@ try {
 
     const t0 = Date.now();
     await u.page.goto(`${BASE}/trade`);
-    await u.page.getByText("讀不到你的錢包狀態").waitFor({ timeout: 30_000 });
+    await u.page.getByText("讀不到你的帳戶狀態").waitFor({ timeout: 30_000 });
     const secs = Math.round((Date.now() - t0) / 1000);
     ok(secs < 20, `重試用完之後 ${secs} 秒內就講話，不是無限期轉圈`);
 
     const body = await u.page.locator("main").innerText();
     ok(body.includes("無法連線到區塊鏈節點"), "而且把伺服器寫好的人話原因顯示出來");
-    ok(!/讀取錢包狀態中/.test(body), "不再停在「讀取錢包狀態中…」");
+    ok(!/讀取帳戶狀態中/.test(body), "不再停在「讀取帳戶狀態中…」");
     ok(await u.page.locator('[data-testid="wallet-retry"]').isVisible(), "畫面上有一顆重試鍵");
 
     // ③ 修好之後按重試，要回到正常畫面
     down = false;
     const before = calls;
     await u.page.locator('[data-testid="wallet-retry"]').click();
-    await u.page.locator("main").getByText(/建立你的鏈上錢包|這台裝置還不能簽署交易/).first().waitFor({ timeout: 30_000 });
+    await u.page.locator("main").getByText(/買進與賣出|還不能下單或送出交易/).first().waitFor({ timeout: 30_000 });
     ok(calls > before, "按下重試會真的重新查一次");
-    ok(!(await u.page.getByText("讀不到你的錢包狀態").isVisible().catch(() => false)), "成功之後錯誤畫面收起來");
+    ok(!(await u.page.getByText("讀不到你的帳戶狀態").isVisible().catch(() => false)), "成功之後錯誤畫面收起來");
     await u.context.close();
   }
 
   // ── ④ 部署檔對不上要講得出「去重新部署」────────────────
+  //
+  // 拿同一條鏈上另一個真的存在的合約（記帳 TWD）冒充帳本合約：地址上有程式碼，
+  // 但沒有 head() → eth_call revert 且不帶任何資料。
   {
-    const FILE = new URL("../../deployments/31337.json", import.meta.url);
+    const FILE = process.env.DEPLOYMENT_FILE ?? new URL("../../deployments/31337.json", import.meta.url);
     const orig = await readFile(FILE, "utf8");
     const d = JSON.parse(orig);
     try {
-      // 拿同一條鏈上另一個真的存在的合約冒充 factory：地址上有程式碼，
-      // 但沒有 getAddress(bytes32) → eth_call revert 且不帶任何資料。
-      await writeFile(FILE, JSON.stringify({ ...d, accountFactory: d.settlementToken }, null, 2));
+      await writeFile(FILE, JSON.stringify({ ...d, ledger: d.settlementToken }, null, 2));
       await new Promise((r) => setTimeout(r, 1200)); // deployment() 以 mtime 當快取鍵
 
       const u = await newUser(browser, "mismatch");
       await login(u.page, who("mismatch"));
-      const body = await u.page.evaluate(async () => (await fetch("/api/account")).json());
+      const body = await u.page.evaluate(async () => (await fetch("/api/bank")).json());
       ok(body.ok === false, "部署檔對不上時 API 回失敗");
       ok(body.error.code === "DEPLOYMENT_MISMATCH",
          `而且是 DEPLOYMENT_MISMATCH，不是 INTERNAL（拿到 ${body.error.code}）`);
-      ok(/重新部署|forge script/.test(body.error.message), "訊息直接說下一步是重新部署");
+      ok(/重新部署|forge script/.test(body.error.message) && /DeployLedger/.test(body.error.message),
+         "訊息直接說下一步是重新部署，而且指到現在的部署腳本");
       await u.context.close();
     } finally {
       await writeFile(FILE, orig);
+      await new Promise((r) => setTimeout(r, 1200));
     }
   }
 

@@ -56,6 +56,11 @@ export async function walletOf(address: Address): Promise<WalletView> {
   };
 }
 
+/// 開發用登入的帳戶：沒有 CAFECA 身分合約，也沒有恢復流程。實名等級照 session（開發登入給的）。
+export async function devWalletOf(address: Address, kycLevel: number): Promise<WalletView> {
+  return { address, exists: await existsHere(address), recoveryPending: false, kycLevel, manageUrl: `${WALLET_ORIGIN}/security` };
+}
+
 /// 這個地址在**本站這條鏈**上有沒有合約。
 ///
 /// 與上面那個 `exists` 不同：身分合約在 CAFECA 那條鏈上，資產在本站這條鏈上。

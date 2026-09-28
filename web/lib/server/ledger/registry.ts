@@ -99,6 +99,13 @@ export function ledgerCertificates(account?: string | null): CertRow[] {
     }));
 }
 
+/// 憑證持有人（retire 事件的帳戶）。找不到就 CERTIFICATE_NOT_FOUND。
+export function ledgerCertificateOwner(certId: number): string {
+  const c = Number.isInteger(certId) ? ledgerView().state.certificates.get(String(certId)) : undefined;
+  if (!c) throw new ApiError("CERTIFICATE_NOT_FOUND");
+  return c.account;
+}
+
 export function ledgerCertData(certId: number): CertData {
   const { state } = ledgerView();
   const c = state.certificates.get(String(certId));

@@ -1,6 +1,7 @@
 import { handleError, ok } from "@/lib/server/api";
 import { requireRole } from "@/lib/server/roles";
-import { walletOf } from "@/lib/server/wallet";
+import { devWalletOf, walletOf } from "@/lib/server/wallet";
+import { devSignerFor } from "@/lib/server/ledger/write";
 
 /// GET → 登入者的錢包狀態。
 ///
@@ -17,6 +18,9 @@ import { walletOf } from "@/lib/server/wallet";
 export async function GET() {
   try {
     const m = await requireRole("user");
+    // 開發用登入（本機鏈、非 production）的帳戶不是 CAFECA 身分，拿它去問 CAFECA 沒有意義——
+    // 而且沒網路的時候（CI、離線展示）整個內頁會卡在「讀不到你的帳戶狀態」。
+    if (await devSignerFor(m.address)) return ok(await devWalletOf(m.address, m.kycLevel));
     return ok(await walletOf(m.address));
   } catch (e) { return handleError(e); }
 }
