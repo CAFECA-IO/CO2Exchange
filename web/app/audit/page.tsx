@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Card, Notice } from "@/components/ui";
 import { fetchJson } from "@/lib/client/fetchJson";
 
-/// 透明度與驗證：這一頁把「鏈上有什麼、鏈下有什麼、哪些保證變弱了、要怎麼自己驗」講完。
+/// 審計（技術揭露與審計資訊）：這一頁把「鏈上有什麼、鏈下有什麼、哪些保證變弱了、要怎麼自己驗」講完。
 ///
 /// 設計 v4 把登錄簿、身分與市場搬到鏈下帳本，鏈上只留每小時的承諾、授權金鑰清單與結算幣託管。
 /// 這換來了不必等出塊、不付 gas 的交易，代價是**有些規則從「合約拒絕」降級成「重播抓得到」**。
@@ -31,7 +31,7 @@ function Row({ k, v, mono = true }: { k: string; v: string; mono?: boolean }) {
   );
 }
 
-export default function TransparencyPage() {
+export default function AuditPage() {
   const [epochs, setEpochs] = useState<Epoch[] | null>(null);
   const [cfg, setCfg] = useState<Config | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -50,8 +50,8 @@ export default function TransparencyPage() {
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-xs font-medium uppercase tracking-wider text-tide">透明度</p>
-        <h1 className="mt-1 font-display text-2xl font-bold tracking-tight text-ink-50">透明度與驗證</h1>
+        <p className="text-xs font-medium uppercase tracking-wider text-tide">審計</p>
+        <h1 className="mt-1 font-display text-2xl font-bold tracking-tight text-ink-50">技術揭露與審計資訊</h1>
         <p className="mt-2 max-w-3xl text-sm leading-7 text-ink-200">
           本站的交易、登錄簿與身分都記在一份鏈下帳本裡，每小時把整份帳本壓成一期承諾寫上區塊鏈。
           這一頁說明鏈上有什麼、哪些保證因此變弱了，以及任何人不必相信本站、自己驗證的方法。

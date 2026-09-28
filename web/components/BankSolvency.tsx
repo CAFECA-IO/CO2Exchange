@@ -157,7 +157,7 @@ export function BankSolvency() {
         <span className="text-ink-200">請保存您的證據檔。</span>
         逃生模式要能用，前提是您手上有自己的證據。交易頁可以下載，每一期的公開檔與完整帳本鏡像也同時交付查核機構與主管機關——
         如果產生證據的唯一途徑是本站的伺服器，那麼本站消失時證據也跟著消失，而那正是逃生門唯一會被用到的時候。
-        詳見<a className="text-tide underline" href="/transparency">透明度與驗證</a>。
+        詳見<a className="text-tide underline" href="/audit">審計</a>。
       </p>
       <p className="mt-2 text-xs leading-6 text-ink-300">
         這串數字不必相信本站：<code className="text-ink-200">npm run ledger:verify</code> 會從公開的事件 log 與鏈上承諾

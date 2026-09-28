@@ -16,7 +16,7 @@ const base = [
   ["/retire", "註銷"],
   ["/registry", "公告欄"],
   ["/custody", "託管揭露"],
-  ["/transparency", "透明度"],
+  ["/audit", "審計"],
   ["/agreements", "契約"],
   ["/account", "帳戶"],
 ] as const;

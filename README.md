@@ -60,7 +60,7 @@
 不經查驗機構金鑰核發。營運方做得到但藏不住的：決定同時到達的事件順序、拒收事件、停止提交承諾。
 **已知缺口**：營運方持續提交承諾、卻只拒收某一人的提領請求時，逃生門不會開啟（見 [十](#十phase-0-限制與後續)）。
 
-這一段也寫在網站的 `/transparency` 與平台使用約定書第五條之一。
+這一段也寫在網站的 `/audit`（審計）與平台使用約定書第五條之一。
 
 ### 延伸文件
 
@@ -269,7 +269,7 @@ S1=$(./script/govern.sh sign $H --ledger)                   # 各自簽（--priv
 # ① 我的持有：/trade 下載證明檔，任一節點
 node web/scripts/verify-proof.mjs 證明檔.json --rpc <任一節點> [--out 報告.json]
 
-# ② 某一期的公開內容：/transparency 或 /api/public/epochs/<期>，依 docs/proof-schemes.md 重建 root，對照鏈上 Committed 事件
+# ② 某一期的公開內容：/audit 或 /api/public/epochs/<期>，依 docs/proof-schemes.md 重建 root，對照鏈上 Committed 事件
 
 # ③ 整份帳本（查核機構、主管機關）：監理鏡像
 LEDGER_DIR=<鏡像>/ledger DEPLOYMENT_FILE=<鏡像>/deployment.json RPC_URL=<任一節點> npm run ledger:verify

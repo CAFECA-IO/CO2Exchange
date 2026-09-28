@@ -433,7 +433,7 @@ export default function About() {
           照順序接成一條雜湊鏈；查驗機構的核發由它自己的金鑰簽署，序號唯一、不可重複；
           <b>註銷</b>會讓額度永久退出流通，並產生一張記著受益人、用途與數量的憑證。
           每小時整份帳本壓成一期承諾寫上區塊鏈，事後改不掉；憑證 PDF 的 SHA-256 也在帳本裡，
-          任何人下載後自行重算就能比對，不必相信平台（見<Link className="text-tide underline" href="/transparency">透明度與驗證</Link>）。
+          任何人下載後自行重算就能比對，不必相信平台（見<Link className="text-tide underline" href="/audit">審計</Link>）。
         </p>
       </Section>
 
@@ -1038,7 +1038,7 @@ export default function About() {
         <p className="text-xs leading-6 text-ink-300">
           條文見<Link className="text-tide underline" href="/agreements/platform-terms">平台使用約定書</Link>第五條；
           帳戶狀態在<Link className="text-tide underline" href="/account">帳戶</Link>，證據與驗證方式在
-          <Link className="text-tide underline" href="/transparency">透明度與驗證</Link>。
+          <Link className="text-tide underline" href="/audit">審計</Link>。
         </p>
       </Section>
         </div>
