@@ -309,6 +309,11 @@ status)
         || echo "帳本承諾   第 ${3} 期，$(( AGE / 60 )) 分鐘前（帳本欠 ${1}、記帳 TWD ${2}，最小單位）"
     fi
   fi
+  # 承諾排程的健康判斷（同 /api/health）：有沒有事件等太久、連 24 小時的空承諾都沒來
+  if [ -n "$ID" ] && [ -f "$DEP" ]; then
+    H=$( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/ledger-health.mjs 2>/dev/null )
+    [ -n "$H" ] && echo "排程健康   $H"
+  fi
   pgrep -f "ledger-sim.mjs" >/dev/null && echo "模擬器     在跑" || echo "模擬器     沒在跑"
   pgrep -f "mm/mm.mjs" >/dev/null && echo "做市       在跑" || echo "做市       沒在跑"
   pgrep -f "ledger-commit.mjs" >/dev/null && echo "承諾提交   正在送一期" || true

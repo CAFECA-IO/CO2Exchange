@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Card, Notice } from "@/components/ui";
 import { fetchJson } from "@/lib/client/fetchJson";
+import type { Liveness } from "@/lib/ledger/liveness";
 
 /// 審計（技術揭露與審計資訊）：這一頁把「鏈上有什麼、鏈下有什麼、哪些保證變弱了、要怎麼自己驗」講完。
 ///
@@ -34,13 +35,14 @@ function Row({ k, v, mono = true }: { k: string; v: string; mono?: boolean }) {
 
 export default function AuditPage() {
   const [epochs, setEpochs] = useState<Epoch[] | null>(null);
+  const [live, setLive] = useState<Liveness | null>(null);
   const [cfg, setCfg] = useState<Config | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let ignore = false;
-    Promise.all([fetchJson<{ epochs: Epoch[] }>("/api/public/epochs"), fetchJson<Config>("/api/config")])
-      .then(([e, c]) => { if (!ignore) { setEpochs(e.epochs); setCfg(c); } })
+    Promise.all([fetchJson<{ epochs: Epoch[]; liveness: Liveness }>("/api/public/epochs"), fetchJson<Config>("/api/config")])
+      .then(([e, c]) => { if (!ignore) { setEpochs(e.epochs); setLive(e.liveness); setCfg(c); } })
       .catch((e) => { if (!ignore) setErr(e instanceof Error ? e.message : String(e)); });
     return () => { ignore = true; };
   }, []);
@@ -60,6 +62,22 @@ export default function AuditPage() {
       </div>
 
       {err && <Notice kind="error">{err}</Notice>}
+
+      {/* 承諾排程的現況。停了的時候畫面上其他東西都不會壞，所以要在這裡明講 */}
+      {live && (
+        <div data-testid="liveness" data-status={live.status}>
+          <Notice kind={live.status === "stalled" ? "error" : live.status === "late" ? "warn" : live.status === "ok" ? "ok" : "info"}>
+            {/* reason 本身就以「正常／承諾落後／承諾排程停擺」開頭，不再另加標題 */}
+            {live.reason}
+            {live.status !== "ok" && live.status !== "empty" && (
+              <span className="mt-1 block text-xs">
+                落後期間的事件仍然在帳本裡、也都有簽收收據，但還沒被釘上鏈；補交的那一期會一次涵蓋它們。
+                機器可讀的狀態見 <a className="underline" href="/api/health" target="_blank" rel="noreferrer">/api/health</a>。
+              </span>
+            )}
+          </Notice>
+        </div>
+      )}
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card title="鏈上有什麼">

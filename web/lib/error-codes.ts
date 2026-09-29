@@ -78,6 +78,8 @@ export const ERRORS = {
   CHAIN_UNREACHABLE: { status: 503, message: "無法連線到區塊鏈節點", retriable: true },
   DEPLOYMENT_MISMATCH: { status: 503, message: "部署檔與鏈對不上" },
   DATA_STALE: { status: 503, message: "本機資料屬於另一次部署" },
+  /// 每小時的鏈上承諾停了（見 lib/ledger/liveness.ts）。/api/health 用它回 503，讓外部監控看得到。
+  LEDGER_STALLED: { status: 503, message: "承諾排程停擺：帳本的新事件沒有上鏈" },
   /// 外部鏈上沒有設定個人資料的加密金鑰：寧可拒收，也不以明文保存身分證號與銀行帳號。
   DATA_KEY_MISSING: { status: 503, message: "伺服器沒有設定資料加密金鑰，暫時不能保存個人資料" },
   /// 加密欄位解不開（金鑰換了卻沒把舊的放進 DATA_KEY_PREVIOUS，或資料被改過）。維運要處理，不是使用者的錯。

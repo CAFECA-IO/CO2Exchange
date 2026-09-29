@@ -293,4 +293,35 @@ await t("鏈上事件的增量索引：舊的區塊段從檔案拿、只讀新�
   assert.deepEqual(calls.at(-1), [1n, 80n], "部署不同：整份重讀");
   fs.rmSync(dir, { recursive: true, force: true });
 });
+await t("承諾排程的健康判斷：有事件在等、連心跳都沒有、鏈停了、剛好在門檻上", async () => {
+  const { assessLiveness, thresholdsFromEnv } = await import("../lib/ledger/liveness.ts");
+  const th = thresholdsFromEnv({});
+  assert.deepEqual(th, { lateAfter: 7200, stalledAfter: 21600, heartbeatAfter: 86400 });
+  const ev = (...ats) => ats.map((at) => ({ at: BigInt(at) }));
+  const T = 1_800_000_000;
+  const base = { wallClock: T, chainTime: T, thresholds: th };
+  assert.equal(assessLiveness({ ...base, events: [], lastEpoch: null, committedSeq: 0, lastCommittedAt: null }).status, "empty");
+  // 全部已進承諾、上一期 10 分鐘前
+  let l = assessLiveness({ ...base, events: ev(T - 900, T - 800), lastEpoch: 3, committedSeq: 2, lastCommittedAt: T - 600 });
+  assert.equal(l.status, "ok"); assert.equal(l.uncommitted, 0);
+  // 最舊的未承諾事件等了 3 小時 → late；7 小時 → stalled
+  l = assessLiveness({ ...base, events: ev(T - 20000, T - 3 * 3600, T - 60), lastEpoch: 3, committedSeq: 1, lastCommittedAt: T - 3.5 * 3600 });
+  assert.equal(l.status, "late"); assert.equal(l.uncommitted, 2); assert.equal(l.oldestUncommittedAt, T - 3 * 3600);
+  l = assessLiveness({ ...base, events: ev(T - 30000, T - 7 * 3600), lastEpoch: 3, committedSeq: 1, lastCommittedAt: T - 8 * 3600 });
+  assert.equal(l.status, "stalled"); assert.match(l.reason, /出金請求進不了證據/);
+  // 帳本沒有新事件，但上一期是 32 小時前：連空的心跳都沒有 → 提交程式沒在跑（24h 心跳 + 8h > 6h）
+  l = assessLiveness({ ...base, events: ev(T - 200000), lastEpoch: 9, committedSeq: 1, lastCommittedAt: T - 32 * 3600 });
+  assert.equal(l.status, "stalled"); assert.match(l.reason, /空承諾/);
+  // 25 小時：心跳晚了 1 小時，還不算落後
+  assert.equal(assessLiveness({ ...base, events: ev(T - 200000), lastEpoch: 9, committedSeq: 1, lastCommittedAt: T - 25 * 3600 }).status, "ok");
+  // 鏈停了：區塊時間不動，只看它會以為正常——取牆上時鐘
+  l = assessLiveness({ wallClock: T, chainTime: T - 10 * 3600, thresholds: th, events: ev(T - 9 * 3600), lastEpoch: 2, committedSeq: 0, lastCommittedAt: T - 10 * 3600 });
+  assert.equal(l.status, "stalled");
+  // 本機鏈快轉：區塊時間比牆上時鐘晚，取較大者
+  assert.equal(assessLiveness({ wallClock: T, chainTime: T + 30 * 86400, thresholds: th, events: ev(T), lastEpoch: 1, committedSeq: 0, lastCommittedAt: T }).status, "stalled");
+  // 門檻：剛好 2 小時就是 late
+  assert.equal(assessLiveness({ ...base, events: ev(T - 7200), lastEpoch: null, committedSeq: 0, lastCommittedAt: null }).status, "late");
+  // 門檻設定：stalled 不會小於 late
+  assert.deepEqual(thresholdsFromEnv({ COMMIT_LATE_AFTER: "36000", COMMIT_STALLED_AFTER: "60" }).stalledAfter, 36000);
+});
 console.log(`\n${n} 個測試通過（事件 ${events.length} 筆，拒絕 ${s.rejected.length} 筆，成交 ${s.fills.length} 筆）`);

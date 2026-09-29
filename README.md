@@ -226,6 +226,20 @@ npm run ledger:verify               # 查核者模式：重播全部，逐期比
 公告欄、行情、各國統計等「整份帳本掃一遍」的結果依帳本 head 快取（沒有新事件就不重算），
 `/api/bulletin` 每一類只回最新 `limit` 筆（預設 200，`counts` 是總數）。
 
+### 監控承諾排程（`/api/health`、`npm run ledger:health`）
+
+每小時的承諾停了，畫面上什麼都不會壞——但新事件沒上鏈、出金請求進不了證據、營運方也確認不了出金。所以要有人主動問：
+
+| 狀態 | 條件（預設門檻） | `/api/health` | `ledger:health` |
+|---|---|---|---|
+| 正常 | 未承諾的事件都在 2 小時內，且上一期距今不超過 24 小時心跳＋2 小時 | 200 | exit 0 |
+| 落後 | 超過 2 小時（`COMMIT_LATE_AFTER`） | 200，`status: "late"` | exit 1 |
+| 停擺 | 超過 6 小時（`COMMIT_STALLED_AFTER`） | **503** `LEDGER_STALLED` | exit 2 |
+| 讀不到鏈或部署檔 | | 503 | exit 3 |
+
+外部監控（UptimeRobot 之類）只要看 `/api/health` 的狀態碼。`ledger:health` 不經過網站，網站掛了也答得出來；`demo-box.sh status` 會印它。
+`/audit` 與 `/admin` 也顯示同一份狀態（落後、停擺時 `/admin` 最上面會跳警告）。`HEARTBEAT_AFTER` 要與提交程式用同一個值。
+
 ### 發布與監理鏡像
 
 ```bash
@@ -353,7 +367,7 @@ forge test                                   # 34：帳本合約、記帳 TWD、
 cd web
 npm run check:boundary                       # 前端沒有直接連節點
 npm run check:api-envelope                   # 每支 API 都走制式信封與錯誤碼
-npm run test:ledger                          # 26：引擎規則、重播、雜湊鏈、出金請求／退回／確認、帳本檔增量讀取、鏈上事件索引
+npm run test:ledger                          # 27：引擎規則、重播、雜湊鏈、出金請求／退回／確認、帳本檔增量讀取、鏈上事件索引
 npm run test:cafeca                          # 23：登入 nonce、SignIn digest、委託單 EIP-712、設定檔解析
 npm run test:keys && npm run test:mm         # 金鑰來源、做市策略
 npm run test:sealed                          # 11：個人資料加密、AAD、換金鑰、data:protect 遷移
@@ -362,8 +376,8 @@ npm run build
 # 需要 anvil 的端到端（各自一條鏈）
 anvil --port 38546 & npm run test:ledger-chain    # 帳本 × 合約：營運 Safe 入金、承諾、重播、出金確認
 anvil --port 38548 & npm run test:ledger-mm       # 11：做市與模擬器
-anvil --port 38549 & npm run test:ledger-proof    # 10：npm run fiat、證明檔、公開檔、監理鏡像、沒有逃生門
-# 68：網站 API → 帳本 → 收款帳戶、出金、/admin 出入金 → 承諾 → 查核；最後掃 web/data 沒有明文個資。前置見 scripts/e2e-ledger-write.mjs 開頭
+anvil --port 38549 & npm run test:ledger-proof    # 12：npm run fiat、證明檔、公開檔、監理鏡像、ledger:health、沒有逃生門
+# 75：網站 API → 帳本 → 收款帳戶、出金、/admin 出入金 → 承諾 → 查核；最後掃 web/data 沒有明文個資。前置見 scripts/e2e-ledger-write.mjs 開頭
 npm run test:ledger-write
 
 # 瀏覽器（Playwright）：先開 dev server（npm run dev，預設 http://localhost:10010），鏈上要有成交歷史（npm run ledger:seed）
@@ -404,6 +418,7 @@ npm run e2e
 | 存身分申請或收款帳戶時 `DATA_KEY_MISSING` | 外部鏈上沒設 `DATA_KEY`。`bash script/bootstrap.sh keys` 產生後重啟網站 |
 | `DATA_KEY_MISMATCH`「加密的個人資料解不開」 | 換了 `DATA_KEY` 卻沒把舊的放進 `DATA_KEY_PREVIOUS`。放回去、重啟，再 `npm run data:protect -- --rekey` |
 | 前端報 `0x` 開頭的八位十六進位 | `web/lib/error-abi.ts` 沒跟上合約：`cd web && npm run gen:errors` |
+| `/api/health` 回 503 `LEDGER_STALLED`／`/admin` 上方跳「承諾排程停擺」 | 提交排程沒在跑或每次都失敗。`demo-box.sh status`、看 `.demo-box/commit.log` 最後的 ✗；修好之後下一次提交會一次涵蓋落後的事件 |
 | 懷疑鏈上事件的索引不對（例如節點曾經回報錯誤的資料） | 刪掉 `web/data/chain-index/`，下一次整份重讀；`npm run ledger:verify` 本來就不用它 |
 | 重新部署後畫面有資料但對不上 | `web/data/` 是舊部署的。`cd web && npm run data:reset`（搬到 `data.bak-<時間戳>`，不是刪除） |
 

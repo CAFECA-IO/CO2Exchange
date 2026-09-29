@@ -287,6 +287,11 @@ ok(/已提交第 \d+ 期/.test(commit), "承諾上鏈");
   const list = await buyer.api("/api/public/epochs");
   const e1 = await buyer.api(`/api/public/epochs/${list.epochs.at(-1).epoch}`);
   ok(e1.manifest.logRoot && e1.leaves.length > 0 && !e1.publicEvents.some((x) => x.kind === "place"), "公開檔：承諾、每一筆事件的雜湊、登錄簿層事件全文（委託單不公開）");
+  const hr = await fetch(`${BASE}/api/health`);
+  const h = (await hr.json()).data;
+  ok(hr.status === 200 && h.status === "ok" && h.lastEpoch === Number(list.epochs.at(-1).epoch) && h.uncommitted >= 1,
+    `/api/health 不用登入：承諾排程正常，第 ${h?.lastEpoch} 期之後有 ${h?.uncommitted} 筆事件等下一期`);
+  ok(list.liveness?.status === "ok", "審計頁的承諾清單附上同一份排程狀態");
 }
 // ── 個人資料只以密文存放：伺服器的資料夾裡找不到任何一個證號、姓名或收款帳號 ──
 if (process.env.DATA_DIR) {

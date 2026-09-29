@@ -79,7 +79,7 @@ if (!VERIFY && !hasNew && committed.length) {
 const next = !VERIFY && (hasNew || heartbeat)
   ? [{ epoch: BigInt(committed.length + 1), lastSeq: BigInt(events.length), upToBlock: headBlock }]
   : [];
-if (heartbeat) console.log(`  距離上一期超過 ${HEARTBEAT_AFTER} 秒，提交一期空的（避免逃生艙誤開）`);
+if (heartbeat) console.log(`  距離上一期超過 ${HEARTBEAT_AFTER} 秒，提交一期空的（證明這段時間帳本沒有動；/api/health 也靠它判斷提交程式還活著）`);
 // 金鑰簿：CAFECA 帳戶的公鑰與有效區間全部來自事件（帳本的 userKey 鏡像＋鏈上 KeyAdded／KeyRemoved／模組事件），
 // 不讀合約的歷史狀態——不需要 archive 節點。
 const KEYRING = D.cafecaKeyring ?? setting("CAFECA_KEYRING") ?? null;

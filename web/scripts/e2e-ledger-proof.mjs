@@ -161,6 +161,22 @@ const manifest = JSON.parse(fs.readFileSync(path.join(TMP, "mirror", "MANIFEST.j
 assert.ok(manifest.files.every((f) => /^[0-9a-f]{64}$/.test(f.sha256)));
 ok("監理鏡像（完整帳本＋部署檔＋SHA-256 清單）由查核工具獨立重播，anchor 全部相符");
 
+// ── ④b 承諾排程的健康檢查（npm run ledger:health；網站的 /api/health 是同一套判斷）──
+const health = () => {
+  const r = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "scripts/ledger-health.mjs", "--json"], { env, encoding: "utf8" });
+  return { code: r.status, l: JSON.parse(r.stdout || "{}") };
+};
+{
+  let h = health();
+  assert.equal(h.code, 0, h.l.reason); assert.equal(h.l.status, "ok"); assert.equal(h.l.uncommitted, 0);
+  // 提交程式沒在跑：24 小時的空心跳也沒來，再過 3 小時 → 落後
+  await pub.request({ method: "evm_increaseTime", params: [27 * 3600] });
+  await pub.request({ method: "evm_mine", params: [] });
+  h = health();
+  assert.equal(h.code, 1, h.l.reason); assert.equal(h.l.status, "late");
+  ok("ledger:health：剛提交完是正常（exit 0）；連 24 小時的空承諾都沒來、再過 3 小時是落後（exit 1）");
+}
+
 // ── ⑤ 沒有逃生門 ──
 cs = await commits();
 snap = snapshotAt(store.read(), cs.at(-1));
@@ -170,6 +186,11 @@ await pub.request({ method: "evm_mine", params: [] });
 await pub.request({ method: "anvil_setBalance", params: [who.address, toHex(10n ** 19n)] });
 const stuck = await pub.simulateContract({ address: D.ledger, abi: PROOF_ABI, functionName: "settleWithdrawal", args: [who.address, leaf.leafCash, F.bankRefOf("out", "escape"), leaf], account: who.account }).then(() => null, (e) => e);
 assert.ok(stuck, "72 小時沒有新承諾，使用者一樣不能自己領");
+{
+  const h = health();
+  assert.equal(h.code, 2, h.l.reason); assert.equal(h.l.status, "stalled"); assert.match(h.l.reason, /停擺/);
+  ok("再停 72 小時：ledger:health 回停擺（exit 2），理由說得出後果");
+}
 const held = await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "balanceOf", args: [D.ledger] });
 assert.equal(held, await pub.readContract({ address: D.settlementToken, abi: erc20, functionName: "totalSupply" }), "TWD 只在帳本合約裡");
 assert.ok(held >= cs.at(-1).totalCash, "記帳的 TWD 不少於最新一期承諾的現金總額");

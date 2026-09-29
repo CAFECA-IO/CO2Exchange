@@ -7,6 +7,7 @@ import { PURPOSE_LABEL, TIER_LABEL, flagOf } from "@/lib/deployment";
 import { fetchJson, postJson } from "@/lib/client/fetchJson";
 import { MarketMakerPanel } from "@/components/admin/MarketMakerPanel";
 import { FiatPanel } from "@/components/admin/FiatPanel";
+import type { Liveness } from "@/lib/ledger/liveness";
 
 type KycReq = { id: string; account: string; tier: number; idNumberMasked: string; name: string; submittedBy: string; status: string; reason?: string; txHash?: string; createdAt: string; decidedBy?: string };
 type Cert = { certId: number; batchId: number; amountKg: number; beneficiary: string; purpose: number; retiredAt: number; owner: string; pdfHash: string | null; onchainHash: string | null; anchored: boolean };
@@ -54,22 +55,25 @@ export default function AdminPage() {
   const [reason, setReason] = useState<Record<string, string>>({});
 
   const [reloadKey, reload] = useReload();
+  const [live, setLive] = useState<Liveness | null>(null);
   useEffect(() => {
     if (!me.isAdmin) return;
     let ignore = false;
     (async () => {
       // 四個區塊互相獨立：其中一個讀不到不該把整頁弄空，所以各自 catch。
-      const [k, c, g, f] = await Promise.all([
+      const [k, c, g, f, e] = await Promise.all([
         fetchJson<{ requests: KycReq[] }>("/api/kyc/queue").catch(() => null),
         fetchJson<{ certificates: Cert[] }>("/api/certificates/all").catch(() => null),
         fetchJson<Gov>("/api/governance").catch(() => null),
         fetchJson<Fees>("/api/fees").catch(() => null),
+        fetchJson<{ liveness: Liveness }>("/api/public/epochs").catch(() => null),
       ]);
       if (ignore) return;
       if (k) setKyc(k.requests ?? []);
       if (c) setCerts(c.certificates ?? []);
       if (g) setGov(g);
       if (f) setFees(f);
+      if (e) setLive(e.liveness);
     })();
     return () => { ignore = true; };
   }, [me.isAdmin, reloadKey]);
@@ -95,6 +99,15 @@ export default function AdminPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2">{tabs.map((t) => <button key={t} onClick={() => setTab(t)} className={`rounded-lg px-3 py-1.5 text-sm ${tab === t ? "bg-tide text-white" : "border border-ink-500"}`}>{t}</button>)}</div>
       {msg && <Notice kind={msg.kind}>{msg.text}</Notice>}
+      {/* 承諾排程停了，出金就確認不了、新事件也沒上鏈——營運方要第一眼看到 */}
+      {live && (live.status === "late" || live.status === "stalled") && (
+        <div data-testid="admin-liveness">
+          <Notice kind={live.status === "stalled" ? "error" : "warn"}>
+            {live.reason} 檢查提交排程（<code>npm run ledger:commit</code>、demo-box 的 commit 服務），
+            狀態：<code>npm run ledger:health</code>。
+          </Notice>
+        </div>
+      )}
 
       {tab === "KYC 審核" && (
         <Card title={`待審核（${pendingKyc.length}）`}>
