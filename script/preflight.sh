@@ -27,7 +27,16 @@ if [ -z "${RPC_URL:-}" ] && [ -f "$(dirname "$0")/../web/.env.local" ]; then
 fi
 RPC="${1:-${RPC_URL:-http://127.0.0.1:28545}}"
 ANVIL_PK0=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
-DEPLOYER_PK="${DEPLOYER_PK:-$ANVIL_PK0}"
+# 金鑰：shell → web/.env.local（bootstrap.sh keys 寫在那裡）→ anvil 預設。
+# 以前只看 shell，於是剛跑完 `bootstrap.sh keys` 再跑這支，還是說「部署者是 Anvil 的預設帳戶、餘額 0」——
+# 金鑰明明產生好了，這支根本沒去讀。bootstrap.sh deploy 讀的是 web/.env.local，這裡要看同一份。
+ENV_LOCAL="$(dirname "$0")/../web/.env.local"
+from_env_local () { [ -f "$ENV_LOCAL" ] && sed -n "s/^$1=\(0x[0-9a-fA-F]\{64\}\)$/\1/p" "$ENV_LOCAL" | tail -1 || true; }
+DEPLOYER_SRC="shell"
+if [ -z "${DEPLOYER_PK:-}" ]; then DEPLOYER_PK=$(from_env_local DEPLOYER_PK); DEPLOYER_SRC="web/.env.local"; fi
+if [ -z "${DEPLOYER_PK:-}" ]; then DEPLOYER_PK=$ANVIL_PK0; DEPLOYER_SRC="anvil 預設（沒有找到 DEPLOYER_PK）"; fi
+RELAYER_PK="${RELAYER_PK:-$(from_env_local RELAYER_PK)}"
+FILE_CHAIN=$( [ -f "$ENV_LOCAL" ] && sed -n 's/^CHAIN_ID=\([0-9]*\).*$/\1/p' "$ENV_LOCAL" | tail -1 || true )
 
 # MCOPY（0x5E）探針：把 32 bytes 複製一份再回傳；鏈不支援則整段 revert。
 MCOPY_PROBE=0x60206000600060005E60005260206000F3
@@ -118,14 +127,28 @@ if [ -z "$DEPLOYER" ]; then
 fi
 BAL=$(cast balance "$DEPLOYER" --rpc-url "$RPC" 2>/dev/null || echo 0)
 BAL_ETH=$(cast from-wei "${BAL:-0}" 2>/dev/null || echo 0)
-echo "  地址：$DEPLOYER"
+echo "  地址：$DEPLOYER（金鑰來自 ${DEPLOYER_SRC}）"
 if [ "${BAL:-0}" = "0" ]; then
   bad "餘額 0 —— 部署一定失敗"; FAIL=1
-  echo "    bash script/bootstrap.sh keys 會產生金鑰並印出每把要撥多少。"
+  echo "    撥款給上面這個地址。要撥多少：bash script/bootstrap.sh fund"
 else
   ok "餘額 ${BAL_ETH}（帳本 + 兩個 Safe + Timelock，約需數百萬 gas）"
 fi
-echo "  RELAYER_PK 要有餘額（每小時送一次承諾）；三把簽章金鑰只簽鏈下事件，不需要餘額。"
+if [ -n "${RELAYER_PK:-}" ]; then
+  RELAYER=$(cast wallet address --private-key "$RELAYER_PK" 2>/dev/null)
+  RBAL=$(cast balance "$RELAYER" --rpc-url "$RPC" 2>/dev/null || echo 0)
+  if [ "${RBAL:-0}" = "0" ]; then
+    warn "RELAYER $RELAYER 餘額 0 —— 部署可以，但每小時的承諾送不出去（bash script/bootstrap.sh fund 看要撥多少）"
+  else
+    ok "RELAYER $RELAYER 餘額 $(cast from-wei "$RBAL" 2>/dev/null)（每小時送一次承諾）"
+  fi
+else
+  echo "  RELAYER_PK 要有餘額（每小時送一次承諾）；三把簽章金鑰只簽鏈下事件，不需要餘額。"
+fi
+if [ -n "${FILE_CHAIN:-}" ] && [ "$FILE_CHAIN" != "$CHAIN_ID" ]; then
+  warn "web/.env.local 的 CHAIN_ID 是 ${FILE_CHAIN}，目標鏈是 ${CHAIN_ID}：網站與 npm 工具會拒用檔案裡的金鑰。"
+  echo "    bash script/bootstrap.sh deploy 部署完會把 RPC_URL／CHAIN_ID 寫回去；要先改也可以手動改這兩行。"
+fi
 
 PUBLIC_CHAIN=1
 case "$CHAIN_ID" in 31337|1337) PUBLIC_CHAIN=0;; esac
