@@ -2,6 +2,7 @@ import "server-only";
 import { parseAbi, type Address } from "viem";
 import { publicClient } from "./chain";
 import { cafecaConfig, identityClient, WALLET_ORIGIN } from "./cafeca/config";
+import { readKycStatus, type KycStatus } from "@/lib/ledger/cafeca-identity";
 
 /// 錢包的伺服器端視圖。
 ///
@@ -20,7 +21,6 @@ import { cafecaConfig, identityClient, WALLET_ORIGIN } from "./cafeca/config";
 ///   · 它現在正在恢復中嗎（有人正在主張這個帳戶是他的）
 ///   · 它的實名等級是多少（決定 KYCRegistry 的 tier）
 
-const attestationAbi = parseAbi(["function levelOf(address) view returns (uint8)"]);
 const recoveryAbi = parseAbi(["function isPending(address) view returns (bool)"]);
 
 export type WalletView = {
@@ -28,6 +28,8 @@ export type WalletView = {
   exists: boolean;
   recoveryPending: boolean;
   kycLevel: number;
+  /// IdentityRegistry v2 的完整狀態（主體類型、簽章者等級）。沒有設定 v2 或讀不到時為 null
+  kyc: KycStatus | null;
   /// 使用者要管理金鑰、裝置或發動恢復時該去的地方。
   manageUrl: string;
 };
@@ -36,29 +38,29 @@ export async function walletOf(address: Address): Promise<WalletView> {
   const cfg = await cafecaConfig();
   const { client } = await identityClient();
 
-  const [code, recoveryPending, kycLevel] = await Promise.all([
+  const registry = cfg.contracts.identityRegistry;
+  const [code, recoveryPending, kyc] = await Promise.all([
     client.getCode({ address }).catch(() => undefined),
     client
       .readContract({ address: cfg.contracts.recovery, abi: recoveryAbi, functionName: "isPending", args: [address] })
       .catch(() => false),
-    client
-      .readContract({ address: cfg.contracts.attestation, abi: attestationAbi, functionName: "levelOf", args: [address] })
-      // 讀不到就當 0。寧可把人擋在門外，也不要因為一次 RPC 失敗就把未實名當成已實名。
-      .catch(() => 0),
+    // 只讀 v2（v1 不能撤銷、舊簽章可重送）。讀不到就當未實名：寧可把人擋在門外，也不要因為一次 RPC 失敗就把未實名當成已實名。
+    registry ? readKycStatus((q) => client.readContract(q as never), registry, address).catch(() => null) : Promise.resolve(null),
   ]);
 
   return {
     address,
     exists: Boolean(code && code !== "0x"),
     recoveryPending: Boolean(recoveryPending),
-    kycLevel: Number(kycLevel),
+    kycLevel: kyc?.effectiveLevel ?? 0,
+    kyc,
     manageUrl: `${WALLET_ORIGIN}/security`,
   };
 }
 
 /// 開發用登入的帳戶：沒有 CAFECA 身分合約，也沒有恢復流程。實名等級照 session（開發登入給的）。
 export async function devWalletOf(address: Address, kycLevel: number): Promise<WalletView> {
-  return { address, exists: await existsHere(address), recoveryPending: false, kycLevel, manageUrl: `${WALLET_ORIGIN}/security` };
+  return { address, exists: await existsHere(address), recoveryPending: false, kycLevel, kyc: null, manageUrl: `${WALLET_ORIGIN}/security` };
 }
 
 /// 這個地址在**本站這條鏈**上有沒有合約。

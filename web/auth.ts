@@ -5,6 +5,7 @@ import { getAddress, isAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { devKeyOf } from "@/lib/server/dev-key";
 import { verifySignIn, type SignInResponse } from "@/lib/server/cafeca/verify";
+import { adoptCafecaIdentity, syncCafecaIdentity } from "@/lib/server/kyc-cafeca";
 import { NONCE_COOKIE } from "@/app/api/auth/cafeca/nonce/route";
 
 /// 登入 = 證明你控制一個 CAFECA 身分合約。
@@ -50,6 +51,15 @@ providers.push(
 
       try {
         const u = await verifySignIn(res);
+        if (u.credentialError) console.warn("[cafeca] KYC Credential 沒有通過驗證：", u.credentialError);
+        // CAFECA 實名 → 帳本身分。失敗不擋登入（身分頁會說明原因），只有使用者同意提供實名相關資料時才做
+        if (u.kyc && (u.credential || u.credentialError)) {
+          const a = await adoptCafecaIdentity(u.account, u.kyc, u.credential, u.credentialError);
+          if (!a.adopted) console.warn("[cafeca] 沒有採用實名：", a.reason);
+        } else if (u.kyc) {
+          // 沒有帶實名資料的登入：只重查狀態（CAFECA 暫停、撤銷時帳本身分跟著失效）
+          await syncCafecaIdentity(u.account).catch((e) => console.warn("[cafeca] 實名同步失敗：", (e as Error).message));
+        }
         return {
           id: getAddress(u.account),
           name: u.handle ?? `${u.account.slice(0, 6)}…${u.account.slice(-4)}`,

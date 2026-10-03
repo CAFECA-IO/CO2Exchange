@@ -185,6 +185,10 @@ do_deploy () {
 # 提交一期，成功就寫出公開檔（web/data/public/epochs/<期別>.json；已存在的不重寫）。
 # `seed`、`commit`、`commit-loop` 都走這裡，公開檔不會漏期。
 do_commit () {
+  # 先同步 CAFECA 實名（暫停、撤銷、過期的身分在這一期就失效）。失敗不擋提交：讀不到 CAFECA 不代表帳本不能承諾
+  mkdir -p "$LOG"
+  ( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/kyc-sync.mjs >> "$LOG/kyc-sync.log" 2>&1 ) \
+    || echo "   ⚠️ CAFECA 實名同步沒有完成，看 $LOG/kyc-sync.log"
   ( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/ledger-commit.mjs ) || return 1
   mkdir -p "$LOG"
   ( cd web && RPC_URL="$RPC_URL" node --experimental-strip-types --no-warnings scripts/ledger-publish.mjs >> "$LOG/publish.log" 2>&1 ) \

@@ -86,7 +86,8 @@ export function setPayoutAccount(account: Address, p: { bankCode?: string; accou
   if (!holder) throw new ApiError("MISSING_PARAM", "戶名必填（須與身分驗證的名稱相同）", { param: "holder" });
   // 戶名要和身分驗證的名稱相同（約定書第五條之二第三項）。有核准過的申請才比得了；
   // 沒有的（Phase 0 的開發帳戶）先放行，出金時營運方仍要人工核對
-  const kyc = all<KycRequest>("kyc-requests").filter((r) => r.account.toLowerCase() === account.toLowerCase() && r.status === "approved").at(-1);
+  // 最新一筆核准過的身分（含後來因 CAFECA 暫停而失效的那筆——名字仍是同一個人，不能因為失效就跳過比對）
+  const kyc = all<KycRequest>("kyc-requests").filter((r) => r.account.toLowerCase() === account.toLowerCase() && (r.status === "approved" || r.status === "lapsed")).at(-1);
   const kycName = kyc ? nameOf(kyc).replace(/\s+/g, "") : "";
   if (kycName && kycName !== holder.replace(/\s+/g, "")) {
     throw new ApiError("INVALID_PARAM", "戶名要和身分驗證的名稱相同（收款帳戶必須是您本人名義）", { param: "holder" });

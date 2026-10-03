@@ -64,7 +64,7 @@ export default function EnterprisePage() {
   }, [wallet, reloadKey, lg.me?.head.seq]);
 
   if (!userId || !wallet || !config || (!channelOpen && !lg.devSigning)) return <AccountGate />;
-  if (tier !== 2) return <Notice>企業功能需要法人身分。請到<Link className="underline" href="/kyc">身分驗證</Link>以工商憑證驗證。</Notice>;
+  if (tier !== 2) return <Notice>企業功能需要法人身分。請在 CAFECA 錢包建立公司帳戶並「以公司身分」登入，再到<Link className="underline" href="/kyc">身分驗證</Link>完成登記。</Notice>;
 
   /// 使用者簽一則訊息（EIP-712），不送鏈上交易。after：帳本收下之後才做的鏈下登錄（例如掛單的使用期限）
   async function ledgerAct(label: string, kind: "place" | "cancel" | "project", fields: Record<string, unknown>, detail: string, after?: () => Promise<unknown>) {

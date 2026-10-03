@@ -4,6 +4,7 @@ import { ApiError } from "../api";
 import { cafecaConfig, identityClient, WALLET_ORIGIN } from "./config";
 import { consumeNonce } from "./nonce";
 import { signInDigest } from "./digest";
+import { readKycStatus, verifyKycCredential, CREDENTIAL_CLAIMS, type CredentialClaims, type KycCredential, type KycStatus } from "@/lib/ledger/cafeca-identity";
 
 /// 「以 CAFECA 登入」的後端驗證。
 ///
@@ -23,7 +24,6 @@ import { signInDigest } from "./digest";
 
 const ERC1271_MAGIC = "0x1626ba7e";
 const erc1271Abi = parseAbi(["function isValidSignature(bytes32,bytes) view returns (bytes4)"]);
-const attestationAbi = parseAbi(["function levelOf(address) view returns (uint8)"]);
 const recoveryAbi = parseAbi(["function isPending(address) view returns (bool)"]);
 
 /// 線上傳過來的樣子：JSON 沒有 bigint，所以時間欄位是 number。
@@ -46,15 +46,23 @@ export type SignInResponse = {
   claims?: Record<string, unknown>;
   state?: string;
   error?: string;
+  /// 使用者同意提供姓名、證件類型、國籍、同一人識別碼或統編時才有（CAFECA README §9）
+  credential?: KycCredential;
 };
 
 export type CafecaUser = {
   /// 身分合約地址。**這就是使用者在本站的唯一 ID，也是他在帳本上的地址。**
   account: Address;
   chainId: number;
-  /// 實名等級。0 未實名、2 已通過證件＋臉部驗證。
+  /// 實名等級（IdentityRegistry v2 的 effectiveLevel）。0 未實名或失效、2 已通過實名。
   /// AI 子錢包是獨立地址且不會有實名等級，所以這個值也是「本人 vs 代理」的判準。
   kycLevel: number;
+  /// v2 的完整狀態（主體類型、簽章者等級……）。使用者沒同意 kyc_level 或沒有設定 v2 位址時為 null
+  kyc: KycStatus | null;
+  /// 已驗證的 KYC Credential（姓名、統編……）。使用者沒有同意任何一項時為 null
+  credential: CredentialClaims | null;
+  /// 帶了 credential 但驗不過時的理由（只進伺服器日誌與身分頁的提示，不擋登入本身）
+  credentialError?: string;
   handle: string | null;
   /// 代稱是否由錢包查詢確認過。false 代表只能顯示，不能當識別依據。
   handleVerified: boolean;
@@ -160,16 +168,29 @@ export async function verifySignIn(res: SignInResponse): Promise<CafecaUser> {
   // ── 6. 使用者同意提供的那些 claims ──────────────────────────
   const consented = new Set(String(m!.claims ?? "").split(",").map((s) => s.trim()).filter(Boolean));
 
+  // 實名一律讀 IdentityRegistry v2（v1 沒有 nonce、不能撤銷、舊簽章可重送——CAFECA 明說依賴方不應再讀）
   let kycLevel = 0;
-  if (consented.has("kyc_level")) {
+  let kyc: KycStatus | null = null;
+  const registry = cfg.contracts.identityRegistry;
+  if (registry && (consented.has("kyc_level") || CREDENTIAL_CLAIMS.some((c) => consented.has(c)))) {
     try {
-      kycLevel = Number(await client.readContract({
-        address: cfg.contracts.attestation, abi: attestationAbi, functionName: "levelOf", args: [account as Address],
-      }));
+      kyc = await readKycStatus((q) => client.readContract(q as never), registry, account as Address);
+      if (consented.has("kyc_level")) kycLevel = kyc.effectiveLevel;
     } catch {
       // 讀不到就當 0。寧可把人擋在門外，也不要因為一次 RPC 失敗就把未實名當成已實名。
-      kycLevel = 0;
+      kyc = null;
     }
+  }
+  let credential: CredentialClaims | null = null;
+  let credentialError: string | undefined;
+  if (res.credential && CREDENTIAL_CLAIMS.some((c) => consented.has(c))) {
+    try {
+      if (!registry || !kyc) throw new Error("沒有 IdentityRegistry v2 的位址或讀不到實名狀態");
+      credential = await verifyKycCredential(res.credential, {
+        account: account as Address, audience: origin, nonce: String(m!.nonce), chainId: cfg.chainId, identityRegistry: registry,
+        kyc, granted: [...consented], now,
+      });
+    } catch (e) { credentialError = (e as Error).message; }
   }
 
   // 回應裡自稱的 handle 不可信（它跟簽章內容無關，改了也不會讓驗證失敗），
@@ -200,6 +221,9 @@ export async function verifySignIn(res: SignInResponse): Promise<CafecaUser> {
     account: account as Address,
     chainId: cfg.chainId,
     kycLevel,
+    kyc,
+    credential,
+    credentialError,
     handle,
     handleVerified,
     recoveryPending,

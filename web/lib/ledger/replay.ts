@@ -76,7 +76,7 @@ export async function verifySignatures(
       const role = roleFor(e);
       out.set(String(e.seq), role
         ? await verifyAuthoritySignatures({ role, signer, digest, signature, atBlock: e.atBlock }, opts.authorities)
-        : await verifyUserSignature({ account: signer, digest, signature, atBlock: e.atBlock }, keys));
+        : await verifyUserSignature({ account: signer, digest, signature, atBlock: e.atBlock, atTime: e.at }, keys));
     }));
   }
   return out;

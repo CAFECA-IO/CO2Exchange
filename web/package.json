@@ -20,6 +20,7 @@
     "test:ledger": "node --experimental-strip-types --no-warnings scripts/test-ledger.mjs",
     "test:ledger-chain": "node --experimental-strip-types --no-warnings scripts/e2e-ledger-chain.mjs",
     "test:ledger-write": "node --experimental-strip-types --no-warnings scripts/e2e-ledger-write.mjs",
+    "kyc:sync": "node --experimental-strip-types --no-warnings scripts/kyc-sync.mjs",
     "ledger:health": "node --experimental-strip-types --no-warnings scripts/ledger-health.mjs",
     "ledger:seed": "node --experimental-strip-types --no-warnings scripts/ledger-seed.mjs",
     "ledger:commit": "node --experimental-strip-types --no-warnings scripts/ledger-commit.mjs",
@@ -34,6 +35,7 @@
     "test:ledger-mm": "node --experimental-strip-types --no-warnings scripts/e2e-ledger-mm.mjs",
     "ledger:publish": "node --experimental-strip-types --no-warnings scripts/ledger-publish.mjs",
     "verify:proof": "node scripts/verify-proof.mjs",
+    "test:ledger-kyc": "node --experimental-strip-types --no-warnings scripts/e2e-ledger-kyc.mjs",
     "test:ledger-proof": "node --experimental-strip-types --no-warnings scripts/e2e-ledger-proof.mjs"
   },
   "dependencies": {

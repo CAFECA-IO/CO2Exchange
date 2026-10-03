@@ -317,6 +317,26 @@ npm run fiat -- settle … --print                   # 不送出：印出 to / d
 不匯款就退回（金額回到可動用）：`/admin`「出入金」的「退回請求」，或
 `npm run ledger:authority -- propose withdrawReject '{"account":"0x…","amount":"…","reason":"收款帳戶有誤"}'`。
 
+### 身分驗證：直接採用 CAFECA 實名（`npm run kyc:sync`）
+
+本站不再自己收身分證號。**自然人**在 CAFECA 錢包完成證件＋活體驗證；**公司**在錢包建立公司帳戶、
+以統編通過商工登記驗證（或工商憑證綁定）後「以公司身分」登入（CAFECA issue #1、#2）。
+
+- 登入時錢包逐項詢問要不要提供：自然人的**證件姓名、證件類型、國籍、同一人識別碼**（`pairwise_id`，每個網站不同、推不回證號），
+  公司的**統編與公司名稱**。伺服器驗 CAFECA 簽的 EIP-712 `KycCredential`（綁本站網域、這次登入的 nonce、目前證明的 nonce），
+  再由本站的 IDENTITY_VERIFIER 簽一筆帳本身分：自然人 tier 1、公司 tier 2，效期與管轄地沿用 CAFECA 的。
+  **CAFECA 的 L2 不等於本站的 tier 2**——本站的 tier 2 是法人，只看 CAFECA 的主體類型。
+- 一個 `pairwise_id`（或一個統編）只能有一個有效的交易帳戶。姓名以密文存放，只用來比對出金戶名。
+- 實名狀態只讀 **IdentityRegistry v2**（v1 不能撤銷、舊簽章可重送）。CAFECA 暫停、撤銷、過期或簽章者退役時，
+  `npm run kyc:sync`（demo-box 每一期提交前都會跑；登入時也會重查）讓帳本身分到期，持有不受影響；CAFECA 重新簽發後自動恢復。
+- **原型簽章**：CAFECA 目前所有實名都是 PROTOTYPE。正式環境只收 PRODUCTION；測試網展示要收原型就在 `web/.env.local` 設
+  `CAFECA_ACCEPT_PROTOTYPE=1`（本機鏈一律收）。CAFECA 換正式簽章者時原型期的實名會失效，`kyc:sync` 跟著讓帳本身分失效。
+- **法人帳戶的簽章**：公司沒有自己的金鑰，由成員以自己的 Passkey 簽（`MemberValidator`）。收單時鏡像**成員**的公鑰；
+  查核從鏈上事件重建「成員那時的角色（`MemberSet`）與實名（`Attested`／`Suspended`／`Revoked`／`SignerSet`）」再驗，同樣不需要 archive 節點。
+  MemberValidator 位址 CAFECA 的設定檔沒公布，Boltchain 8018 用已知部署（`CAFECA_MEMBER_VALIDATOR` 可覆寫）。
+- 人工審核（`/kyc` 下半部、`/admin`「KYC 審核」）只留給 CAFECA 還不支援的主體：行號、有限合夥、財團與社團法人。
+  外部鏈上不收自然人的人工申請。
+
 ### 個人資料（`npm run data:protect`）
 
 身分證號、統編、姓名／公司名稱、收款帳號與戶名在 `web/data/*.json` 裡**只以密文存放**（AES-256-GCM，
@@ -367,8 +387,8 @@ forge test                                   # 34：帳本合約、記帳 TWD、
 cd web
 npm run check:boundary                       # 前端沒有直接連節點
 npm run check:api-envelope                   # 每支 API 都走制式信封與錯誤碼
-npm run test:ledger                          # 27：引擎規則、重播、雜湊鏈、出金請求／退回／確認、帳本檔增量讀取、鏈上事件索引
-npm run test:cafeca                          # 23：登入 nonce、SignIn digest、委託單 EIP-712、設定檔解析
+npm run test:ledger                          # 36：引擎規則、重播、雜湊鏈、出金、增量讀取與索引、法人帳戶簽章、KYC Credential、實名同步
+npm run test:cafeca                          # 24：登入 nonce、SignIn digest、委託單 EIP-712、設定檔解析（含 IdentityRegistry v2）
 npm run test:keys && npm run test:mm         # 金鑰來源、做市策略
 npm run test:sealed                          # 11：個人資料加密、AAD、換金鑰、data:protect 遷移
 npm run build
@@ -377,6 +397,7 @@ npm run build
 anvil --port 38546 & npm run test:ledger-chain    # 帳本 × 合約：營運 Safe 入金、承諾、重播、出金確認
 anvil --port 38548 & npm run test:ledger-mm       # 11：做市與模擬器
 anvil --port 38549 & npm run test:ledger-proof    # 12：npm run fiat、證明檔、公開檔、監理鏡像、ledger:health、沒有逃生門
+anvil --port 38552 & npm run test:ledger-kyc      # 7：真的 IdentityRegistry v2（test/vendor/cafeca）上的暫停、重新簽發、撤銷、簽章者退役 → kyc:sync
 # 75：網站 API → 帳本 → 收款帳戶、出金、/admin 出入金 → 承諾 → 查核；最後掃 web/data 沒有明文個資。前置見 scripts/e2e-ledger-write.mjs 開頭
 npm run test:ledger-write
 
@@ -418,6 +439,7 @@ npm run e2e
 | 存身分申請或收款帳戶時 `DATA_KEY_MISSING` | 外部鏈上沒設 `DATA_KEY`。`bash script/bootstrap.sh keys` 產生後重啟網站 |
 | `DATA_KEY_MISMATCH`「加密的個人資料解不開」 | 換了 `DATA_KEY` 卻沒把舊的放進 `DATA_KEY_PREVIOUS`。放回去、重啟，再 `npm run data:protect -- --rekey` |
 | 前端報 `0x` 開頭的八位十六進位 | `web/lib/error-abi.ts` 沒跟上合約：`cd web && npm run gen:errors` |
+| 用 CAFECA 登入了，`/kyc` 卻說「還沒有登記為本站身分」 | 畫面上會寫原因：多半是登入時沒有同意提供姓名與同一人識別碼（公司：統編與名稱），或 CAFECA 的實名是原型簽章而沒有設 `CAFECA_ACCEPT_PROTOTYPE=1`。按「以 CAFECA 實名驗證」重新登入 |
 | `/api/health` 回 503 `LEDGER_STALLED`／`/admin` 上方跳「承諾排程停擺」 | 提交排程沒在跑或每次都失敗。`demo-box.sh status`、看 `.demo-box/commit.log` 最後的 ✗；修好之後下一次提交會一次涵蓋落後的事件 |
 | 懷疑鏈上事件的索引不對（例如節點曾經回報錯誤的資料） | 刪掉 `web/data/chain-index/`，下一次整份重讀；`npm run ledger:verify` 本來就不用它 |
 | 重新部署後畫面有資料但對不上 | `web/data/` 是舊部署的。`cd web && npm run data:reset`（搬到 `data.bak-<時間戳>`，不是刪除） |
@@ -459,6 +481,7 @@ web/contracts/*.md             定型化契約與政策
 | 誰簽 | 格式 | 驗法 |
 |---|---|---|
 | 使用者（CAFECA 身分合約） | EIP-712：PlaceOrder／CancelOrder／RetireCredits／RegisterProject／RequestWithdrawal | ERC-1271 簽章依 CAFECA 版面解析、驗 WebAuthn ES256；公鑰與有效區間來自 keyring 的 `KeyAdded`／`KeyRemoved` 事件（鏡像進帳本） |
+| 法人帳戶（CAFECA 公司帳戶） | 同上 | `MemberValidator ‖ abi.encode(member, 成員簽章)`；成員簽 `entityHash`。成員角色來自 `MemberSet`、成員實名來自 IdentityRegistry v2 的事件，成員金鑰同上 |
 | 做市、模擬人物（EOA） | 同上 | ecrecover |
 | 授權單位 | `LedgerEvent(version, kind, payload)`，payload 是內容雜湊 | ecrecover；k-of-n 時附門檻數量的不同持有人簽章 |
 | 本站收單 | 簽收收據（RECEIPT_SIGNER） | ecrecover |

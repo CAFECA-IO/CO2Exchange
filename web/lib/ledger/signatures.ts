@@ -81,9 +81,29 @@ export type KeyRecord = {
 /// 帳戶的驗證模組安裝區間（`ModuleInstalled`／`ModuleUninstalled`，module type 1）。
 export type ModuleSpan = { module: Address; from: bigint; until: bigint | null };
 
+/// 法人帳戶（CAFECA issue #1）：法人沒有自己的金鑰，由「成員」以自己的 Passkey 代簽。
+/// 查核要知道三件事，全部來自鏈上事件：成員在那個區塊有沒有角色（MemberValidator 的 `MemberSet`）、
+/// 成員那時是不是有效 L2（IdentityRegistry v2 的 `Attested`／`Suspended`／`Revoked`／`SignerSet`）、
+/// 成員的金鑰（和自然人一樣：帳本的 `userKey` 鏡像＋ keyring 的事件）。
+export type MemberChange = { block: bigint; logIndex: number; role: number };
+export type IdentityChange = { block: bigint; logIndex: number; kind: "attested" | "suspended" | "revoked"; level: number; expiry: bigint; signer: Address };
+export type SignerChange = { block: bigint; logIndex: number; cls: number };
+export type EntityBook = {
+  memberValidator: Address;
+  chainId: number;
+  /// 法人｜成員 → 角色變動（依區塊排序）
+  members: Map<string, MemberChange[]>;
+  /// 帳戶 → 實名狀態變動
+  identity: Map<string, IdentityChange[]>;
+  /// 簽章者 → 等級變動（0 NONE、1 PROTOTYPE、2 PRODUCTION）
+  signers: Map<string, SignerChange[]>;
+};
+
 export type KeyBook = {
   /// CAFECA 的 KeyringValidator 位址。沒有（本機鏈）＝不接受 CAFECA 簽章
   keyring: Address | null;
+  /// 法人帳戶簽章需要的事件。沒有＝不接受法人帳戶的簽章
+  entity?: EntityBook;
   /// 帳戶｜keyId → 這把金鑰的每一段有效區間（移除後再加回來會有多段）
   keys: Map<string, KeyRecord[]>;
   /// 帳戶 → 驗證模組區間。帳戶不在這張表裡代表沒讀到它的模組事件——那樣就不能確認 keyring 當時有裝，一律拒收
@@ -123,9 +143,77 @@ export function verifyWebAuthn(digest: Hex, s: CafecaSig, key: { qx: Hex; qy: He
   return ok ? { ok: true } : { ok: false, reason: "P-256 簽章驗證失敗" };
 }
 
-/// 使用者（或單一金鑰）簽章：65 bytes → ecrecover；否則當作 CAFECA ERC-1271。
+// ── 法人帳戶（MemberValidator） ──
+
+const MEMBER_SIG = [{ type: "tuple", components: [{ name: "member", type: "address" }, { name: "signature", type: "bytes" }] }] as const;
+export type MemberSig = { validator: Address; member: Address; signature: Hex };
+
+/// 法人帳戶的 ERC-1271 簽章：`MemberValidator (20 bytes) ‖ abi.encode(MemberSig{member, signature})`，
+/// 其中 signature 是成員自己帳戶的 ERC-1271 簽章（KeyringValidator 版面）。
+export function decodeMemberSignature(signature: Hex): MemberSig | null {
+  try {
+    if (size(signature) < 20 + 32 * 4) return null;
+    const validator = slice(signature, 0, 20) as Address;
+    const [d] = decodeAbiParameters(MEMBER_SIG, slice(signature, 20));
+    return { validator, member: d.member, signature: d.signature };
+  } catch { return null; }
+}
+export function encodeMemberSignature(m: MemberSig): Hex {
+  return concat([m.validator, encodeAbiParameters(MEMBER_SIG, [{ member: m.member, signature: m.signature }])]);
+}
+
+const ENTITY_TYPEHASH = keccak256(new TextEncoder().encode("CAFECA_ENTITY_V1"));
+/// 成員實際簽的雜湊：把法人、鏈與 MemberValidator 綁進去（MemberValidator.entityHash），
+/// 成員個人簽過的訊息不會被當成法人簽章，反之亦然。
+export function entityHashOf(chainId: number, memberValidator: Address, entity: Address, hash: Hex): Hex {
+  return keccak256(encodeAbiParameters(
+    [{ type: "bytes32" }, { type: "uint256" }, { type: "address" }, { type: "address" }, { type: "bytes32" }],
+    [ENTITY_TYPEHASH, BigInt(chainId), memberValidator, entity, hash],
+  ));
+}
+
+const upTo = <T extends { block: bigint }>(list: T[] | undefined, block: bigint) => (list ?? []).filter((x) => x.block <= block).at(-1);
+
+/// 成員在那個區塊的角色（0 NONE、1 OPERATOR、2 ADMIN）。
+export function memberRoleAt(e: EntityBook, entity: Address, member: Address, block: bigint): number {
+  return upTo(e.members.get(`${entity.toLowerCase()}|${member.toLowerCase()}`), block)?.role ?? 0;
+}
+
+/// 帳戶在那個區塊的有效實名等級（IdentityRegistry v2 的 _effective）：ACTIVE、未過期、簽章者仍有效。
+/// `time` 是事件的收單時間（合約用 block.timestamp；收單時間與收單區塊的時間差不到一塊）。
+export function effectiveLevelAt(e: EntityBook, account: Address, block: bigint, time: bigint): number {
+  const last = upTo(e.identity.get(account.toLowerCase()), block);
+  if (!last || last.kind !== "attested") return 0;
+  if (last.expiry < time) return 0;
+  const cls = upTo(e.signers.get(last.signer.toLowerCase()), block)?.cls ?? 0;
+  return cls === 0 ? 0 : last.level;
+}
+
+async function verifyEntitySignature(
+  a: { account: Address; digest: Hex; signature: Hex; atBlock: bigint; atTime?: bigint }, book: KeyBook, e: EntityBook,
+): Promise<SigCheck> {
+  const m = decodeMemberSignature(a.signature);
+  if (!m) return { ok: false, reason: "法人帳戶的簽章格式錯誤" };
+  const spans = book.modules.get(a.account.toLowerCase());
+  if (!spans?.some((s) => s.module.toLowerCase() === e.memberValidator.toLowerCase() && within(s.from, s.until, a.atBlock))) {
+    return { ok: false, reason: `帳戶在區塊 ${a.atBlock} 沒有安裝 MemberValidator` };
+  }
+  const role = memberRoleAt(e, a.account, m.member, a.atBlock);
+  if (role === 0) return { ok: false, reason: `${m.member} 在區塊 ${a.atBlock} 不是這個法人的成員` };
+  if (a.atTime === undefined) return { ok: false, reason: "驗法人簽章需要收單時間" };
+  if (effectiveLevelAt(e, m.member, a.atBlock, a.atTime) < 2) return { ok: false, reason: `成員 ${m.member} 在區塊 ${a.atBlock} 不是有效的 L2 實名` };
+  if (size(m.signature) === 65) return { ok: false, reason: "成員的簽章必須是 CAFECA 帳戶簽章" };
+  // 成員的簽章用成員自己的金鑰驗；不允許巢狀的法人簽章
+  const inner = await verifyUserSignature(
+    { account: m.member, digest: entityHashOf(e.chainId, e.memberValidator, a.account, a.digest), signature: m.signature, atBlock: a.atBlock },
+    { ...book, entity: undefined },
+  );
+  return inner.ok ? { ok: true } : { ok: false, reason: `成員 ${m.member.slice(0, 10)}… 的簽章：${inner.reason}` };
+}
+
+/// 使用者（或單一金鑰）簽章：65 bytes → ecrecover；否則當作 CAFECA ERC-1271（個人帳戶或法人帳戶）。
 export async function verifyUserSignature(
-  a: { account: Address; digest: Hex; signature: Hex; atBlock: bigint },
+  a: { account: Address; digest: Hex; signature: Hex; atBlock: bigint; atTime?: bigint },
   book: KeyBook,
 ): Promise<SigCheck> {
   if (size(a.signature) === 65) {
@@ -133,6 +221,9 @@ export async function verifyUserSignature(
       const who = await recoverAddress({ hash: a.digest, signature: a.signature });
       return who.toLowerCase() === a.account.toLowerCase() ? { ok: true } : { ok: false, reason: "簽章者不符" };
     } catch { return { ok: false, reason: "簽章格式錯誤" }; }
+  }
+  if (book.entity && size(a.signature) >= 20 && slice(a.signature, 0, 20).toLowerCase() === book.entity.memberValidator.toLowerCase()) {
+    return verifyEntitySignature(a, book, book.entity);
   }
   const s = decodeCafecaSignature(a.signature);
   if (!s) return { ok: false, reason: "簽章既不是 ECDSA 也不是 CAFECA 格式" };

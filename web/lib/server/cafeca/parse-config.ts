@@ -1,4 +1,5 @@
 import { isAddress, type Address } from "viem";
+import { KNOWN_CAFECA } from "../../ledger/cafeca-identity.ts";
 
 /// CAFECA 設定檔的解析。**獨立一支、不依賴 Next**，為的是它能被單獨測試。
 ///
@@ -22,6 +23,10 @@ export type CafecaContracts = {
   twdc?: Address;
   /// ERC-4337 EntryPoint。使用者的帳戶是 4337 帳戶，爭議處理時會用到。
   entryPoint?: Address;
+  /// IdentityRegistry v2：實名狀態、主體類型（自然人／法人）、簽章者等級。**依賴方只讀這一支**，不讀 v1 attestation
+  identityRegistry?: Address;
+  /// 法人帳戶的 validator（成員以自己的 Passkey 代簽）。設定檔目前沒有公布，由環境變數或已知部署補上
+  memberValidator?: Address;
 };
 
 export type CafecaConfig = {
@@ -73,6 +78,8 @@ export function parseConfig(raw: unknown): CafecaConfig {
       recovery: need(c.recovery, "recovery"),
       twdc: optAddr(c.twdc),
       entryPoint: optAddr(c.entryPoint),
+      identityRegistry: optAddr(c.identityRegistry),
+      memberValidator: optAddr(c.memberValidator),
     },
   };
 }
@@ -85,3 +92,16 @@ export function parseConfig(raw: unknown): CafecaConfig {
 /// 這種事要在啟動時就喊出來，不要等到有人登不進去才查。
 export const looksLocal = (cfg: CafecaConfig): boolean =>
   /localhost|127\.0\.0\.1|\[::1\]/.test(cfg.issuer ?? "");
+
+/// 環境變數 → 已知部署 → 設定檔，補齊兩支選用的合約。環境變數永遠優先（正式環境應該寫死）。
+export function withOverrides(cfg: CafecaConfig, env: Record<string, string | undefined>): CafecaConfig {
+  const known = KNOWN_CAFECA[cfg.chainId] ?? {};
+  return {
+    ...cfg,
+    contracts: {
+      ...cfg.contracts,
+      identityRegistry: optAddr(env.CAFECA_IDENTITY_REGISTRY) ?? cfg.contracts.identityRegistry ?? known.identityRegistry,
+      memberValidator: optAddr(env.CAFECA_MEMBER_VALIDATOR) ?? cfg.contracts.memberValidator ?? known.memberValidator,
+    },
+  };
+}

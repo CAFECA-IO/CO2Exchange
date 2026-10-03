@@ -31,8 +31,10 @@ export type Wallet = {
   exists: boolean;
   /// 有人正在主張這個帳戶是他的。敏感操作要停。
   recoveryPending: boolean;
-  /// 0 未實名 / 2 證件＋臉部。AI 子錢包不會有實名等級。
+  /// 0 未實名 / 2 證件＋臉部（IdentityRegistry v2 的有效等級）。AI 子錢包不會有實名等級。
   kycLevel: number;
+  /// CAFECA 實名的完整狀態：自然人或法人、簽章者等級（原型／正式）、效期
+  kyc?: { subjectType: "person" | "entity"; level: number; effectiveLevel: number; status: string; expiry: number; jurisdiction: string; signerClass: string } | null;
   /// 要管理金鑰、裝置或發動恢復時該去的地方。本站做不到，也不該做到。
   manageUrl: string;
 };
@@ -42,7 +44,14 @@ export type Me = { address: string | null; handle: string | null; isAdmin: boole
 /// 鏈上身分 + 本機的申請紀錄。`/api/kyc` 回的就是這個形狀。
 export type Identity = {
   tier: number; expiry: number; frozen: boolean; jurisdiction: string; identityHash: string;
-  application: { id: string; status: string; tier: number; reason?: string; createdAt: string } | null;
+  application: { id: string; status: string; tier: number; reason?: string; createdAt: string; source?: string } | null;
+  /// CAFECA 實名（只有帳戶本人看得到）
+  cafeca?: {
+    record: { status: string; tier: number; reason?: string; subjectType?: string; signerClass?: string; expiry?: number; docType?: string | null; jurisdiction?: string; checkedAt?: string } | null;
+    last: { adopted: boolean; reason?: string; at: string } | null;
+    acceptPrototype: boolean;
+    manualIndividual: boolean;
+  } | null;
 };
 
 type Ctx = {

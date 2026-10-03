@@ -15,7 +15,12 @@ export type KycRequest = {
   idNumberMasked: string;
   /// 姓名／公司名稱的密文（出金收款帳戶的戶名要和它相同）
   nameSealed?: string;
-  status: "pending" | "approved" | "rejected"; reason?: string; txHash?: Hex; identityHash?: Hex; decidedBy?: string;
+  /// superseded：同一個帳戶後來有新的 CAFECA 實名紀錄取代它；lapsed：CAFECA 的實名暫停、撤銷或過期，帳本身分已失效
+  status: "pending" | "approved" | "rejected" | "superseded" | "lapsed"; reason?: string; txHash?: Hex; identityHash?: Hex; decidedBy?: string;
+  /// 來源。沒有這個欄位的是人工審核（舊資料）
+  source?: "manual" | "cafeca";
+  /// CAFECA 實名的存查資訊（不含個資）
+  cafeca?: { subjectType: "person" | "entity"; attestationNonce: string; signer: Hex; signerClass: string; expiry: number; jurisdiction: string; docType?: string | null; checkedAt: string };
   /// 舊資料（遷移前）才有的明文欄位。`npm run data:protect` 會把它們改成密文或刪掉；程式不再寫入
   idNumber?: string; name?: string;
 };
@@ -59,7 +64,7 @@ export function identityHashOf(tier: number, idn: string): Hex {
 }
 
 /// 身分驗證服務簽一筆帳本的 identity 事件。
-/// 正式環境：這一步之前要驗證工商憑證 / 自然人憑證 / TW FidO 對 account 的簽章與憑證鏈。
+/// 人工審核那條路（CAFECA 尚不支援的主體）。CAFECA 實名走 kyc-cafeca.ts。
 export async function attestAndRegister(account: Address, tier: number, idn: string) {
   return ledgerRegisterIdentity(account, tier, identityHashOf(tier, idn));
 }

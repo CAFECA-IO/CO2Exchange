@@ -37,11 +37,13 @@ export function ledgerIdentity(account: Address) {
 }
 
 /// 身分驗證服務簽一筆 identity 事件。nonce 是這個帳戶的身分證明序號（重簽一次加一）。
-export async function ledgerRegisterIdentity(account: Address, tier: number, identityHash: Hex) {
+/// 身分驗證服務簽一筆 identity 事件。效期預設一年、轄區預設 TW；CAFECA 實名沿用它自己的效期與管轄地。
+/// 要讓身分失效（CAFECA 暫停、撤銷）就把 expiry 設成現在——引擎只看 expiry > 收單時間。
+export async function ledgerRegisterIdentity(account: Address, tier: number, identityHash: Hex, opts: { expiry?: bigint; jurisdiction?: string } = {}) {
   const cur = ledgerView().state.identities.get(low(account));
   const t = now();
   const r = await appendAuthority("identity", {
-    account, tier, expiry: t + 365n * 86400n, jurisdiction: "TW", identityHash, nonce: cur?.attNonce ?? 0n, deadline: t + 3600n,
+    account, tier, expiry: opts.expiry ?? t + 365n * 86400n, jurisdiction: opts.jurisdiction ?? "TW", identityHash, nonce: cur?.attNonce ?? 0n, deadline: t + 3600n,
   });
   mustAccept(r, "身分登記");
   return { txHash: eventHash(r.event), identityHash, seq: r.event.seq };

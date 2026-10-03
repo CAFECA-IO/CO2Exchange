@@ -7,7 +7,7 @@ import { postJson } from "./fetchJson";
 /// 前端拿到的回應可以被竄改，所以任何「看起來已經登入了」的判斷都必須等後端說話——
 /// 驗證在 lib/server/cafeca/verify.ts，那裡才是真正決定你是誰的地方。
 
-const WALLET = process.env.NEXT_PUBLIC_CAFECA_WALLET ?? "https://cafeca.io";
+export const WALLET = process.env.NEXT_PUBLIC_CAFECA_WALLET ?? "https://cafeca.io";
 
 /// 簽章通道。登入時帶 `channel: true`、使用者同意之後才拿得到。
 ///
@@ -71,10 +71,15 @@ function sdk(): Promise<Sdk> {
 const nonce = () => postJson<{ nonce: string; expiresAt: number }>("/api/auth/cafeca/nonce", {}).then((r) => r.nonce);
 
 const STATEMENT = "登入 TideBit-DeFi 碳權交易所";
-/// 兩項都是使用者可以逐項取消的。
-///   · kyc_level —— 決定 KYCRegistry 的 tier，沒有它就只能看不能交易。
-///   · handle    —— 純顯示用。拒絕了就顯示地址縮寫，不影響任何功能。
-const CLAIMS = ["kyc_level", "handle"];
+/// 每一項都是使用者在 CAFECA 錢包裡逐項開啟的（預設全部關閉）。
+///   · kyc_level   —— 實名狀態（IdentityRegistry v2）。沒有它就只能看不能交易。
+///   · handle      —— 純顯示用。拒絕了就顯示地址縮寫，不影響任何功能。
+///   · legal_name、pairwise_id —— 自然人：本站用 CAFECA 的實名當身分驗證，不再另外收證號。
+///     姓名只用來比對出金戶名；pairwise_id 確認一個人只有一個交易帳戶（每個網站拿到的值不同，推不回證號）。
+///   · doc_type、nationality —— 證件類型與國籍（帳本身分的管轄地）。
+///   · entity_ubn、entity_name —— 以公司身分登入時：統一編號與商工登記名稱（公開的登記資料）。
+/// 錢包只會給這個帳戶有的項目：個人帳戶不會給統編，公司帳戶不會給姓名。
+const CLAIMS = ["kyc_level", "handle", "legal_name", "doc_type", "nationality", "pairwise_id", "entity_ubn", "entity_name"];
 const CHANNEL_KEY = "cafeca.channel";
 
 export type CafecaErrorCode =

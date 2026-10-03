@@ -83,7 +83,14 @@ if (heartbeat) console.log(`  距離上一期超過 ${HEARTBEAT_AFTER} 秒，提
 // 金鑰簿：CAFECA 帳戶的公鑰與有效區間全部來自事件（帳本的 userKey 鏡像＋鏈上 KeyAdded／KeyRemoved／模組事件），
 // 不讀合約的歷史狀態——不需要 archive 節點。
 const KEYRING = D.cafecaKeyring ?? setting("CAFECA_KEYRING") ?? null;
-const { book, problems: keyProblems } = await loadKeyBook(pub, { keyring: KEYRING, events, toBlock: headBlock, index: IDX });
+// 法人帳戶（MemberValidator）的簽章要讀成員事件與實名事件。環境變數優先，否則用已知部署（Boltchain 8018）
+const { KNOWN_CAFECA } = await import("../lib/ledger/cafeca-identity.ts");
+const KNOWN = KNOWN_CAFECA[chainId] ?? {};
+const { book, problems: keyProblems } = await loadKeyBook(pub, {
+  keyring: KEYRING, events, toBlock: headBlock, index: IDX, chainId,
+  memberValidator: setting("CAFECA_MEMBER_VALIDATOR") ?? D.cafecaMemberValidator ?? KNOWN.memberValidator ?? null,
+  identityRegistry: setting("CAFECA_IDENTITY_REGISTRY") ?? D.cafecaIdentityRegistry ?? KNOWN.identityRegistry ?? null,
+});
 if (keyProblems.length) fail(`CAFECA 金鑰鏡像有問題：${keyProblems[0]}${keyProblems.length > 1 ? `（另有 ${keyProblems.length - 1} 筆）` : ""}`);
 // 快速模式：最後一期已上鏈的承諾照樣完整重算（和鏈上比對），更早的各期逐期比對 logRoot
 const trust = !VERIFY && !process.argv.includes("--full") && committed.length >= 1

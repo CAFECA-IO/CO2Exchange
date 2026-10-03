@@ -213,6 +213,137 @@ await t("買單分批成交：捨去的零頭全部退回，鎖定歸零", async
     const ok = await verifySignatures([{ ...e, atBlock: 260n }], { domains, authorities: multi, keys: book, boundaries: bounds });
     assert.equal(ok.get("5").ok, true);
   });
+
+  // ── 法人帳戶（CAFECA issue #1）：成員以自己的 Passkey 簽 entityHash ──
+  const { encodeMemberSignature, entityHashOf } = await import("../lib/ledger/signatures.ts");
+  const { buildEntityBook } = await import("../lib/ledger/keybook.ts");
+  const MV = "0xA6F02E155B599C366C5B632B42Ad605290284315", ENTITY = "0x00000000000000000000000000000000000e7171", MEMBER = ACCT;
+  const KYC_SIGNER = "0xbdd0ea4ef799922b5ad4c31dda9fa6aa8ada5fa1";
+  const T0 = 1_800_000_000n;
+  const entityBookWith = (extraMember = [], extraIdentity = []) => buildEntityBook({
+    memberValidator: MV, chainId: 8018,
+    memberLogs: [{ entity: ENTITY, member: MEMBER, role: 2, block: 120n, logIndex: 0 }, ...extraMember],
+    identityLogs: [
+      { name: "SignerSet", args: { signer: KYC_SIGNER, signerClass: 1 }, block: 10n, logIndex: 0 },
+      { name: "Attested", args: { account: MEMBER, subjectType: 0, level: 2, expiry: Number(T0 + 86400n * 365n), signer: KYC_SIGNER, nonce: 1n }, block: 110n, logIndex: 0 },
+      ...extraIdentity,
+    ],
+  });
+  const entityBook = (eb = entityBookWith(), mods = [{ module: MV, from: 60n, until: null }]) => {
+    const modules = new Map(book.modules); modules.set(ENTITY.toLowerCase(), mods);
+    return { ...book, modules, entity: eb };
+  };
+  const eorder = { ...order, account: ENTITY };
+  const ed = digestOf(domains, eorder);
+  const memberSig = (d) => encodeMemberSignature({ validator: MV, member: MEMBER, signature: encodeCafecaSignature({ validator: KEYRING, keyId, ...webauthnSign(pk, d) }) });
+  const good = memberSig(entityHashOf(8018, MV, ENTITY, ed));
+  const verifyEntity = (signature, bk = entityBook(), atBlock = 200n, atTime = T0) => verifyUserSignature({ account: ENTITY, digest: ed, signature, atBlock, atTime }, bk);
+
+  await t("法人帳戶：成員以自己的 Passkey 簽 entityHash，查核只用鏈上事件（成員角色、成員實名、模組、金鑰）就驗得過", async () => {
+    assert.equal((await verifyEntity(good)).ok, true);
+  });
+  await t("法人帳戶：成員直接簽委託單（不是 entityHash）、簽成別的法人、沒有法人設定的金鑰簿，一律拒絕", async () => {
+    assert.match((await verifyEntity(memberSig(ed))).reason, /challenge/);
+    assert.match((await verifyEntity(memberSig(entityHashOf(8018, MV, "0x00000000000000000000000000000000000e7172", ed)))).reason, /challenge/);
+    assert.match((await verifyEntity(memberSig(entityHashOf(8017, MV, ENTITY, ed)))).reason, /challenge/);
+    assert.match((await verifyEntity(good, book)).reason, /不是 CAFECA KeyringValidator|格式/);
+  });
+  await t("法人帳戶：成員被移除之後、成為成員之前、法人沒裝 MemberValidator，一律拒絕", async () => {
+    const removed = entityBook(entityBookWith([{ entity: ENTITY, member: MEMBER, role: 0, block: 180n, logIndex: 1 }]));
+    assert.match((await verifyEntity(good, removed)).reason, /不是這個法人的成員/);
+    assert.equal((await verifyEntity(good, removed, 179n)).ok, true);
+    assert.match((await verifyEntity(good, entityBook(), 119n)).reason, /不是這個法人的成員/);
+    assert.match((await verifyEntity(good, entityBook(undefined, []))).reason, /沒有安裝 MemberValidator/);
+  });
+  await t("法人帳戶：成員的實名被暫停、撤銷、過期，或簽章者被移除時，成員簽的單一律拒絕", async () => {
+    const sus = entityBook(entityBookWith([], [{ name: "Suspended", args: { account: MEMBER, reason: 5, by: KYC_SIGNER, nonce: 2n }, block: 150n, logIndex: 0 }]));
+    assert.match((await verifyEntity(good, sus)).reason, /不是有效的 L2/);
+    assert.equal((await verifyEntity(good, sus, 149n)).ok, true);
+    const rev = entityBook(entityBookWith([], [{ name: "Revoked", args: { account: MEMBER, reason: 2, by: KYC_SIGNER, nonce: 2n }, block: 150n, logIndex: 0 }]));
+    assert.match((await verifyEntity(good, rev)).reason, /不是有效的 L2/);
+    assert.match((await verifyEntity(good, entityBook(), 200n, T0 + 86400n * 366n)).reason, /不是有效的 L2/);
+    const retired = entityBook(entityBookWith([], [{ name: "SignerSet", args: { signer: KYC_SIGNER, signerClass: 0 }, block: 190n, logIndex: 0 }]));
+    assert.match((await verifyEntity(good, retired)).reason, /不是有效的 L2/);
+    // 重新簽發（恢復後重驗通過）之後又能簽
+    const back = entityBook(entityBookWith([], [
+      { name: "Suspended", args: { account: MEMBER, reason: 5, by: KYC_SIGNER, nonce: 2n }, block: 150n, logIndex: 0 },
+      { name: "Attested", args: { account: MEMBER, subjectType: 0, level: 2, expiry: Number(T0 + 86400n * 365n), signer: KYC_SIGNER, nonce: 3n }, block: 170n, logIndex: 0 },
+    ]));
+    assert.equal((await verifyEntity(good, back)).ok, true);
+  });
+}
+
+// ── CAFECA 實名 → 本站身分 ──
+{
+  const CI = await import("../lib/ledger/cafeca-identity.ts");
+  const { privateKeyToAccount } = await import("viem/accounts");
+  const { keccak256: k256, toBytes: tb } = await import("viem");
+  const signer = privateKeyToAccount(k256(tb("cafeca-kyc-signer")));
+  const REG = "0xFc0E5C11B65aa560fb7187D13f4e1A672894E49c", ACCT = "0x08bd2212f456df7b182973366cdf6d7356a11af9";
+  const now = 1_800_000_000;
+  const kyc = { subjectType: "person", level: 2, effectiveLevel: 2, status: "active", expiry: now + 86400 * 365, jurisdiction: "TW", nonce: "1", signer: signer.address, signerClass: "prototype" };
+  const pairwise = k256(tb("pairwise"));
+  const msg = (over = {}) => ({
+    account: ACCT, audience: "https://co2.example", nonce: "login-nonce-1", attestationNonce: "1", issuedAt: now - 5, expiresAt: now + 595,
+    legalName: "陳大文", docType: "national_id", nationality: "TW", pairwiseId: pairwise, entityUbn: "", entityName: "",
+    disclosed: "doc_type,legal_name,nationality,pairwise_id", ...over,
+  });
+  const cred = async (m) => ({ message: m, signature: await signer.signTypedData(CI.kycCredentialTypedData(8018, REG, m)) });
+  const granted = ["handle", "kyc_level", "legal_name", "doc_type", "nationality", "pairwise_id"];
+  const verify = async (c, over = {}) => CI.verifyKycCredential(c, { account: ACCT, audience: "https://co2.example", nonce: "login-nonce-1", chainId: 8018, identityRegistry: REG, kyc, granted, now, ...over });
+
+  await t("KYC Credential：CAFECA 簽的姓名、國籍、同一人識別碼驗得過，對應成本站的自然人身分（tier 1，不是 tier 2）", async () => {
+    const v = await verify(await cred(msg()));
+    assert.equal(v.legal_name, "陳大文"); assert.equal(v.pairwise_id, pairwise); assert.equal(v.credential.signerClass, "prototype");
+    const m = CI.ledgerIdentityFrom(kyc, v, "salt");
+    assert.equal(m.ok, true); assert.equal(m.identity.tier, 1); assert.equal(m.identity.jurisdiction, "TW"); assert.equal(m.identity.expiry, BigInt(kyc.expiry));
+    assert.equal(m.identity.name, "陳大文");
+  });
+  await t("KYC Credential：別的網站、別次登入、過期、揭露沒同意的項目、別人簽的、證明換過 nonce，一律拒絕", async () => {
+    await assert.rejects(verify(await cred(msg({ audience: "https://evil.example" }))), /不是發給本站的/);
+    await assert.rejects(verify(await cred(msg({ nonce: "other" }))), /不是這次登入簽發的/);
+    await assert.rejects(verify(await cred(msg({ issuedAt: now - 1000, expiresAt: now - 400 }))), /過期/);
+    await assert.rejects(verify(await cred(msg()), { granted: ["kyc_level", "legal_name"] }), /沒有同意/);
+    const forged = { message: msg(), signature: await privateKeyToAccount(k256(tb("someone"))).signTypedData(CI.kycCredentialTypedData(8018, REG, msg())) };
+    await assert.rejects(verify(forged), /簽章者/);
+    await assert.rejects(verify(await cred(msg({ attestationNonce: "0" }))), /已變更/);
+    await assert.rejects(verify(await cred(msg()), { kyc: { ...kyc, status: "suspended", effectiveLevel: 0 } }), /失效/);
+  });
+  await t("實名能不能用：原型簽章只在允許時收；暫停、撤銷、L1、過期都不收", async () => {
+    assert.equal(CI.usableStatus(kyc, true), null);
+    assert.match(CI.usableStatus(kyc, false), /原型簽章/);
+    assert.equal(CI.usableStatus({ ...kyc, signerClass: "production" }, false), null);
+    assert.match(CI.usableStatus({ ...kyc, status: "suspended", effectiveLevel: 0 }, true), /暫停/);
+    assert.match(CI.usableStatus({ ...kyc, status: "revoked", effectiveLevel: 0 }, true), /撤銷/);
+    assert.match(CI.usableStatus({ ...kyc, level: 1, effectiveLevel: 1 }, true), /L1/);
+    assert.match(CI.usableStatus({ ...kyc, effectiveLevel: 0 }, true), /過期|失效/);
+  });
+  await t("法人：統編與公司名稱 → tier 2；缺資料不登記；自然人缺同一人識別碼不登記", async () => {
+    const ent = { ...kyc, subjectType: "entity" };
+    const m = CI.ledgerIdentityFrom(ent, { entity_ubn: "12345678", entity_name: "某某股份有限公司", legal_name: null, nationality: null, pairwise_id: null }, "salt");
+    assert.equal(m.identity.tier, 2);
+    assert.equal(m.identity.identityHash, k256(tb("TW-UBN:12345678:salt")), "和人工審核同一套雜湊（同一個統編兩條路對得起來）");
+    assert.match(CI.ledgerIdentityFrom(ent, { entity_ubn: null, entity_name: "X" }, "s").reason, /統一編號/);
+    assert.match(CI.ledgerIdentityFrom(kyc, { legal_name: "陳大文", pairwise_id: null }, "s").reason, /同一人識別碼/);
+    assert.match(CI.ledgerIdentityFrom(kyc, { legal_name: "", pairwise_id: pairwise }, "s").reason, /證件姓名/);
+  });
+  await t("同步：CAFECA 暫停 → 帳本身分到期；重新簽發 → 恢復並延長；只是又能用但 nonce 沒變 → 不自動恢復", async () => {
+    const id = { tier: 1, identityHash: k256(tb("h")), expiry: BigInt(kyc.expiry), jurisdiction: "TW" };
+    const rec = { tier: 1, status: "approved", identityHash: id.identityHash, attestationNonce: "1" };
+    const N = BigInt(now);
+    assert.equal(CI.syncPlan({ rec, cur: id, kyc, acceptPrototype: true, now: N }).action, "ok");
+    const lapse = CI.syncPlan({ rec, cur: id, kyc: { ...kyc, status: "suspended", effectiveLevel: 0, nonce: "2" }, acceptPrototype: true, now: N });
+    assert.equal(lapse.action, "lapsed"); assert.equal(lapse.identity.expiry, N); assert.equal(lapse.record.status, "lapsed");
+    const lapsedRec = { ...rec, status: "lapsed", reason: lapse.record.reason, attestationNonce: "1" };
+    const lapsedId = { ...id, expiry: N };
+    assert.equal(CI.syncPlan({ rec: lapsedRec, cur: lapsedId, kyc, acceptPrototype: true, now: N + 10n }).action, "lapsed", "nonce 沒變：不自動恢復");
+    const back = CI.syncPlan({ rec: lapsedRec, cur: lapsedId, kyc: { ...kyc, nonce: "3", expiry: now + 86400 * 400 }, acceptPrototype: true, now: N + 10n });
+    assert.equal(back.action, "restored"); assert.equal(back.identity.expiry, BigInt(now + 86400 * 400));
+    const renew = CI.syncPlan({ rec, cur: id, kyc: { ...kyc, nonce: "2", expiry: now + 86400 * 500 }, acceptPrototype: true, now: N });
+    assert.equal(renew.action, "renewed");
+    assert.equal(CI.syncPlan({ rec, cur: id, kyc, acceptPrototype: false, now: N }).action, "lapsed", "正式環境不收原型簽章");
+    assert.equal(CI.syncPlan({ rec, cur: id, kyc: { ...kyc, subjectType: "entity" }, acceptPrototype: true, now: N }).action, "lapsed", "主體類型變了");
+  });
 }
 
 await t("出金請求（規則第 4 版）：現金移到待出金、兩個累計進葉子；退回放回可動用；鏈上確認只能銷待出金", async () => {

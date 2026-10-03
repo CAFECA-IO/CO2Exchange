@@ -233,4 +233,23 @@ test("缺欄位或壞地址一律拒絕，不要拿一個空地址去驗簽章",
   for (const b of bad) assert.throws(() => C.parseConfig(b), C.ConfigError);
 });
 
+// 2026-10-03 實際回的設定檔：issuer 修好了，多了 identityRegistry 與實名 claims；MemberValidator 仍沒有公布
+const REAL_V2 = { ...REAL, issuer: "https://cafeca.io", chain: { id: 8018, rpc: "https://cafeca.io/api/rpc", explorer: "https://boltchain.cafeca.io" },
+  claims_supported: ["kyc_level", "handle", "legal_name", "doc_type", "nationality", "pairwise_id", "entity_ubn", "entity_name"],
+  contracts: { ...REAL.contracts, identityRegistry: "0xFc0E5C11B65aa560fb7187D13f4e1A672894E49c" } };
+
+test("讀得到 IdentityRegistry v2；MemberValidator 沒公布時用已知部署補上，環境變數永遠優先", () => {
+  const c = C.parseConfig(REAL_V2);
+  assert.equal(c.contracts.identityRegistry, "0xFc0E5C11B65aa560fb7187D13f4e1A672894E49c");
+  assert.equal(c.contracts.memberValidator, undefined);
+  const o = C.withOverrides(c, {});
+  assert.equal(o.contracts.memberValidator, "0xA6F02E155B599C366C5B632B42Ad605290284315");
+  const e = C.withOverrides(c, { CAFECA_MEMBER_VALIDATOR: "0x0000000000000000000000000000000000000001", CAFECA_IDENTITY_REGISTRY: "0x0000000000000000000000000000000000000002" });
+  assert.equal(e.contracts.memberValidator, "0x0000000000000000000000000000000000000001");
+  assert.equal(e.contracts.identityRegistry, "0x0000000000000000000000000000000000000002");
+  // 別條鏈沒有已知部署：不亂補
+  assert.equal(C.withOverrides({ ...c, chainId: 1 }, {}).contracts.memberValidator, undefined);
+  assert.equal(C.looksLocal(c), false);
+});
+
 console.log(`\n${n} 項全部通過。`);

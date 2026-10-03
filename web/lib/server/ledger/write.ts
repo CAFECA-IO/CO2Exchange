@@ -1,12 +1,13 @@
 import "server-only";
-import { size, type Address, type Hex, type PrivateKeyAccount } from "viem";
+import { size, slice, type Address, type Hex, type PrivateKeyAccount } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { auth } from "@/auth";
 import { authTypedData, userDigest, userMessageOf, userTypedData, type Domains } from "@/lib/ledger/typed";
 import { isAuthorized, roleFor, thresholdAt, type Authorities, type Role } from "@/lib/ledger/authorities";
 import { readAuthorities, readKeyLogs } from "@/lib/ledger/chain";
 import { liveErc1271 } from "@/lib/ledger/replay";
-import { decodeCafecaSignature, keyIdOf, verifyWebAuthn } from "@/lib/ledger/signatures";
+import { decodeCafecaSignature, decodeMemberSignature, entityHashOf, keyIdOf, verifyUserSignature, verifyWebAuthn } from "@/lib/ledger/signatures";
+import { loadKeyBook } from "@/lib/ledger/keybook";
 import { CAFECA_ABI } from "@/lib/ledger/chain";
 import { mirrorCash } from "@/lib/ledger/mirror";
 import type { Event, EventOf, Kind } from "@/lib/ledger/events";
@@ -209,6 +210,35 @@ async function latestKeyAdded(keyring: Address, account: Address, keyId: Hex, to
 }
 
 async function checkCafecaAndMirror(account: Address, digest: Hex, signature: Hex, atBlock: bigint) {
+  const cfg = await cafecaConfig().catch(() => null);
+  const mv = cfg?.contracts.memberValidator;
+  if (mv && size(signature) >= 20 && slice(signature, 0, 20).toLowerCase() === mv.toLowerCase()) {
+    return checkEntityAndMirror(account, digest, signature, atBlock, { memberValidator: mv, identityRegistry: cfg!.contracts.identityRegistry, chainId: cfg!.chainId });
+  }
+  return checkKeyringAndMirror(account, digest, signature, atBlock);
+}
+
+/// 法人帳戶（CAFECA issue #1）：成員以自己的 Passkey 簽 entityHash。收單時做兩件事：
+///   ① 把**成員**的公鑰鏡像進帳本（和自然人一樣，查核從事件重建金鑰）
+///   ② 用查核的規則（只讀事件：成員角色、成員那時的實名、模組）再驗一次——兩道不一致就不收
+async function checkEntityAndMirror(entity: Address, digest: Hex, signature: Hex, atBlock: bigint,
+  c: { memberValidator: Address; identityRegistry?: Address; chainId: number }) {
+  if (!c.identityRegistry) throw new ApiError("SIGNATURE_INVALID", "沒有設定 CAFECA IdentityRegistry v2，查核時無法驗法人帳戶的簽章");
+  const ms = decodeMemberSignature(signature);
+  if (!ms) throw new ApiError("SIGNATURE_INVALID", "法人帳戶的簽章格式錯誤");
+  await checkKeyringAndMirror(ms.member, entityHashOf(c.chainId, c.memberValidator, entity, digest), ms.signature, atBlock);
+  const keyring = await keyringAddress();
+  const { book, problems } = await loadKeyBook(publicClient, {
+    keyring, events: ledgerView().events, toBlock: atBlock, index: chainIndex(),
+    memberValidator: c.memberValidator, identityRegistry: c.identityRegistry, chainId: c.chainId,
+    accounts: [ms.member], entityAccounts: [entity],
+  });
+  if (problems.length) throw new ApiError("SIGNATURE_INVALID", `查核用的金鑰簿有問題：${problems[0]}`);
+  const check = await verifyUserSignature({ account: entity, digest, signature, atBlock, atTime: BigInt(Math.floor(Date.now() / 1000)) }, book);
+  if (!check.ok) throw new ApiError("SIGNATURE_INVALID", `法人帳戶的簽章沒有通過查核規則：${check.reason}`);
+}
+
+async function checkKeyringAndMirror(account: Address, digest: Hex, signature: Hex, atBlock: bigint) {
   const keyring = await keyringAddress();
   const sig = decodeCafecaSignature(signature);
   if (!keyring || !sig) throw new ApiError("SIGNATURE_INVALID", "簽章不是 CAFECA KeyringValidator 的格式，查核時無法驗證");

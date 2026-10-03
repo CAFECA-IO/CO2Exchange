@@ -2,7 +2,7 @@ import "server-only";
 import { createPublicClient, defineChain, http, type Address, type PublicClient } from "viem";
 import { CHAIN_ID, IS_LOCAL_CHAIN, publicClient } from "../chain";
 import { ApiError } from "../api";
-import { looksLocal, parseConfig, type CafecaConfig } from "./parse-config";
+import { looksLocal, parseConfig, withOverrides, type CafecaConfig } from "./parse-config";
 
 export type { CafecaConfig } from "./parse-config";
 
@@ -40,7 +40,7 @@ let cached: { at: number; value: CafecaConfig } | undefined;
 
 export async function cafecaConfig(): Promise<CafecaConfig> {
   const env = fromEnv();
-  if (env) return env;
+  if (env) return withOverrides(env, process.env);
   if (cached && Date.now() - cached.at < TTL_MS) return cached.value;
 
   let raw: unknown;
@@ -72,6 +72,7 @@ export async function cafecaConfig(): Promise<CafecaConfig> {
       `它上面的授權與簽章端點對外都不通。正式站要等對方設好 PUBLIC_ORIGIN。`,
     );
   }
+  value = withOverrides(value, process.env);
   cached = { at: Date.now(), value };
   return value;
 }

@@ -2,6 +2,7 @@ import { keccak256, parseAbi, toBytes, type Address, type Hex, type PublicClient
 import { ROLES, type Authorities, type Grant, type Role, type Threshold } from "./authorities.ts";
 import type { EpochBoundary } from "./replay.ts";
 import { indexedLogs, type IndexOpts } from "./logindex.ts";
+import { IDENTITY_REGISTRY_ABI, MEMBER_VALIDATOR_ABI } from "./cafeca-identity.ts";
 
 /// 從帳本合約讀兩樣東西：授權金鑰清單的歷史、已經提交的承諾。
 ///
@@ -167,4 +168,30 @@ export async function readModuleLogs(client: PublicClient, accounts: Address[], 
     }
   }
   return out;
+}
+
+// ── 法人帳戶：MemberValidator 的成員事件、IdentityRegistry v2 的實名事件 ──
+
+/// MemberValidator 的 MemberSet（全部法人；量不大）。
+export async function readMemberLogs(client: PublicClient, memberValidator: Address, range: Range) {
+  type L = { args: Record<string, unknown>; blockNumber: bigint | null; logIndex: number | null; eventName?: string };
+  const logs = await getLogsPaged<L>(client, range, (fromBlock, toBlock) => client.getLogs({
+    address: memberValidator, events: MEMBER_VALIDATOR_ABI.filter((x) => x.type === "event"),
+    fromBlock, toBlock,
+  }) as unknown as Promise<L[]>, `members-${memberValidator.toLowerCase().slice(2, 10)}`);
+  return logs.map((l) => {
+    const a = l.args as unknown as { entity: Address; member: Address; role: number };
+    return { entity: a.entity, member: a.member, role: Number(a.role), block: l.blockNumber!, logIndex: l.logIndex! };
+  });
+}
+
+/// IdentityRegistry v2 的 Attested／Suspended／Revoked／SignerSet。
+export async function readIdentityLogs(client: PublicClient, registry: Address, range: Range) {
+  const names = new Set(["Attested", "Suspended", "Revoked", "SignerSet"]);
+  type L = { args: Record<string, unknown>; blockNumber: bigint | null; logIndex: number | null; eventName: string };
+  const logs = await getLogsPaged<L>(client, range, (fromBlock, toBlock) => client.getLogs({
+    address: registry, events: IDENTITY_REGISTRY_ABI.filter((x) => x.type === "event" && names.has(x.name)),
+    fromBlock, toBlock,
+  }) as unknown as Promise<L[]>, `identity-${registry.toLowerCase().slice(2, 10)}`);
+  return logs.map((l) => ({ name: l.eventName, args: l.args, block: l.blockNumber!, logIndex: l.logIndex! }));
 }

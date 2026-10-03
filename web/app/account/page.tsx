@@ -56,7 +56,11 @@ export default function AccountPage() {
           )}
           <div className="flex justify-between gap-4">
             <dt className="text-ink-300">實名等級（CAFECA）</dt>
-            <dd className="text-ink-50">{wallet.kycLevel >= 2 ? "已通過證件＋臉部驗證" : "未實名"}</dd>
+            <dd className="text-ink-50">
+              {wallet.kycLevel >= 2
+                ? `${wallet.kyc?.subjectType === "entity" ? "公司（商工登記）" : "已通過證件＋臉部驗證"}${wallet.kyc?.signerClass === "prototype" ? "・原型簽章" : ""}`
+                : "未實名"}
+            </dd>
           </div>
           <div className="flex justify-between gap-4">
             <dt className="text-ink-300">本站身分等級</dt>
