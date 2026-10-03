@@ -16,7 +16,7 @@
 #
 # ## 金鑰在**你的機器上產生**，不會經過任何人
 #
-# `cast wallet new` 在本機產生，直接寫進 `web/.env.local`（權限 600，已在 .gitignore）。
+# 在本機以 openssl 產生（不經過任何指令的輸出），直接寫進 `web/.env.local`（權限 600，已在 .gitignore）。
 # 腳本**只印地址，不印私鑰**——私鑰印到終端機就會進 scrollback，進排程就會進 log。
 # 已經有值的金鑰一律保留不覆寫：覆寫一把還在用的 relayer 金鑰，等於把鏈上那些
 # 角色綁定全部丟掉。
@@ -127,7 +127,24 @@ usable () {
   printf '%s' "$1" | grep -Eq '^0x[0-9a-fA-F]{64}$'
 }
 
-addr_of () { cast wallet address --private-key "$1" 2>/dev/null; }
+# 地址只取輸出裡的 0x 加 40 碼：不同版本的 cast 有的印到 stdout、有的印到 stderr，有的多一行說明。
+addr_of () { cast wallet address --private-key "$1" 2>&1 | grep -Eo '0x[0-9a-fA-F]{40}' | head -1; }
+
+# 產生一把私鑰，只回私鑰本身（呼叫端吃進變數，不印出來）。
+#
+# 以前用 `out=$(cast wallet new)` 再從輸出裡挑「Private key:」那一行。某些版本的 cast 把那段印到
+# **終端機**而不是 stdout——於是變數是空的、腳本中止，而私鑰已經整段顯示在螢幕上（踩過）。
+# 產生私鑰不需要 cast：32 bytes 的密碼學亂數就是私鑰，只要落在 secp256k1 的有效範圍（1 ≤ k < n）；
+# 推得出地址就代表有效（落在範圍外的機率約 2^-128，真的碰到就換一把）。
+new_pk () {
+  local pk i
+  for i in 1 2 3; do
+    pk="0x$(openssl rand -hex 32)"
+    printf '%s' "$pk" | grep -Eq '^0x[0-9a-f]{64}$' || continue
+    [ -n "$(addr_of "$pk")" ] && { printf '%s' "$pk"; return 0; }
+  done
+  return 1
+}
 
 # 本機開發鏈（anvil / hardhat 的慣例 chainId）。need_chain 之後才有 CHAIN_ID。
 is_local () { [ "${CHAIN_ID:-}" = "31337" ] || [ "${CHAIN_ID:-}" = "1337" ]; }
@@ -165,14 +182,12 @@ cmd_keys () {
       printf '   %-22s 已存在，保留  %s\n' "$k" "$(addr_of "$cur")"
       continue
     fi
-    # cast wallet new 會把私鑰印在 stdout。整段吃進變數，只把地址印出來。
-    local out pk
-    out=$(cast wallet new)
-    pk=$(printf '%s' "$out" | sed -n 's/^Private key: *//p')
-    [ -n "$pk" ] || { echo "!! cast wallet new 的輸出看不懂，中止"; exit 1; }
+    # 私鑰只進變數與檔案，不印出來；畫面上只有地址
+    local pk
+    pk=$(new_pk) || { echo "!! 產生 $k 失敗（openssl rand 或 cast wallet address 不能用），中止"; exit 1; }
     env_set "$k" "$pk"
     printf '   %-22s 已產生        %s\n' "$k" "$(addr_of "$pk")"
-    unset out pk
+    unset pk
   done
   echo ">> 服務金鑰寫在 ${ENV_FILE}（權限 600，已在 .gitignore）。私鑰不會印出來。"
   echo
@@ -218,19 +233,17 @@ cmd_gov_keys () {
   fi
   [ -f "$GOV_FILE" ] || { : > "$GOV_FILE"; chmod 600 "$GOV_FILE"; }
   echo ">> 治理 Safe 的 owner（國家 2-of-3、營運 1-of-2）"
-  local k cur out pk
+  local k cur pk
   for k in $GOV_KEYS; do
     cur=$(gov_get "$k")
     if usable "$cur"; then
       printf '   %-22s 已存在，保留  %s\n' "$k" "$(addr_of "$cur")"
       continue
     fi
-    out=$(cast wallet new)
-    pk=$(printf '%s' "$out" | sed -n 's/^Private key: *//p')
-    [ -n "$pk" ] || { echo "!! cast wallet new 的輸出看不懂，中止"; exit 1; }
+    pk=$(new_pk) || { echo "!! 產生 $k 失敗（openssl rand 或 cast wallet address 不能用），中止"; exit 1; }
     gov_set "$k" "$pk"
     printf '   %-22s 已產生        %s\n' "$k" "$(addr_of "$pk")"
-    unset out pk
+    unset pk
   done
   echo ">> 治理金鑰寫在 ${GOV_FILE}（權限 600，網站**不會**讀它）"
   echo "   ⚠️ 五把都在這一台機器上。2-of-3 的意義是三個人三台裝置——"
