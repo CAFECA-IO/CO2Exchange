@@ -198,7 +198,7 @@ cd web && npm install && npm run build && npm start
 | 行程 | 指令 | 失敗時的後果 |
 |---|---|---|
 | 網站 | `cd web && npm start` | 收不了單。帳本與鏈上不受影響 |
-| 承諾 | `bash script/demo-box.sh commit-loop`（或排程 `npm run ledger:commit`＋`npm run ledger:publish`） | 出金請求進不了證據，營運方不能確認出金；揭露頁的數字停在最後一期。沒有新事件時仍會每 `HEARTBEAT_AFTER`（預設 24h）提交一期空的 |
+| 承諾 | crontab 每小時跑 `script/cron-commit.sh`（實名同步 → 查核並提交 → 公開檔；有鎖，不會兩輪重疊），或前景跑 `bash script/demo-box.sh commit-loop`。兩者擇一 | 出金請求進不了證據，營運方不能確認出金；揭露頁的數字停在最後一期。沒有新事件時仍會每 `HEARTBEAT_AFTER`（預設 24h）提交一期空的 |
 | 做市 | `bash script/mm-service.sh install`（macOS launchd／Linux systemd） | 掛單簿變薄。控制在 `/admin`「後台做市」 |
 
 ### 承諾
