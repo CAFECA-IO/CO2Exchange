@@ -192,6 +192,39 @@ cd web && npm install && npm run build && npm start
 > 目前是第 4 版（新台幣入出金：出金請求帶 `payoutRef`、營運方退回 `withdrawReject`；合約 `ledgerVersion` 3）。
 > 從第 3 版升上來要重新部署：`bash script/bootstrap.sh deploy`（舊的 `web/data/` 會搬到 `data.bak-<時間>`）。
 
+### 自架 Boltchain（`npm run deploy`）：自己挖礦撥款給部署金鑰
+
+沒有人撥款、只想把整套流程在一條真的 Boltchain 上跑起來時用。需要 Docker（Docker Desktop，或 `colima start`）。
+
+```bash
+npm run deploy                      # 專案根目錄或 web/ 都可以；= bash script/bootstrap.sh chain
+```
+
+依序做：建金鑰（已經有的保留）→ `docker compose up` 起一個**單機挖礦的 Boltchain 私有鏈**（chainId 18018，
+genesis 在 `docker/boltchain/genesis.json`，RPC 只綁 `127.0.0.1:18545`），礦工獎勵全部給 `DEPLOYER_PK` 的地址 →
+等挖到「部署＋RELAYER 備用」的量 → 從部署者轉一筆給 `RELAYER_PK` → 照常部署並寫回 `web/.env.local`。
+節點映像檔從 GitHub 的 Luphia/boltchain 編譯，**第一次要十幾分鐘到半小時**，之後有快取。挖礦不會停，部署者之後付的 gas 一直有來源。
+
+| 變數（shell 或根目錄 `.env`） | 預設 | 做什麼 |
+|---|---|---|
+| `BOLTCHAIN_RPC_PORT` | 18545 | 節點 RPC 的本機埠 |
+| `BOLTCHAIN_REF` | main | 編哪個分支／tag／commit（換值就編新映像檔；`main` 第一次編好之後不會自己更新） |
+| `BOLTCHAIN_SRC` | — | 用本機 clone 的 boltchain 原始碼編譯，不從 GitHub 抓 |
+| `BOLTCHAIN_MINING_THREADS` | 1 | 挖礦執行緒 |
+| `BOLTCHAIN_RANDOMX_FAST` | 0 | 1 = RandomX fast 模式（2 GiB 記憶體，雜湊快很多） |
+| `MINE_TIMEOUT` | 1800 | 等挖到夠的秒數上限 |
+
+`npm run chain:logs` 看節點、`npm run chain:down` 停節點（鏈資料留在 Docker volume；`docker compose down -v` 連鏈刪掉，之後要重新部署）。
+再跑一次 `npm run deploy` 不會重新部署（帳本合約還在鏈上就跳過，只確認節點在跑、餘額夠）；要重來用 `REDEPLOY=1 npm run deploy`。
+`npm run chain:node`（= `bash script/bootstrap.sh node`）只起節點與撥款、不部署。
+
+- **為什麼不挖 8018**：測試網已經切到 PoS（區塊 difficulty 為 0），挖礦不出塊、拿不到 BOLT。8018 的部署照上面的 keys → fund → deploy。
+- **換鏈**：部署完 `web/.env.local` 的 `RPC_URL`／`CHAIN_ID` 改指自架鏈，原本那條鏈的 `web/data/` 搬到 `data.bak-<時間>`。
+  要回 8018：把那兩行改回去（`deployments/8018.json` 還在），再把對應的備份搬回 `web/data`。金鑰與 `DATA_KEY` 兩邊共用。
+- **限制**：CAFECA 的合約只在 8018。登入與實名照樣走 8018（`CAFECA_RPC_URL`），但帳本查核 CAFECA passkey 簽章要讀
+  KeyringValidator 的 `KeyAdded` 事件，而查核讀的是帳本所在的鏈——所以自架鏈上 CAFECA 帳戶**能登入、不能下單**。
+  帳本、承諾排程、做市與模擬市場（18018 在 `SIMULATION_CHAINS` 預設清單裡）、新台幣入出金確認都能跑。
+
 ---
 
 ## 五、日常營運

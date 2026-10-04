@@ -92,7 +92,7 @@ const DEPLOYMENT_KEY = `${chainId}:${D.ledger}:${D.deployedAt ?? ""}`.toLowerCas
 
 /// 模擬交易只准在這些鏈上開。正式鏈不在清單裡，後台按了也不會啟動——
 /// 不是介面藏起來，是這支程式拒絕。
-const SIM_CHAINS = new Set(String(setting("SIMULATION_CHAINS") ?? "31337,1337,8018").split(",").map((x) => Number(x.trim())).filter(Boolean));
+const SIM_CHAINS = new Set(String(setting("SIMULATION_CHAINS") ?? "31337,1337,8018,18018").split(",").map((x) => Number(x.trim())).filter(Boolean));
 const SIM_ALLOWED = SIM_CHAINS.has(chainId);
 
 // ───────────────────────── 金鑰 ─────────────────────────

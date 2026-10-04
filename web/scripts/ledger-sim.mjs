@@ -42,7 +42,7 @@ const RPC = setting("RPC_URL") ?? "http://127.0.0.1:28545";
 const pub0 = createPublicClient({ transport: http(RPC) });
 const chainId = await pub0.getChainId().catch(() => { console.error(`連不上 ${RPC}`); process.exit(1); });
 const LOCAL = chainId === 31337 || chainId === 1337;
-const SIM_CHAINS = new Set(String(setting("SIMULATION_CHAINS") ?? "31337,1337,8018").split(",").map((x) => Number(x.trim())).filter(Boolean));
+const SIM_CHAINS = new Set(String(setting("SIMULATION_CHAINS") ?? "31337,1337,8018,18018").split(",").map((x) => Number(x.trim())).filter(Boolean));
 if (!SIM_CHAINS.has(chainId)) { console.error(`chainId ${chainId} 不在 SIMULATION_CHAINS，不跑模擬人物`); process.exit(1); }
 const chain = defineChain({ id: chainId, name: "co2x", nativeCurrency: { name: "N", symbol: "N", decimals: 18 }, rpcUrls: { default: { http: [RPC] } } });
 const pub = createPublicClient({ chain, transport: http(RPC), pollingInterval: LOCAL ? 50 : 1000 });

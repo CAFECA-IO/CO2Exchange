@@ -8,6 +8,10 @@
 #   bash script/bootstrap.sh status   # 五把金鑰現在各有多少、部署了沒、角色對不對
 #   bash script/bootstrap.sh roles    # 只做角色檢查：鏈上授權清單對照 web/.env.local 的金鑰
 #
+#   bash script/bootstrap.sh chain    # 自架 Boltchain（docker-compose.yml）：建金鑰 → 起節點挖礦給 DEPLOYER_PK
+#                                     #   → 等挖到夠 → 轉 gas 給 RELAYER_PK → 部署（= npm run deploy）
+#   bash script/bootstrap.sh node     # 同上，但只起節點、撥款，不部署
+#
 # ## 部署的是哪一套
 #
 # 預設部署**設計 v4 的帳本合約**（script/DeployLedger.s.sol）：鏈上只有 Ledger（每小時的承諾鏈、
@@ -33,6 +37,16 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 ENV_FILE=${ENV_FILE:-$ROOT/web/.env.local}
+# 自架鏈（chain / node）：目標一律是 docker-compose.yml 起的那個節點，不看 shell 或 web/.env.local 的 RPC_URL——
+# 照 README 部署過 8018 的 shell 多半還 export 著 RPC_URL=http://211.22.118.149:8545。
+COMPOSE_ENV=$ROOT/.env   # docker compose 自動讀的設定檔（已在 .gitignore）；只放地址與埠，不放私鑰
+case "${1:-}" in
+  chain|node)
+    [ -n "${BOLTCHAIN_RPC_PORT:-}" ] || BOLTCHAIN_RPC_PORT=$( [ -f "$COMPOSE_ENV" ] && sed -n 's/^BOLTCHAIN_RPC_PORT=\(.*\)$/\1/p' "$COMPOSE_ENV" | tail -1 || true)
+    BOLTCHAIN_RPC_PORT=${BOLTCHAIN_RPC_PORT:-18545}
+    [ -n "${RPC_URL:-}" ] && [ "$RPC_URL" != "http://127.0.0.1:${BOLTCHAIN_RPC_PORT}" ] && echo ">> 忽略 shell 的 RPC_URL（${RPC_URL}）：chain 指令部署到自架節點"
+    RPC_URL=http://127.0.0.1:${BOLTCHAIN_RPC_PORT};;
+esac
 # 目標鏈：shell 的 RPC_URL → web/.env.local 的 RPC_URL → 本機 anvil。
 # 只看 shell 的話，已經設好外部鏈的機器直接跑 `bootstrap.sh deploy` 會跑去連本機，錯誤看起來像節點掛了。
 if [ -z "${RPC_URL:-}" ] && [ -f "$ENV_FILE" ]; then
@@ -365,6 +379,12 @@ cmd_deploy () {
     redeploy=1
     echo ">> deployments/${CHAIN_ID}.json 已存在，這次部署會取代它（舊合約留在鏈上，但網站不再指向它們）"
   fi
+  # 換鏈（例如 8018 → 自架鏈）：web/data/ 是另一條鏈那次部署的紀錄，留著網站會回 503「紀錄屬於另一次部署」
+  local prev_chain; prev_chain=$(env_get CHAIN_ID | tr -d '"'"'"'\r')
+  if [ -n "$prev_chain" ] && [ "$prev_chain" != "$CHAIN_ID" ] && [ -f "$ROOT/deployments/${prev_chain}.json" ]; then
+    redeploy=1
+    echo ">> $(basename "$ENV_FILE") 原本指向 chainId ${prev_chain}，部署完改指 ${CHAIN_ID}；那條鏈的 web/data/ 會搬到 data.bak-<時間>"
+  fi
   export DEPLOYER_PK=$pk
   export RPC_URL
 
@@ -522,7 +542,160 @@ cmd_status () {
   if [ -f "$dep" ]; then echo; check_roles "$dep" || true; fi
 }
 
+# ── chain / node：自架 Boltchain（docker-compose.yml 的 boltchain 服務）────────────
+#
+# 單機挖礦的私有鏈（genesis 在 docker/boltchain/genesis.json），礦工獎勵全部給 DEPLOYER_PK 的地址。
+# 部署者的餘額不必有人撥：等它挖到「部署 + RELAYER 備用」的量，從部署者轉一筆給 RELAYER，再照常部署。
+# 挖礦不會停，部署者之後付的 gas（營運 Safe 的入出金確認、模擬人物）也一直有來源。
+#
+# 不是挖 8018：測試網已經切到 PoS，挖礦不出塊。要部署到 8018 還是走 keys → fund（有人撥款）→ deploy。
+#
+#   BOLTCHAIN_RPC_PORT=18545     節點 RPC 綁在 127.0.0.1 的哪個埠
+#   BOLTCHAIN_SRC=<路徑>          用本機 clone 的 boltchain 編譯（預設從 GitHub 抓 BOLTCHAIN_REF）
+#   BOLTCHAIN_REF=main            分支、tag 或 commit；換值就會編新的映像檔
+#   BOLTCHAIN_MINING_THREADS=1    挖礦執行緒
+#   MINE_TIMEOUT=1800             等挖到夠的秒數上限
+BOLT_GENESIS=$ROOT/docker/boltchain/genesis.json
+bolt_chain_id () { sed -n 's/.*"chainId": *\([0-9][0-9]*\).*/\1/p' "$BOLT_GENESIS" | head -1; }
+
+# 寫入專案根目錄的 .env（docker compose 讀它做變數代換）
+compose_env_set () {
+  local k=$1 v=$2 tmp; tmp=$(mktemp)
+  if [ -f "$COMPOSE_ENV" ] && grep -q "^${k}=" "$COMPOSE_ENV"; then
+    awk -v k="$k" -v v="$v" -F= 'BEGIN{OFS="="} $1==k {print k "=" v; next} {print}' "$COMPOSE_ENV" > "$tmp"
+  else
+    [ -f "$COMPOSE_ENV" ] && cat "$COMPOSE_ENV" > "$tmp"
+    printf '%s=%s\n' "$k" "$v" >> "$tmp"
+  fi
+  mv "$tmp" "$COMPOSE_ENV"
+}
+
+need_docker () {
+  command -v docker >/dev/null 2>&1 || { echo "!! 找不到 docker。macOS 裝 Docker Desktop 或 colima（brew install colima docker docker-compose && colima start）"; exit 1; }
+  docker compose version >/dev/null 2>&1 || { echo "!! 找不到 docker compose（v2 外掛）。Docker Desktop 內建；colima 要另外 brew install docker-compose"; exit 1; }
+  docker info >/dev/null 2>&1 || { echo "!! docker 沒有在跑。開 Docker Desktop，或 colima start"; exit 1; }
+}
+
+block_number () { local b; b=$(rpc_result '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}'); echo $(( ${b:-0} )); }
+
+# 十進位大數相減（可能超過 64-bit）；結果小於 0 印 0
+sub_wei () { python3 -c 'import sys; print(max(0, int(sys.argv[1]) - int(sys.argv[2])))' "$1" "$2"; }
+add_wei () { python3 -c 'import sys; print(sum(int(x) for x in sys.argv[1:]))' "$@"; }
+
+cmd_node () {
+  need_docker
+  command -v python3 >/dev/null 2>&1 || { echo "!! 需要 python3（算大數餘額）"; exit 1; }
+  local want; want=$(bolt_chain_id)
+  [ -n "$want" ] || { echo "!! 讀不到 ${BOLT_GENESIS} 的 chainId"; exit 1; }
+
+  # 1. 金鑰：已經有的保留，缺的補上
+  cmd_keys
+  echo
+  local dpk; dpk=$(env_get DEPLOYER_PK)
+  usable "$dpk" || { echo "!! DEPLOYER_PK 不能用"; exit 1; }
+  local deployer; deployer=$(addr_of "$dpk")
+
+  # 2. 起節點，礦工獎勵給部署者
+  compose_env_set BOLTCHAIN_BENEFICIARY "$deployer"
+  compose_env_set BOLTCHAIN_RPC_PORT "$BOLTCHAIN_RPC_PORT"
+  if [ -n "${BOLTCHAIN_SRC:-}" ]; then
+    [ -f "$BOLTCHAIN_SRC/Cargo.toml" ] || { echo "!! BOLTCHAIN_SRC=${BOLTCHAIN_SRC} 不是 boltchain 的原始碼資料夾"; exit 1; }
+    export BOLTCHAIN_SRC; BOLTCHAIN_SRC=$(cd "$BOLTCHAIN_SRC" && pwd)
+    export BOLTCHAIN_SOURCE=local
+  fi
+  export BOLTCHAIN_RPC_PORT
+  local img; img="co2x/boltchain:${BOLTCHAIN_REF:-main}"
+  echo ">> 自架 Boltchain（chainId ${want}，RPC ${RPC_URL}），礦工獎勵給 DEPLOYER_PK ${deployer}"
+  if ! docker image inspect "$img" >/dev/null 2>&1 || [ "${BOLTCHAIN_SOURCE:-git}" = local ]; then
+    echo "   編譯節點映像檔 ${img}（$([ "${BOLTCHAIN_SOURCE:-git}" = local ] && echo "原始碼 ${BOLTCHAIN_SRC}" || echo "GitHub ${BOLTCHAIN_REF:-main}")）。"
+    echo "   第一次要十幾分鐘到半小時；之後有快取。"
+    ( cd "$ROOT" && docker compose build boltchain )
+  fi
+  ( cd "$ROOT" && docker compose up -d boltchain )
+
+  # 3. 等 RPC 起來，而且是這條鏈（埠被別的東西佔了就停）
+  local id="" i
+  for i in $(seq 1 60); do
+    id=$(rpc_result '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' || true)
+    [ -n "$id" ] && break
+    sleep 2
+  done
+  [ -n "$id" ] || { echo "!! ${RPC_URL} 兩分鐘內沒有回應。看 log：docker compose logs boltchain"; exit 1; }
+  CHAIN_ID=$((id))
+  [ "$CHAIN_ID" = "$want" ] || { echo "!! ${RPC_URL} 是 chainId ${CHAIN_ID}，不是自架鏈的 ${want}。埠被別的節點佔了？換 BOLTCHAIN_RPC_PORT"; exit 1; }
+
+  # 4. 等挖到夠：部署 + RELAYER 的缺額（一次挖夠再轉，轉帳失敗也不會讓部署者不夠付部署）
+  local rpk relayer dep_need rel_need rel_bal rel_short total bal t0 now
+  rpk=$(env_get RELAYER_PK); relayer=$(addr_of "$rpk")
+  dep_need=$(wei_needed "$DEPLOY_GAS"); dep_need=$(add_wei "$dep_need" "$(( SIM_ACCOUNTS * SIM_GAS_TOPUP ))")
+  rel_need=$(wei_needed "$(key_gas RELAYER_PK)")
+  rel_bal=$(balance_wei "$relayer")
+  rel_short=$(sub_wei "$rel_need" "$rel_bal")
+  # 轉帳本身的 gas：21000 × gasPrice × 倍數，算寬一點
+  total=$(add_wei "$dep_need" "$rel_short" "$(wei_needed 50000)")
+  echo ">> 等挖礦：部署者要 $(fmt_eth "$total") BOLT（部署 $(fmt_eth "$dep_need") ＋ 轉給 RELAYER $(fmt_eth "$rel_short")）"
+  t0=$(date +%s)
+  while :; do
+    bal=$(balance_wei "$deployer")
+    enough "$bal" "$total" && break
+    now=$(date +%s)
+    if [ $(( now - t0 )) -gt "${MINE_TIMEOUT:-1800}" ]; then
+      echo; echo "!! ${MINE_TIMEOUT:-1800} 秒內沒挖到夠。看 log：docker compose logs boltchain"
+      echo "   挖礦很慢的話：BOLTCHAIN_MINING_THREADS=4（或 BOLTCHAIN_RANDOMX_FAST=1，要 2 GiB 記憶體）寫進 .env 再跑一次"
+      exit 1
+    fi
+    printf '\r   區塊 %-7s 部署者 %s BOLT（%ss）   ' "$(block_number)" "$(fmt_eth "$bal")" "$(( now - t0 ))"
+    sleep 4
+  done
+  printf '\r   區塊 %-7s 部署者 %s BOLT ✓                \n' "$(block_number)" "$(fmt_eth "$bal")"
+
+  # 5. 轉 gas 給 RELAYER（每小時提交承諾的那把）
+  if [ "$rel_short" != "0" ]; then
+    echo ">> 從部署者轉 $(fmt_eth "$rel_short") BOLT 給 RELAYER_PK ${relayer}"
+    cast send --rpc-url "$RPC_URL" --private-key "$dpk" --value "$rel_short" "$relayer" >/dev/null \
+      || { echo "!! 轉帳失敗。可以重跑一次（已經有的餘額會算進去）"; exit 1; }
+  fi
+  unset dpk
+  echo
+  cmd_fund
+}
+
+cmd_chain () {
+  cmd_node
+  echo
+  local id; id=$(bolt_chain_id)
+  # 已經部署在這條鏈上（合約還在）就不重來：重新部署會把 web/data/ 整個搬走。
+  # 鏈被 docker compose down -v 刪掉的話合約就沒有了，照常部署。
+  local dep="$ROOT/deployments/${id}.json" ledger="" code=""
+  [ -f "$dep" ] && ledger=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('ledger',''))" "$dep" 2>/dev/null || true)
+  [ -n "$ledger" ] && code=$(rpc_result "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_getCode\",\"params\":[\"$ledger\",\"latest\"]}" || true)
+  if [ -n "$code" ] && [ "$code" != "0x" ] && [ "${REDEPLOY:-0}" != "1" ]; then
+    echo ">> 帳本合約已經部署在自架鏈上（${ledger}），不重新部署。"
+    echo "   要重來：REDEPLOY=1 npm run deploy（舊的 web/data/ 會搬到 data.bak-<時間>）"
+    local cur; cur=$(env_get CHAIN_ID | tr -d '"'"'"'\r')
+    if [ "$cur" != "$id" ]; then
+      echo "   ⚠️ $(basename "$ENV_FILE") 現在指向 chainId ${cur:-（未設定）}，網站沒有在用自架鏈。不自動切換（web/data/ 是那條鏈的紀錄）；"
+      echo "      要切過來：RPC_URL=${RPC_URL}、CHAIN_ID=${id}，並把 web/data 換成自架鏈那一份（或 REDEPLOY=1 重新部署）"
+    fi
+  else
+    [ -f "$dep" ] && [ -n "$ledger" ] && echo ">> deployments/${id}.json 的帳本合約不在鏈上（鏈被刪過？），重新部署"
+    cmd_deploy
+  fi
+  echo
+  echo ">> 自架鏈"
+  echo "   RPC        ${RPC_URL}（chainId ${id}，只綁 127.0.0.1）"
+  echo "   log        docker compose logs -f boltchain"
+  echo "   停／刪     docker compose down（鏈資料保留）／ docker compose down -v（連鏈刪掉，之後要重新部署）"
+  echo "   MetaMask   自訂網路：RPC ${RPC_URL}、Chain ID ${id}、貨幣 BOLT"
+  echo "   ⚠️ CAFECA 的合約只在 8018：登入與實名照樣走 8018，但帳本查核 passkey 簽章讀的是這條鏈，"
+  echo "      所以 CAFECA 帳戶能登入、不能下單（模擬人物與 EOA 簽章不受影響）。"
+  echo "      要回 8018：把 web/.env.local 的 RPC_URL／CHAIN_ID 改回去（deployments/8018.json 還在），"
+  echo "      再把對應的 web/data.bak-<時間> 搬回 web/data"
+}
+
 case "${1:-all}" in
+  chain)  cmd_chain;;
+  node)   cmd_node;;
   keys)   cmd_keys;;
   fund)   cmd_fund;;
   deploy) cmd_deploy;;

@@ -1,0 +1,53 @@
+# 自架 Boltchain：單機挖礦的私有鏈（chainId 18018），礦工獎勵給部署用金鑰。
+#
+# 一般不用直接操作，部署指令會自己起：
+#   npm run deploy                     # = bash script/bootstrap.sh chain：建金鑰 → 起節點挖礦 → 等撥款 → 部署
+#
+# 手動：
+#   docker compose up -d --build boltchain     # 需要專案根目錄的 .env 有 BOLTCHAIN_BENEFICIARY（chain 指令會寫）
+#   docker compose logs -f boltchain
+#   docker compose down                        # 停節點，鏈資料保留在 volume
+#   docker compose down -v                     # 連鏈一起刪（之後要重新部署）
+#
+# 為什麼不是挖 Boltchain 測試網 8018：8018 已經切到 PoS（區塊 difficulty 為 0），挖礦不會再出塊，
+# 也就拿不到 BOLT。要在 8018 部署還是得有人撥款（見 README「四、部署到外部鏈」）。
+#
+# 這條鏈只綁 127.0.0.1、不連任何 peer。CAFECA 的合約只在 8018：登入與實名照樣走 8018，
+# 但帳本查核 passkey 簽章讀的是帳本所在的鏈，所以 CAFECA 帳戶在這裡能登入、不能下單。
+# 它是給部署流程、帳本、做市、承諾排程用的測試鏈。
+name: co2x
+
+services:
+  boltchain:
+    build:
+      context: docker/boltchain
+      additional_contexts:
+        # BOLTCHAIN_SOURCE=local 時才會用到；沒設就指向一個無害的資料夾
+        boltchain-local: ${BOLTCHAIN_SRC:-docker/boltchain}
+      args:
+        BOLTCHAIN_SOURCE: ${BOLTCHAIN_SOURCE:-git}
+        BOLTCHAIN_GIT: ${BOLTCHAIN_GIT:-https://github.com/Luphia/boltchain.git}
+        BOLTCHAIN_REF: ${BOLTCHAIN_REF:-main}
+    image: co2x/boltchain:${BOLTCHAIN_REF:-main}
+    environment:
+      BENEFICIARY: ${BOLTCHAIN_BENEFICIARY:-}
+      MINING_THREADS: ${BOLTCHAIN_MINING_THREADS:-1}
+      RANDOMX_FAST: ${BOLTCHAIN_RANDOMX_FAST:-0}
+      RUST_LOG: ${BOLTCHAIN_LOG:-info,libmdbx=warn}
+    ports:
+      # 只給本機：RPC 沒有任何存取控制
+      - "127.0.0.1:${BOLTCHAIN_RPC_PORT:-18545}:8545"
+    volumes:
+      - boltchain-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-X", "POST", "-H", "content-type: application/json",
+             "--data", '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}', "http://127.0.0.1:8545"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  boltchain-data:

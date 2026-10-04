@@ -1,0 +1,26 @@
+{
+  "dev": true,
+  "config": {
+    "chainId": 18018,
+    "slotSeconds": 2,
+    "epochSlots": 32,
+    "committeeSize": 16,
+    "gasLimit": 30000000,
+    "minBaseFeeWei": 10000000,
+    "pow": {
+      "algorithm": "randombolt",
+      "initialDifficulty": "0x100",
+      "blockSeconds": 4,
+      "halfLifeSeconds": 120
+    },
+    "checkpointMinStakers": 16,
+    "checkpointMinStakeBolt": 1000000,
+    "checkpointDepth": 4,
+    "posMinStakers": 16,
+    "posMinStakeBolt": 1000000,
+    "posStreakEpochs": 2
+  },
+  "timestamp": 0,
+  "extraData": "0x426f6c74636861696e20434f3258206c6f63616c",
+  "alloc": {}
+}

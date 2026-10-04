@@ -37,7 +37,7 @@ function writeJson(f: string, v: unknown) {
 
 /// 模擬交易只准在這些鏈上開。常駐程式讀的是同一個變數，兩邊各擋一次。
 export function simulationChains(): number[] {
-  return String(process.env.SIMULATION_CHAINS ?? "31337,1337,8018").split(",").map((x) => Number(x.trim())).filter(Boolean);
+  return String(process.env.SIMULATION_CHAINS ?? "31337,1337,8018,18018").split(",").map((x) => Number(x.trim())).filter(Boolean);
 }
 export const simulationAllowed = () => simulationChains().includes(CHAIN_ID);
 

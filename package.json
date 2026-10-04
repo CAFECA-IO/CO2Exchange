@@ -1,0 +1,12 @@
+{
+  "name": "co2exchange",
+  "private": true,
+  "description": "專案根目錄的捷徑。網站本身在 web/（cd web && npm install）",
+  "scripts": {
+    "deploy": "bash script/bootstrap.sh chain",
+    "chain:node": "bash script/bootstrap.sh node",
+    "chain:logs": "docker compose logs -f boltchain",
+    "chain:down": "docker compose down",
+    "deploy:status": "bash script/bootstrap.sh status"
+  }
+}
