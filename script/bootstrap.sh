@@ -376,6 +376,7 @@ cmd_deploy () {
 
   local script
   script=script/DeployLedger.s.sol
+  mkdir -p "$ROOT/deployments"   # 部署紀錄不進版本控制，新 clone 可能沒有這個資料夾；forge 不會自己建
   # 帳本授權清單（簽章模型方案 B）：
   #   · 高頻角色各一把：身分、查驗、文件、收單回執（= relayer，它同時提交承諾）
   #   · 主權、營運登記的是 Safe 持有人的 EOA，門檻與 Safe 相同；查核角色預設就是查驗金鑰、1-of-1

@@ -173,6 +173,7 @@ do_deploy () {
   # 主權門檻仍是 2，ledger-seed 會用本機助記詞裡的持有人湊滿門檻。
   local A0=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
   echo ">> 部署帳本合約（DeployLedger）"
+  mkdir -p deployments   # 部署紀錄不進版本控制，新 clone 可能沒有這個資料夾；forge 不會自己建
   SOVEREIGN_SIGNER=${SOVEREIGN_SIGNER:-$A0} OPERATOR_SIGNER=${OPERATOR_SIGNER:-$A0} \
     forge script script/DeployLedger.s.sol --rpc-url "$RPC_URL" --broadcast > "$LOG/deploy.log" 2>&1 \
     || { echo "!! 部署失敗，看 $LOG/deploy.log"; exit 1; }

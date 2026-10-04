@@ -19,3 +19,6 @@ Claude outputs/
 
 # macOS 的資料夾設定檔
 .DS_Store
+
+# 部署紀錄：每個測試環境各自部署、位址不同，提交上去只會互相衝突（見 deployments/README.md）
+deployments/*.json

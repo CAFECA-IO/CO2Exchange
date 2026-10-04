@@ -156,6 +156,9 @@ cd web && npm install && npm run build && npm start
 
 `bootstrap.sh` 分開跑也可以：`keys` / `fund` / `deploy` / `status` / `roles`。
 
+部署紀錄寫在 `deployments/<chainId>.json`，**不進版本控制**：同一條鏈在不同測試環境各自部署、位址都不一樣，
+提交上去只會互相蓋掉。每台機器保留自己的；要給另一台機器（例如正式主機）就直接複製，或用 `DEPLOYMENT_FILE` 指過去。
+
 **金鑰在你的機器上產生**（`cast wallet new`），直接寫進 `web/.env.local`（權限 600）。腳本只印地址，不印私鑰；
 已經有值的一律保留不覆寫。
 
