@@ -4,6 +4,7 @@
 #   BENEFICIARY      收礦工獎勵的地址（必填；bootstrap.sh 會填 DEPLOYER_PK 的地址）
 #   MINING_THREADS   挖礦執行緒（預設 1）
 #   RANDOMX_FAST     1 = RandomX fast 模式（每把 key 2 GiB 記憶體，雜湊快很多；預設 light）
+#   EXPLORER         1 = 開節點內建的區塊鏈瀏覽器（容器內 8080；預設開，0 關）
 #   GENESIS          genesis 檔（預設映像檔內建的 /etc/boltchain/genesis.json）
 #   EXTRA_ARGS       其他要傳給 `boltchain mine` 的參數
 #
@@ -28,6 +29,8 @@ set -- mine \
   --mining-threads "${MINING_THREADS:-1}" \
   --extra-data "co2x"
 [ "${RANDOMX_FAST:-0}" = "1" ] && set -- "$@" --randomx-fast
+# 區塊鏈瀏覽器（/tx/<hash>、/block/<n>、/address/<addr>）：網站審計頁的連結指到這裡。地址索引多佔 10–20% 磁碟
+[ "${EXPLORER:-1}" = "1" ] && set -- "$@" --gateway 0.0.0.0:8080 --explorer
 # shellcheck disable=SC2086
 [ -n "${EXTRA_ARGS:-}" ] && set -- "$@" $EXTRA_ARGS
 

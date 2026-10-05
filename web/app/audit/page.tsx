@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { ChainLink } from "@/components/ChainLink";
 import { Card, Notice } from "@/components/ui";
 import { fetchJson } from "@/lib/client/fetchJson";
 import type { Liveness } from "@/lib/ledger/liveness";
@@ -18,13 +19,13 @@ type Epoch = {
   epoch: string; anchor: string; txHash: string; blockNumber: string;
   firstSeq: string; lastSeq: string; totalKg: string; totalCash: string;
 };
-type Config = { deployment: { chainId: number; ledger: string; settlementToken: string; nationalSafe: string; operatorSafe: string; timelock: string; deployedAtBlock?: number } };
+type Config = { explorer?: string | null; deployment: { chainId: number; ledger: string; settlementToken: string; nationalSafe: string; operatorSafe: string; timelock: string; deployedAtBlock?: number } };
 
 const short = (h: string) => (h ? `${h.slice(0, 10)}…${h.slice(-6)}` : "—");
 const tonnes = (kg: string) => (Number(kg) / 1000).toLocaleString("zh-TW", { maximumFractionDigits: 1 });
 const twd = (v: string) => (Number(v) / 1e6).toLocaleString("zh-TW", { maximumFractionDigits: 0 });
 
-function Row({ k, v, mono = true }: { k: string; v: string; mono?: boolean }) {
+function Row({ k, v, mono = true }: { k: string; v: React.ReactNode; mono?: boolean }) {
   return (
     <div className="flex flex-wrap justify-between gap-x-4 gap-y-0.5 py-1.5">
       <dt className="text-ink-300">{k}</dt>
@@ -48,6 +49,8 @@ export default function AuditPage() {
   }, []);
 
   const d = cfg?.deployment;
+  const ex = cfg?.explorer ?? null;
+  const addr = (a: string) => <ChainLink base={ex} kind="address" value={a} />;
   const recent = epochs ? [...epochs].reverse().slice(0, 24) : [];
 
   return (
@@ -173,13 +176,19 @@ export default function AuditPage() {
         <Card title="合約">
           <dl className="divide-y divide-ink-600 text-sm">
             <Row k="鏈" v={String(d.chainId)} />
-            <Row k="帳本合約" v={d.ledger} />
-            <Row k="記帳 TWD（只在帳本合約裡）" v={d.settlementToken} />
-            <Row k="國家單位 Safe（授權清單）" v={d.nationalSafe} />
-            <Row k="營運 Safe（入出金確認、承諾提交者）" v={d.operatorSafe} />
-            <Row k="Timelock（角色更換，48 小時）" v={d.timelock} />
-            {d.deployedAtBlock !== undefined && <Row k="部署區塊" v={String(d.deployedAtBlock)} />}
+            <Row k="帳本合約" v={addr(d.ledger)} />
+            <Row k="記帳 TWD（只在帳本合約裡）" v={addr(d.settlementToken)} />
+            <Row k="國家單位 Safe（授權清單）" v={addr(d.nationalSafe)} />
+            <Row k="營運 Safe（入出金確認、承諾提交者）" v={addr(d.operatorSafe)} />
+            <Row k="Timelock（角色更換，48 小時）" v={addr(d.timelock)} />
+            {d.deployedAtBlock !== undefined && <Row k="部署區塊" v={<ChainLink base={ex} kind="block" value={d.deployedAtBlock} />} />}
           </dl>
+          {ex && (
+            <p className="mt-3 text-xs leading-6 text-ink-300">
+              地址、區塊與下方每一期的交易都連到區塊鏈瀏覽器（<a className="text-tide underline" href={ex} target="_blank" rel="noreferrer">{new URL(ex).host}</a>），
+              不必經過本站就能看到鏈上的原始紀錄。
+            </p>
+          )}
         </Card>
       )}
 
@@ -192,7 +201,7 @@ export default function AuditPage() {
               <thead className="text-left text-xs text-ink-300">
                 <tr>
                   <th className="py-1.5 pr-3">期</th><th className="pr-3">事件</th><th className="pr-3 text-right">碳權（噸）</th>
-                  <th className="pr-3 text-right">新台幣（元）</th><th className="pr-3">anchor</th><th className="pr-3">交易</th><th>公開檔</th>
+                  <th className="pr-3 text-right">新台幣（元）</th><th className="pr-3">anchor</th><th className="pr-3">區塊</th><th className="pr-3">交易</th><th>公開檔</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-600">
@@ -203,7 +212,8 @@ export default function AuditPage() {
                     <td className="tnum pr-3 text-right text-ink-200">{tonnes(e.totalKg)}</td>
                     <td className="tnum pr-3 text-right text-ink-200">{twd(e.totalCash)}</td>
                     <td className="pr-3 font-mono text-xs text-ink-300">{short(e.anchor)}</td>
-                    <td className="pr-3 font-mono text-xs text-ink-300" title={`區塊 ${e.blockNumber}`}>{short(e.txHash)}</td>
+                    <td className="tnum pr-3 text-xs text-ink-300"><ChainLink base={ex} kind="block" value={e.blockNumber} /></td>
+                    <td className="pr-3 font-mono text-xs text-ink-300"><ChainLink base={ex} kind="tx" value={e.txHash} title={e.txHash}>{short(e.txHash)}</ChainLink></td>
                     <td><a className="text-tide underline" href={`/api/public/epochs/${e.epoch}`} target="_blank" rel="noreferrer">JSON</a></td>
                   </tr>
                 ))}

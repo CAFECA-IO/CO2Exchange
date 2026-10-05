@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useReload } from "@/lib/client/useReload";
+import { useAccount } from "@/components/AccountProvider";
+import { ChainLink } from "@/components/ChainLink";
 import { Button, Card, Field, Notice, inputCls } from "@/components/ui";
 import { fetchJson, postJson } from "@/lib/client/fetchJson";
 
@@ -37,7 +39,8 @@ const short = (a: string) => `${a.slice(0, 8)}…${a.slice(-4)}`;
 
 export function FiatPanel() {
   const [r, setR] = useState<Resp | null>(null);
-  const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string; tx?: string } | null>(null);
+  const explorer = useAccount().config?.explorer ?? null;
   const [described, setDescribed] = useState<Described | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [dep, setDep] = useState({ who: "", amount: "", bankRef: "" });
@@ -60,7 +63,7 @@ export function FiatPanel() {
         setDescribed({ executed: false, safe: j.safe ?? "", to: j.to ?? "", data: j.data ?? "", cli: j.cli ?? "" });
         setMsg({ kind: "ok", text: `${label}：網站不持有營運 Safe 的金鑰，請持有人執行下方的內容` });
       } else if (j.executed) {
-        setMsg({ kind: "ok", text: `${label}：已上鏈（${short(j.txHash ?? "")}），帳本鏡像 ${j.mirrored ?? 0} 筆` });
+        setMsg({ kind: "ok", text: `${label}：已上鏈（${short(j.txHash ?? "")}），帳本鏡像 ${j.mirrored ?? 0} 筆`, tx: j.txHash });
       } else if (j.proposal) {
         setMsg({ kind: "ok", text: `${label}：需要 ${j.required} 個營運簽章，已建立提案 ${j.proposal.id}（治理狀態頁）` });
       } else setMsg({ kind: "ok", text: `${label}：已寫進帳本` });
@@ -75,7 +78,12 @@ export function FiatPanel() {
 
   return (
     <div className="space-y-4" data-testid="fiat-panel">
-      {msg && <Notice kind={msg.kind}>{msg.text}</Notice>}
+      {msg && (
+        <Notice kind={msg.kind}>
+          {msg.text}
+          {msg.tx && <> <ChainLink base={explorer} kind="tx" value={msg.tx}>{explorer ? "在瀏覽器上看" : ""}</ChainLink></>}
+        </Notice>
+      )}
       {described && (
         <Card title="交給營運 Safe 持有人執行">
           <p className="mb-2 text-xs text-ink-300">在持有人的機器上（金鑰在 repo 根目錄的 <code>.governance.env</code>，不在網站）：</p>
@@ -108,7 +116,7 @@ export function FiatPanel() {
           <table className="mt-4 w-full text-xs">
             <thead className="text-left text-ink-300"><tr><th className="py-1">帳戶</th><th className="pr-6 text-right">金額（元）</th><th className="pr-4">bankRef</th><th>交易</th></tr></thead>
             <tbody>{r.recentDeposits.map((d) => (
-              <tr key={d.id} className="border-t border-ink-500"><td className="py-1 font-mono">{short(d.account)}</td><td className="pr-6 text-right">{yuan(d.amount)}</td><td className="pr-4 font-mono">{d.bankRef.slice(0, 10)}…</td><td className="font-mono">{short(d.txHash)}</td></tr>
+              <tr key={d.id} className="border-t border-ink-500"><td className="py-1 font-mono">{short(d.account)}</td><td className="pr-6 text-right">{yuan(d.amount)}</td><td className="pr-4 font-mono">{d.bankRef.slice(0, 10)}…</td><td className="font-mono"><ChainLink base={explorer} kind="tx" value={d.txHash} title={d.txHash}>{short(d.txHash)}</ChainLink></td></tr>
             ))}</tbody>
           </table>
         )}

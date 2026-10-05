@@ -684,6 +684,7 @@ cmd_chain () {
   echo
   echo ">> 自架鏈"
   echo "   RPC        ${RPC_URL}（chainId ${id}，只綁 127.0.0.1）"
+  echo "   瀏覽器     http://127.0.0.1:${BOLTCHAIN_EXPLORER_PORT:-18080}（審計頁的交易、區塊、地址都連到這裡；改了埠要設 EXPLORER_URL）"
   echo "   log        docker compose logs -f boltchain"
   echo "   停／刪     docker compose down（鏈資料保留）／ docker compose down -v（連鏈刪掉，之後要重新部署）"
   echo "   MetaMask   自訂網路：RPC ${RPC_URL}、Chain ID ${id}、貨幣 BOLT"

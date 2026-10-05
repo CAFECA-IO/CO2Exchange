@@ -1,8 +1,11 @@
-import { deployment } from "@/lib/server/chain";
+import { CHAIN_ID, deployment } from "@/lib/server/chain";
+import { explorerBase } from "@/lib/explorer";
 import { providerIds } from "@/auth";
 import { handleError, ok } from "@/lib/server/api";
 
-/// 前端啟動需要知道的兩件事：合約地址表，以及有哪些登入方式。
+/// 前端啟動需要知道的三件事：合約地址表、有哪些登入方式，以及區塊鏈瀏覽器的網址（審計頁的連結用；沒有就是 null）。
+///
+/// 瀏覽器網址不是節點：它是給人點的網頁，本來就公開，不在下面那條界線裡。
 ///
 /// **這裡不再給 RPC 位址。** 以前會回 `rpcUrl`，瀏覽器拿它自己開一條連線去讀鏈；
 /// 現在所有鏈上讀寫都經過 /api/*。少掉那一行的實際差別：
@@ -18,6 +21,6 @@ import { handleError, ok } from "@/lib/server/api";
 /// `npm run check:boundary` 會擋下它。
 export async function GET() {
   try {
-    return ok({ deployment: deployment(), providers: providerIds });
+    return ok({ deployment: deployment(), providers: providerIds, explorer: explorerBase(CHAIN_ID, process.env.EXPLORER_URL) });
   } catch (e) { return handleError(e); }
 }

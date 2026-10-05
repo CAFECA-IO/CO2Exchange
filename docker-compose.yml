@@ -6,6 +6,7 @@
 # 手動：
 #   docker compose up -d --build boltchain     # 需要專案根目錄的 .env 有 BOLTCHAIN_BENEFICIARY（chain 指令會寫）
 #   docker compose logs -f boltchain
+#   http://127.0.0.1:18080                     # 節點內建的區塊鏈瀏覽器
 #   docker compose down                        # 停節點，鏈資料保留在 volume
 #   docker compose down -v                     # 連鏈一起刪（之後要重新部署）
 #
@@ -33,10 +34,13 @@ services:
       BENEFICIARY: ${BOLTCHAIN_BENEFICIARY:-}
       MINING_THREADS: ${BOLTCHAIN_MINING_THREADS:-1}
       RANDOMX_FAST: ${BOLTCHAIN_RANDOMX_FAST:-0}
+      EXPLORER: ${BOLTCHAIN_EXPLORER:-1}
       RUST_LOG: ${BOLTCHAIN_LOG:-info,libmdbx=warn}
     ports:
       # 只給本機：RPC 沒有任何存取控制
       - "127.0.0.1:${BOLTCHAIN_RPC_PORT:-18545}:8545"
+      # 區塊鏈瀏覽器（網站審計頁的連結）。改了埠要在 web/.env.local 設 EXPLORER_URL=http://127.0.0.1:<埠>
+      - "127.0.0.1:${BOLTCHAIN_EXPLORER_PORT:-18080}:8080"
     volumes:
       - boltchain-data:/data
     healthcheck:

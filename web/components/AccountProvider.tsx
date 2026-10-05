@@ -39,7 +39,7 @@ export type Wallet = {
   manageUrl: string;
 };
 
-type Config = { deployment: Deployment; providers: string[] };
+type Config = { deployment: Deployment; providers: string[]; /** 區塊鏈瀏覽器網址；沒有就是 null（見 lib/explorer.ts） */ explorer?: string | null };
 export type Me = { address: string | null; handle: string | null; isAdmin: boolean; isVerifier: boolean };
 /// 鏈上身分 + 本機的申請紀錄。`/api/kyc` 回的就是這個形狀。
 export type Identity = {

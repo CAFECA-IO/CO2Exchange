@@ -212,6 +212,7 @@ genesis 在 `docker/boltchain/genesis.json`，RPC 只綁 `127.0.0.1:18545`），
 | `BOLTCHAIN_SRC` | — | 用本機 clone 的 boltchain 原始碼編譯，不從 GitHub 抓 |
 | `BOLTCHAIN_MINING_THREADS` | 1 | 挖礦執行緒 |
 | `BOLTCHAIN_RANDOMX_FAST` | 0 | 1 = RandomX fast 模式（2 GiB 記憶體，雜湊快很多） |
+| `BOLTCHAIN_EXPLORER_PORT` | 18080 | 節點內建區塊鏈瀏覽器的本機埠（`BOLTCHAIN_EXPLORER=0` 關掉）；改了埠要在 `web/.env.local` 設 `EXPLORER_URL` |
 | `MINE_TIMEOUT` | 1800 | 等挖到夠的秒數上限 |
 
 `npm run chain:logs` 看節點、`npm run chain:down` 停節點（鏈資料留在 Docker volume；`docker compose down -v` 連鏈刪掉，之後要重新部署）。
