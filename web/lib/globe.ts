@@ -1,32 +1,30 @@
-/// 地球的幾何：把遮罩解回點、把經緯度投影到畫布。
+/// 地球的幾何：把點陣解回球面上的點、把經緯度投影到畫布。
 ///
 /// 全部是純函式，沒有 canvas、沒有 React——可以單獨測，也可以在 worker 裡跑。
 /// 用正交投影（orthographic）而不是透視投影：正交投影下地球的輪廓永遠是正圓，
 /// 不會因為視距而變形，而且每個點的縮放係數都一樣，柱子的長度才有可比性。
+///
+/// 點陣在 lib/globe-dots.ts（scripts/gen-globe-dots.py 產生）：在真實地圖上按經緯度取樣，
+/// 落在陸地上的取樣點就是一個點，每個點都記著它屬於哪一國。
 
 import {
-  GLOBE_GRID_B64, GLOBE_GRID_COLS, GLOBE_GRID_LAT0, GLOBE_GRID_LON0, GLOBE_GRID_ROWS,
-  GLOBE_GRID_STEP, GLOBE_REGIONS_B64, GLOBE_REGION_COUNTS, GLOBE_TRACKED,
-} from "./globe-mask";
+  GLOBE_COUNTRIES, GLOBE_EXTRA_B64, GLOBE_ROW_COUNTS, GLOBE_ROW_LAT0, GLOBE_SAMPLES_B64, GLOBE_STEP,
+} from "./globe-dots.ts";
 
-export type Dot = {
+/// 國家表：索引 → [ISO 3166-1 alpha-2, 中文名]
+export const COUNTRIES = GLOBE_COUNTRIES;
+
+/// 整顆地球的點，欄位分開存成型別陣列：每一幀都要把三萬多個點轉一次，
+/// 物件陣列會讓每一幀產生三萬多次屬性查找與垃圾回收的壓力。
+export type DotField = {
+  n: number;
   /// 單位球面上的座標
-  x: number; y: number; z: number;
-  /// -1 = 一般陸地，其餘是 GLOBE_TRACKED 的索引
-  region: number;
+  x: Float32Array; y: Float32Array; z: Float32Array;
+  /// 經緯度（度）
+  lon: Float32Array; lat: Float32Array;
+  /// 屬於 COUNTRIES 的第幾國
+  country: Uint16Array;
 };
-
-/// 底圖抽稀：每 BASE_POOL 格取一個點。
-///
-/// 0.6 度的格子在赤道上約 67 公里，整顆球鋪滿是三萬六千個點——畫得出來，
-/// 但每一幀都要轉三萬六千次矩陣再畫三萬六千個圓，手機上就掉幀了。
-/// 取 2 得到 1.2 度（約 133 公里），九千多個點，跟抽稀前的形狀一樣認得出來。
-const BASE_POOL = 2;
-
-/// 一塊最多跨幾格經度。純按 1/cos(緯度) 放大，到了南極圈一塊會寬達兩百多度——
-/// 一個點代表半圈地球，放在哪裡都是錯的。極區因此比等面積該有的密一點，
-/// 那是刻意的：那裡本來就只是背景。
-const MAX_SPAN = 30;
 
 function b64ToBytes(b64: string): Uint8Array {
   if (typeof atob === "function") {
@@ -52,7 +50,8 @@ async function inflate(bytes: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(inflateSync(bytes));
 }
 
-function rleDecode(buf: Uint8Array, n: number): Uint8Array {
+/// (值, 長度) 一組：值一個位元組，長度是 7 位元一組的變長整數。
+export function rleDecode(buf: Uint8Array, n: number): Uint8Array {
   const out = new Uint8Array(n);
   let i = 0, p = 0;
   while (p < buf.length && i < n) {
@@ -79,58 +78,55 @@ function lonLatToXyz(lonDeg: number, latDeg: number): [number, number, number] {
   return [c * Math.sin(lon), Math.sin(lat), c * Math.cos(lon)];
 }
 
-/// 解出整顆地球的點。底圖是經緯格點抽稀後的結果，轄區用存下來的經緯度。
-export async function buildDots(): Promise<Dot[]> {
-  const [gridRaw, regionRaw] = await Promise.all([
-    inflate(b64ToBytes(GLOBE_GRID_B64)),
-    inflate(b64ToBytes(GLOBE_REGIONS_B64)),
+/// 解出整顆地球的點：取樣點（落在陸地上的）＋取樣拿不到的小國補點。
+export async function buildDots(): Promise<DotField> {
+  const total = GLOBE_ROW_COUNTS.reduce((a, b) => a + b, 0);
+  const [sampleRaw, extraRaw] = await Promise.all([
+    inflate(b64ToBytes(GLOBE_SAMPLES_B64)),
+    GLOBE_EXTRA_B64 ? inflate(b64ToBytes(GLOBE_EXTRA_B64)) : Promise.resolve(new Uint8Array()),
   ]);
-  const grid = rleDecode(gridRaw, GLOBE_GRID_ROWS * GLOBE_GRID_COLS);
+  const owner = rleDecode(sampleRaw, total);
 
-  const dots: Dot[] = [];
-  for (let r = 0; r < GLOBE_GRID_ROWS; r += BASE_POOL) {
-    const rows = Math.min(BASE_POOL, GLOBE_GRID_ROWS - r);
-    const lat = GLOBE_GRID_LAT0 + (r + (rows - 1) / 2) * GLOBE_GRID_STEP;
-    // 等經度間距在高緯度會擠成一團——極區的一度只有赤道的幾十分之一寬。
-    // 除以 cos(緯度) 把經度方向拉開，點在**地表上**才是等距的。
-    const cos = Math.max(Math.cos((lat * Math.PI) / 180), 1e-3);
-    const span = Math.max(1, Math.min(MAX_SPAN, Math.round(BASE_POOL / cos)));
-    for (let c = 0; c < GLOBE_GRID_COLS; c += span) {
-      const cols = Math.min(span, GLOBE_GRID_COLS - c);
-      // 整塊裡只要有一格是陸地就留一個點，位置取塊內**離中心最近的那一格陸地**。
-      //
-      // 兩件事各有原因。只看每 span 格的那一格就丟掉其餘的話，日本、中美洲、
-      // 島鏈這種一格寬的地形會整段消失——地圖上不見一個國家，比密度不均難看得多。
-      // 而點放在塊的幾何中心、不管那裡是不是陸地的話，海岸線會往海裡糊出去半塊，
-      // 在極區（一塊很寬）甚至會把點放到外海。
-      let best = -1, bestD = Infinity;
-      const mid = (cols - 1) / 2;
-      for (let dc = 0; dc < cols; dc++) {
-        const d = Math.abs(dc - mid);
-        if (d >= bestD) continue;
-        for (let dr = 0; dr < rows; dr++) {
-          if (grid[(r + dr) * GLOBE_GRID_COLS + c + dc]) { best = dc; bestD = d; break; }
-        }
-      }
-      if (best < 0) continue;
-      const lon = GLOBE_GRID_LON0 + (c + best) * GLOBE_GRID_STEP;
-      const [x, y, z] = lonLatToXyz(lon, lat);
-      dots.push({ x, y, z, region: -1 });
-    }
-  }
+  let land = 0;
+  for (let i = 0; i < total; i++) if (owner[i]) land++;
+  const nExtra = Math.floor(extraRaw.length / 5);
+  const n = land + nExtra;
+  const f: DotField = {
+    n,
+    x: new Float32Array(n), y: new Float32Array(n), z: new Float32Array(n),
+    lon: new Float32Array(n), lat: new Float32Array(n), country: new Uint16Array(n),
+  };
+  const put = (k: number, lon: number, lat: number, idx: number) => {
+    const [x, y, z] = lonLatToXyz(lon, lat);
+    f.x[k] = x; f.y[k] = y; f.z[k] = z; f.lon[k] = lon; f.lat[k] = lat; f.country[k] = idx;
+  };
 
-  const view = new DataView(regionRaw.buffer, regionRaw.byteOffset, regionRaw.byteLength);
-  let off = 0;
-  GLOBE_REGION_COUNTS.forEach((count, region) => {
-    for (let k = 0; k < count; k++) {
-      const lon = view.getInt16(off, true) / 100;
-      const lat = view.getInt16(off + 2, true) / 100;
-      off += 4;
-      const [x, y, z] = lonLatToXyz(lon, lat);
-      dots.push({ x, y, z, region });
+  let s = 0, k = 0;
+  GLOBE_ROW_COUNTS.forEach((count, r) => {
+    const lat = GLOBE_ROW_LAT0 + r * GLOBE_STEP;
+    for (let j = 0; j < count; j++, s++) {
+      const v = owner[s];
+      if (v) put(k++, -180 + ((j + 0.5) * 360) / count, lat, v - 1);
     }
   });
-  return dots;
+  const view = new DataView(extraRaw.buffer, extraRaw.byteOffset, extraRaw.byteLength);
+  for (let e = 0; e < nExtra; e++) {
+    const off = e * 5;
+    put(k++, view.getInt16(off, true) / 100, view.getInt16(off + 2, true) / 100, view.getUint8(off + 4) - 1);
+  }
+  return f;
+}
+
+/// 這個經緯度落在哪一國：取最近的點（在 maxKm 以內），沒有就是海。
+/// 點陣的間距約 67 公里，所以預設容許一個間距。
+export function countryAt(f: DotField, lonDeg: number, latDeg: number, maxKm = 70): string | null {
+  const [px, py, pz] = lonLatToXyz(lonDeg, latDeg);
+  let best = -1, bestDot = Math.cos(maxKm / 6371);
+  for (let i = 0; i < f.n; i++) {
+    const d = f.x[i] * px + f.y[i] * py + f.z[i] * pz;
+    if (d > bestDot) { bestDot = d; best = i; }
+  }
+  return best < 0 ? null : COUNTRIES[f.country[best]][0];
 }
 
 export type Camera = {
@@ -160,5 +156,3 @@ export function lonLatToUnit(lonDeg: number, latDeg: number) {
 export function yawFor(lonDeg: number): number {
   return -(lonDeg * Math.PI) / 180;
 }
-
-export const TRACKED = GLOBE_TRACKED;

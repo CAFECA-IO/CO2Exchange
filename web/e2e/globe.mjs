@@ -27,6 +27,20 @@ const browser = await launch();
   console.log("首頁");
   ok(await page.locator("canvas").isVisible(), "地球畫布有畫出來");
 
+  // 每個陸地點都標了國家：游標掃過地球，經過的陸地要報得出國名，而且不只交易轄區
+  {
+    const box = await page.locator("canvas").boundingBox();
+    const seen = new Set();
+    for (let y = 0.3; y <= 0.7; y += 0.1) for (let x = 0.2; x <= 0.8; x += 0.04) {
+      await page.mouse.move(box.x + box.width * x, box.y + box.height * y);
+      await page.waitForTimeout(25);
+      const t = (await page.locator('[data-testid="globe-tip-name"]').allInnerTexts())[0];
+      if (t) seen.add(t);
+    }
+    ok(seen.size >= 3, `游標經過的陸地報得出國名：${[...seen].slice(0, 6).join("、")}`);
+    await page.mouse.move(0, 0);
+  }
+
   // 清單是精確的那一份，也是鍵盤與螢幕報讀器的路徑：每一國都要是真的按鈕
   const rows = page.locator('ul li button[aria-pressed]');
   const n = await rows.count();

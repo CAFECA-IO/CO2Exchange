@@ -427,6 +427,7 @@ npm run check:api-envelope                   # 每支 API 都走制式信封與�
 npm run test:ledger                          # 36：引擎規則、重播、雜湊鏈、出金、增量讀取與索引、法人帳戶簽章、KYC Credential、實名同步
 npm run test:cafeca                          # 24：登入 nonce、SignIn digest、委託單 EIP-712、設定檔解析（含 IdentityRegistry v2）
 npm run test:keys && npm run test:mm         # 金鑰來源、做市策略
+npm run test:globe                           # 首頁地球點陣：每個陸地點標的國家對得上真實地點（含換日線、國中之國、小國補點）
 npm run test:sealed                          # 11：個人資料加密、AAD、換金鑰、data:protect 遷移
 npm run build
 

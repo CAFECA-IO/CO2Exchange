@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildDots, lonLatToUnit, rotate, TRACKED, type Camera, type Dot } from "@/lib/globe";
+import { buildDots, COUNTRIES, lonLatToUnit, rotate, type Camera, type DotField } from "@/lib/globe";
 
 export type GlobeCountry = {
   country: string;
@@ -102,13 +102,32 @@ function label(
   ctx.fillText(text, bx + pad, by + 11);
 }
 
+/// 國家代碼 → 中文名（點陣的國家表）。轄區用呼叫端給的名字，其他國家用這一份。
+const NAME_OF = new Map(COUNTRIES.map(([code, name]) => [code, name]));
+const INDEX_OF = new Map(COUNTRIES.map(([code], i) => [code, i]));
+
+/// 點的分類，決定顏色。同一類、同一個深度區間的點一起畫（一次 fill），
+/// 三萬多個點各自設一次 fillStyle 會讓每一幀慢上好幾倍。
+const CAT_LAND = 0, CAT_OFF = 1, CAT_ON = 2, CAT_HOVER = 3, CAT_SEL = 4;
+const N_CAT = 5;
+const N_DEPTH = 6;
+
+function makeScratch(n: number) {
+  const nb = 2 * N_CAT * N_DEPTH;
+  return {
+    rx: new Float32Array(n), ry: new Float32Array(n),
+    bucket: new Uint8Array(n), order: new Uint32Array(n),
+    start: new Uint32Array(nb + 1), fill: new Uint32Array(nb),
+  };
+}
+
 const TILT = -0.32; // 北半球稍微轉向鏡頭：亞太在上半部，看起來才像地球不像圓盤
 const AUTO_SPEED = 0.055; // 弧度/秒。一圈約兩分鐘，夠慢到不會讓人分心
 
 export default function Globe({ countries, selected, onSelect, measureLabel, formatValue, className }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const [dots, setDots] = useState<Dot[] | null>(null);
+  const [dots, setDots] = useState<DotField | null>(null);
   const [hover, setHover] = useState<string | null>(null);
   const [tip, setTip] = useState<{ x: number; y: number; code: string } | null>(null);
 
@@ -121,6 +140,17 @@ export default function Globe({ countries, selected, onSelect, measureLabel, for
 
   const byCode = useMemo(() => new Map(countries.map((c) => [c.country, c])), [countries]);
   const maxValue = useMemo(() => Math.max(1, ...countries.map((c) => c.value)), [countries]);
+  /// 國家表索引 → 基本分類（一般陸地／開放的轄區／未開放的轄區）
+  const baseCat = useMemo(() => {
+    const a = new Uint8Array(COUNTRIES.length);
+    COUNTRIES.forEach(([code], i) => {
+      const c = byCode.get(code);
+      a[i] = !c ? CAT_LAND : c.enabled ? CAT_ON : CAT_OFF;
+    });
+    return a;
+  }, [byCode]);
+  /// 每一幀重用的暫存（旋轉後的座標、每個點落在哪一桶、桶內的順序）。放 ref：每一幀都在改，不是 React 的狀態
+  const scratchRef = useRef<ReturnType<typeof makeScratch> | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -195,33 +225,71 @@ export default function Globe({ countries, selected, onSelect, measureLabel, for
       ctx.stroke();
 
       if (!dots) return;
+      if (!scratchRef.current || scratchRef.current.rx.length !== dots.n) scratchRef.current = makeScratch(dots.n);
 
-      const dotR = Math.max(0.9, R / 190);
-      const back: Dot[] = [];
-      const front: Dot[] = [];
-      for (const d of dots) (rotate(d, c).z > 0 ? front : back).push(d);
+      // 點陣間距 0.6 度：球的半徑 R 像素時，相鄰兩點在正面相距約 R × 0.0105。點的半徑取間距的四成多，
+      // 點與點之間留一點縫，看得出是點陣而不是一片色塊。
+      const dotR = Math.max(0.8, R / 210);
+      const { rx, ry, bucket, order, start, fill } = scratchRef.current;
+      const cyw = Math.cos(c.yaw), syw = Math.sin(c.yaw);
+      const cp = Math.cos(c.pitch), sp = Math.sin(c.pitch);
+      const selIdx = selected ? INDEX_OF.get(selected) ?? -1 : -1;
+      const hovIdx = hover ? INDEX_OF.get(hover) ?? -1 : -1;
+      start.fill(0);
+      for (let i = 0; i < dots.n; i++) {
+        const x1 = dots.x[i] * cyw + dots.z[i] * syw;
+        const z1 = -dots.x[i] * syw + dots.z[i] * cyw;
+        const y2 = dots.y[i] * cp - z1 * sp;
+        const z2 = dots.y[i] * sp + z1 * cp;
+        rx[i] = x1; ry[i] = y2;
+        const ci = dots.country[i];
+        const cat = ci === selIdx ? CAT_SEL : ci === hovIdx ? CAT_HOVER : baseCat[ci];
+        const side = z2 > 0 ? 1 : 0;
+        const depth = Math.min(N_DEPTH - 1, Math.floor(Math.abs(z2) * N_DEPTH));
+        const b = (side * N_CAT + cat) * N_DEPTH + depth;
+        bucket[i] = b;
+        start[b + 1]++;
+      }
+      for (let b = 0; b < fill.length; b++) { start[b + 1] += start[b]; fill[b] = start[b]; }
+      for (let i = 0; i < dots.n; i++) order[fill[bucket[i]]++] = i;
 
       // 背面的點用很低的透明度畫出來。這是這顆地球跟一張圓形貼圖的差別：
       // 你看得見地球背面的輪廓在轉，於是它是一顆球，不是一個圓。
-      for (const pass of [back, front]) {
-        const isBack = pass === back;
-        for (const d of pass) {
-          const r = rotate(d, c);
-          const x = cx + r.x * R;
-          const y = cy - r.y * R;
-          const depth = isBack ? -r.z : r.z;
-          const cc = d.region >= 0 ? byCode.get(TRACKED[d.region]) : undefined;
-          const on = cc?.enabled;
-          const isSel = cc && (cc.country === selected || cc.country === hover);
-          const base = d.region < 0 ? pal.land : on ? pal.tide : pal.muted;
-          const alpha = isBack
-            ? (light ? 0.05 : 0.09) * (0.4 + 0.6 * depth)
-            : (d.region < 0 ? 0.78 : on ? 0.95 : 0.55) * (0.45 + 0.55 * depth);
-          const size = dotR * (isBack ? 0.75 : 0.6 + 0.4 * depth) * (isSel ? 1.7 : 1);
-          ctx.fillStyle = withAlpha(isSel ? pal.tide : base, isSel ? Math.min(1, alpha * 1.6) : alpha);
-          ctx.beginPath();
-          ctx.arc(x, y, size, 0, Math.PI * 2);
-          ctx.fill();
+      for (let side = 0; side < 2; side++) {
+        const isBack = side === 0;
+        for (let cat = 0; cat < N_CAT; cat++) {
+          // 背面不分國家：看得見輪廓就夠了，背面也亮起來會跟正面搶
+          const color = isBack ? pal.land
+            : cat === CAT_SEL ? pal.tide : cat === CAT_HOVER ? pal.ink : cat === CAT_ON ? pal.tide : cat === CAT_OFF ? pal.muted : pal.land;
+          const strong = cat === CAT_SEL || cat === CAT_HOVER;
+          for (let dq = 0; dq < N_DEPTH; dq++) {
+            const b = (side * N_CAT + cat) * N_DEPTH + dq;
+            if (start[b] === start[b + 1]) continue;
+            const depth = (dq + 0.5) / N_DEPTH;
+            const alpha = isBack
+              ? (light ? 0.05 : 0.09) * (0.4 + 0.6 * depth) * (strong ? 2 : 1)
+              : (strong ? 1 : cat === CAT_LAND ? 0.78 : cat === CAT_ON ? 0.95 : 0.6) * (0.45 + 0.55 * depth);
+            const size = dotR * (isBack ? 0.75 : 0.6 + 0.4 * depth) * (strong && !isBack ? 1.35 : 1);
+            ctx.fillStyle = withAlpha(color, Math.min(1, alpha));
+            if (isBack) {
+              // 背面的點又小又淡，畫成方塊看不出差別，比畫圓快得多（背面約佔一半的點）
+              const d = size * 1.6;
+              for (let o = start[b]; o < start[b + 1]; o++) {
+                const i = order[o];
+                ctx.fillRect(cx + rx[i] * R - d / 2, cy - ry[i] * R - d / 2, d, d);
+              }
+              continue;
+            }
+            ctx.beginPath();
+            for (let o = start[b]; o < start[b + 1]; o++) {
+              const i = order[o];
+              const x = cx + rx[i] * R;
+              const y = cy - ry[i] * R;
+              ctx.moveTo(x + size, y);
+              ctx.arc(x, y, size, 0, Math.PI * 2);
+            }
+            ctx.fill();
+          }
         }
       }
 
@@ -287,7 +355,7 @@ export default function Globe({ countries, selected, onSelect, measureLabel, for
     },
     // formatValue 由呼叫端 useMemo 起來，所以放進相依陣列不會讓這個 callback
     // 每次 render 都換一個新的（換了就等於重啟繪圖迴圈）。
-    [dots, countries, byCode, selected, hover, maxValue, formatValue],
+    [dots, baseCat, countries, selected, hover, maxValue, formatValue],
   );
 
   useEffect(() => {
@@ -351,7 +419,11 @@ export default function Globe({ countries, selected, onSelect, measureLabel, for
     };
   }, [draw]);
 
-  /// 命中測試：把每個轄區的錨點投影回畫布，取最近的一個。
+  /// 命中測試：游標底下是哪一國。
+  ///
+  /// 先找最近的陸地點——每個點都知道自己屬於哪一國，所以地球上任何一塊陸地都指得出國名，
+  /// 不只是有在交易的轄區。點陣間距約 0.6 度，容許一點五個間距，海岸邊與小島才點得到。
+  /// 沒有落在陸地上，再找轄區的錨點（柱子的根部）：新加坡這種小國，柱子比它的點大得多。
   const hit = useCallback(
     (px: number, py: number): string | null => {
       const wrap = wrapRef.current;
@@ -359,6 +431,24 @@ export default function Globe({ countries, selected, onSelect, measureLabel, for
       const rect = wrap.getBoundingClientRect();
       const cx = rect.width / 2, cy = rect.height / 2;
       const R = Math.min(rect.width, rect.height) * 0.42;
+      if (dots) {
+        const c = cam.current;
+        const cyw = Math.cos(c.yaw), syw = Math.sin(c.yaw);
+        const cp = Math.cos(c.pitch), sp = Math.sin(c.pitch);
+        const tol = Math.max(5, R * 0.0105 * 1.5);
+        let best = -1, bestD = tol * tol;
+        for (let i = 0; i < dots.n; i++) {
+          const x1 = dots.x[i] * cyw + dots.z[i] * syw;
+          const z1 = -dots.x[i] * syw + dots.z[i] * cyw;
+          const z2 = dots.y[i] * sp + z1 * cp;
+          if (z2 <= 0.05) continue;
+          const y2 = dots.y[i] * cp - z1 * sp;
+          const dx = px - (cx + x1 * R), dy = py - (cy - y2 * R);
+          const d = dx * dx + dy * dy;
+          if (d < bestD) { bestD = d; best = i; }
+        }
+        if (best >= 0) return COUNTRIES[dots.country[best]][0];
+      }
       let best: string | null = null;
       let bestD = 26 * 26;
       for (const k of countries) {
@@ -371,7 +461,7 @@ export default function Globe({ countries, selected, onSelect, measureLabel, for
       }
       return best;
     },
-    [countries],
+    [countries, dots],
   );
 
   const onPointerDown = (e: React.PointerEvent) => {
@@ -402,10 +492,13 @@ export default function Globe({ countries, selected, onSelect, measureLabel, for
     if (wasDrag) return;
     const rect = wrapRef.current!.getBoundingClientRect();
     const k = hit(e.clientX - rect.left, e.clientY - rect.top);
-    onSelect(k === selected ? null : k);
+    // 只有交易轄區可以選（右邊清單才有它的明細）；點到其他國家等於取消選取
+    const pick = k && byCode.has(k) ? k : null;
+    onSelect(pick === selected ? null : pick);
   };
 
-  const tipCountry = tip ? byCode.get(tip.code) : null;
+  const tipCountry = tip ? byCode.get(tip.code) ?? null : null;
+  const tipName = tip ? tipCountry?.name ?? NAME_OF.get(tip.code) ?? tip.code : null;
 
   return (
     <div
@@ -419,16 +512,18 @@ export default function Globe({ countries, selected, onSelect, measureLabel, for
       {/* 畫布對輔助技術隱藏：地球是同一份資料的視覺版本，
           鍵盤與螢幕報讀器走旁邊那份清單，那裡每一國都是一個真的按鈕。 */}
       <canvas ref={canvasRef} aria-hidden className="h-full w-full cursor-grab active:cursor-grabbing" />
-      {tipCountry && (
+      {tip && tipName && (
         <div
           className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-[calc(100%+12px)] whitespace-nowrap rounded-ctl border border-ink-500 bg-ink-700/95 px-2.5 py-1.5 text-xs shadow-lg backdrop-blur"
-          style={{ left: tip!.x, top: tip!.y }}
+          style={{ left: tip.x, top: tip.y }}
         >
-          <div className="font-medium text-ink-50">{tipCountry.name}</div>
+          <div className="font-medium text-ink-50" data-testid="globe-tip-name">{tipName}</div>
           <div className="text-ink-300">
-            {tipCountry.value > 0
-              ? `${measureLabel} ${formatValue(tipCountry.value)}`
-              : tipCountry.enabled ? `尚無${measureLabel}` : "未開放"}
+            {!tipCountry
+              ? "非本站交易轄區"
+              : tipCountry.value > 0
+                ? `${measureLabel} ${formatValue(tipCountry.value)}`
+                : tipCountry.enabled ? `尚無${measureLabel}` : "未開放"}
           </div>
         </div>
       )}
