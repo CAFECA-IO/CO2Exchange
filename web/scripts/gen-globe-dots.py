@@ -38,7 +38,8 @@ NO_ID = {
     "Somaliland": "SO", "Kosovo": "XK", "N. Cyprus": "CY", "Indian Ocean Ter.": "AU",
     "Siachen Glacier": None,
 }
-# 本站用語（與各頁、條款一致）。Intl 的預設是「台灣」「南韓」「中國香港特別行政區」
+# 本站用語（與各頁、條款一致）。Intl 的預設是「台灣」「南韓」「中國香港特別行政區」。
+# 與 lib/country-names.ts 的 NAME_OVERRIDE 是同一份，改一邊要改另一邊
 NAME_OVERRIDE = {
     "TW": "臺灣", "KR": "韓國", "KP": "北韓", "HK": "香港", "MO": "澳門", "PS": "巴勒斯坦",
 }

@@ -1,4 +1,5 @@
 import type { Address } from "viem";
+import { countryName } from "./country-names";
 
 /// deployments/<chainId>.json，由 script/DeployLedger.s.sol 寫出。
 ///
@@ -58,6 +59,13 @@ export function flagOf(code: string): string {
   if (!/^[A-Za-z]{2}$/.test(code)) return "🏳";
   return String.fromCodePoint(...[...code.toUpperCase()].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
 }
+
+/// 國旗 ＋ 中文國名（「🇨🇳 中國」）。畫面上一律顯示國名，不顯示代碼
+export function countryLabel(code: string): string {
+  return `${flagOf(code)} ${countryName(code)}`;
+}
+
+export { countryName };
 
 export function purposeAllowed(mask: number, purpose: number): boolean {
   return (mask & (1 << purpose)) !== 0;

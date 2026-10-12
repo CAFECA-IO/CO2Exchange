@@ -40,6 +40,7 @@ function readPalette(el: HTMLElement) {
     ink: v("--color-ink-50", "#f2f2f2"),
     panel: v("--color-ink-700", "#1e2329"),
     border: v("--color-ink-500", "#2a3139"),
+    hoverClosed: v("--globe-hover-closed", "#c7ccd2"),
   };
 }
 
@@ -105,6 +106,9 @@ function label(
 /// 國家代碼 → 中文名（點陣的國家表）。轄區用呼叫端給的名字，其他國家用這一份。
 const NAME_OF = new Map(COUNTRIES.map(([code, name]) => [code, name]));
 const INDEX_OF = new Map(COUNTRIES.map(([code], i) => [code, i]));
+/// 轄區的顯示名：呼叫端給的名字只是代碼時（帳本還沒登記），改用國家表的國名
+const nameOf = (k: { country: string; name: string }) =>
+  k.name && k.name !== k.country ? k.name : NAME_OF.get(k.country) ?? k.country;
 
 /// 點的分類，決定顏色。同一類、同一個深度區間的點一起畫（一次 fill），
 /// 三萬多個點各自設一次 fillStyle 會讓每一幀慢上好幾倍。
@@ -235,6 +239,9 @@ export default function Globe({ countries, selected, onSelect, measureLabel, for
       const cp = Math.cos(c.pitch), sp = Math.sin(c.pitch);
       const selIdx = selected ? INDEX_OF.get(selected) ?? -1 : -1;
       const hovIdx = hover ? INDEX_OF.get(hover) ?? -1 : -1;
+      // 游標停在開放交易的轄區上亮品牌色；未開放的（包括本站沒有的國家）亮淺灰——
+      // 品牌色等於「這裡可以買」，不能給一個買不到的地方
+      const hoverColor = hovIdx >= 0 && baseCat[hovIdx] === CAT_ON ? pal.tide : pal.hoverClosed;
       start.fill(0);
       for (let i = 0; i < dots.n; i++) {
         const x1 = dots.x[i] * cyw + dots.z[i] * syw;
@@ -260,7 +267,7 @@ export default function Globe({ countries, selected, onSelect, measureLabel, for
         for (let cat = 0; cat < N_CAT; cat++) {
           // 背面不分國家：看得見輪廓就夠了，背面也亮起來會跟正面搶
           const color = isBack ? pal.land
-            : cat === CAT_SEL ? pal.tide : cat === CAT_HOVER ? pal.ink : cat === CAT_ON ? pal.tide : cat === CAT_OFF ? pal.muted : pal.land;
+            : cat === CAT_SEL ? pal.tide : cat === CAT_HOVER ? hoverColor : cat === CAT_ON ? pal.tide : cat === CAT_OFF ? pal.muted : pal.land;
           const strong = cat === CAT_SEL || cat === CAT_HOVER;
           for (let dq = 0; dq < N_DEPTH; dq++) {
             const b = (side * N_CAT + cat) * N_DEPTH + dq;
@@ -306,14 +313,16 @@ export default function Globe({ countries, selected, onSelect, measureLabel, for
         const x0 = cx + r.x * R;
         const y0 = cy - r.y * R;
         const isSel = k.country === selected || k.country === hover;
+        // 只是游標經過一個未開放的轄區：光暈與空心圈用淺灰，不用品牌色（同上）
+        const accent = k.country === selected || k.enabled ? pal.tide : pal.hoverClosed;
 
         // 選中的那一國給一圈光暈。這是「你現在看的是這一個」的訊號，不是數值——
         // 光暈的大小如果也拿來表示某個量，同一個記號就背了兩個意思。
         if (isSel) {
           const rr = 26 * (0.6 + 0.4 * Math.max(0, r.z));
           const g = ctx.createRadialGradient(x0, y0, 0, x0, y0, rr);
-          g.addColorStop(0, withAlpha(pal.tide, 0.38 * fade));
-          g.addColorStop(1, withAlpha(pal.tide, 0));
+          g.addColorStop(0, withAlpha(accent, 0.38 * fade));
+          g.addColorStop(1, withAlpha(accent, 0));
           ctx.fillStyle = g;
           ctx.beginPath();
           ctx.arc(x0, y0, rr, 0, Math.PI * 2);
@@ -340,16 +349,16 @@ export default function Globe({ countries, selected, onSelect, measureLabel, for
 
           // 只有選中的那一國在球上直接標數字。每一國都標會糊成一片，
           // 而標一個就等於回答了「我現在看的是誰、多少」，不必再回頭看清單。
-          if (k.country === selected) label(ctx, pal, x1, y1, r.x, k.name, k.value, formatValue);
+          if (k.country === selected) label(ctx, pal, x1, y1, r.x, nameOf(k), k.value, formatValue);
         } else {
           // 這個量是零的轄區只留一個空心點：它在地球上有位置，但沒有量。
           // 畫一根零高度的柱子會看起來像資料掉了。
-          ctx.strokeStyle = withAlpha(isSel ? pal.tide : pal.muted, 0.9 * fade);
+          ctx.strokeStyle = withAlpha(isSel ? accent : pal.muted, 0.9 * fade);
           ctx.lineWidth = 1.5;
           ctx.beginPath();
           ctx.arc(x0, y0, isSel ? 5 : 3.5, 0, Math.PI * 2);
           ctx.stroke();
-          if (k.country === selected) label(ctx, pal, x0, y0, r.x, k.name, 0, formatValue);
+          if (k.country === selected) label(ctx, pal, x0, y0, r.x, nameOf(k), 0, formatValue);
         }
       }
     },
@@ -498,7 +507,10 @@ export default function Globe({ countries, selected, onSelect, measureLabel, for
   };
 
   const tipCountry = tip ? byCode.get(tip.code) ?? null : null;
-  const tipName = tip ? tipCountry?.name ?? NAME_OF.get(tip.code) ?? tip.code : null;
+  // 轄區用呼叫端給的名字；名字只是代碼（帳本還沒登記這個轄區）就用國家表的國名——畫面上不出現「CN」
+  const tipName = tip
+    ? (tipCountry ? nameOf(tipCountry) : NAME_OF.get(tip.code) ?? tip.code)
+    : null;
 
   return (
     <div

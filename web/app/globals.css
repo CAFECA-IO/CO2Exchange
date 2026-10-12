@@ -48,6 +48,10 @@
      那個亮度畫在淺色底上等於沒畫。海陸對比要各自挑，不能靠翻轉。 */
   --globe-ocean: #0d1317;
   --globe-land: #45515e;
+  /* 游標停在「未開放交易」的國家上：淺灰。開放的轄區亮起來是品牌色，
+     未開放的用品牌色會讓人以為點得進去買；用前景色（白或黑）又太搶。
+     淺色模式取比陸地亮得多的淺灰：整國變成一塊亮的剪影，跟周圍的灰點分得開。 */
+  --globe-hover-closed: #c7ccd2;
 
   /* 走勢小圖的漸層頂端不透明度。深淺各給一個值，不是把同一個翻過來用：
      30% 的青色畫在近黑上是一層薄霧，同樣的 30% 畫在白上是一塊顏色。 */
@@ -89,6 +93,7 @@
     --color-cat-2: #7551e0;
     --globe-ocean: #dae3ec;
     --globe-land: #95a3b3;
+    --globe-hover-closed: #e9edf1;
     --spark-top: 0.26;
   }
 }
@@ -117,6 +122,7 @@
   --color-cat-2: #7551e0;
   --globe-ocean: #dae3ec;
   --globe-land: #95a3b3;
+  --globe-hover-closed: #e9edf1;
   --spark-top: 0.26;
 }
 

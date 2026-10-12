@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useReload } from "@/lib/client/useReload";
 import { useAccount, useCash } from "@/components/AccountProvider";
 import { Button, Card, Field, Notice, fmtKg, inputCls } from "@/components/ui";
-import { PURPOSE_LABEL, TIER_LABEL, flagOf } from "@/lib/deployment";
+import { PURPOSE_LABEL, TIER_LABEL, flagOf, countryName } from "@/lib/deployment";
 import { fetchJson, postJson } from "@/lib/client/fetchJson";
 import { MarketMakerPanel } from "@/components/admin/MarketMakerPanel";
 import { FiatPanel } from "@/components/admin/FiatPanel";
@@ -205,7 +205,7 @@ export default function AdminPage() {
                     const set = (patch: Partial<typeof dft>) => setDraft({ ...draft, [r.country]: { ...dft, ...patch } });
                     return (
                       <tr key={r.country} className="border-t border-ink-500" data-testid="fee-row">
-                        <td className="py-2 whitespace-nowrap">{flagOf(r.country)} {r.country}　{r.name}</td>
+                        <td className="py-2 whitespace-nowrap">{flagOf(r.country)} {r.name || countryName(r.country)}</td>
                         <td>{r.scheme}</td>
                         <td className={r.enabled ? "text-ink-200" : "text-warn"}>
                           {r.enabled ? (r.domestic ? "國內" : "開放") : "暫不開放"}
@@ -214,12 +214,12 @@ export default function AdminPage() {
                         <td><input className={`${inputCls} w-20`} type="number" min="0" max="500" value={dft.tradeBps} onChange={(e) => set({ tradeBps: e.target.value })} /></td>
                         <td><input className={`${inputCls} w-24`} type="number" min="0" step="0.01" value={dft.retire} onChange={(e) => set({ retire: e.target.value })} /></td>
                         <td className="whitespace-nowrap text-right">
-                          <Button variant="secondary" onClick={() => act(`設定 ${r.country} 費率`, () => post("/api/fees", {
+                          <Button variant="secondary" onClick={() => act(`設定${r.name || countryName(r.country)}費率`, () => post("/api/fees", {
                             country: r.country, custom: true, tradeBps: Number(dft.tradeBps), retireFeePerTonne: Number(dft.retire),
                           }))} disabled={!!busy}>設為專屬</Button>
                           {r.custom && (
                             <span className="ml-2">
-                              <Button variant="ghost" onClick={() => act(`${r.country} 回到預設`, () => post("/api/fees", {
+                              <Button variant="ghost" onClick={() => act(`${r.name || countryName(r.country)}回到預設`, () => post("/api/fees", {
                                 country: r.country, custom: false, tradeBps: 0, retireFeePerTonne: 0,
                               }))} disabled={!!busy}>回到預設</Button>
                             </span>

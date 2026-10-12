@@ -6,7 +6,7 @@ import { AccountGate } from "@/components/AccountGate";
 import { AreaChart, BarList, Donut, StatTile } from "@/components/charts";
 import { Card, Notice, fmtKg } from "@/components/ui";
 import { useReload } from "@/lib/client/useReload";
-import { PURPOSE_LABEL, flagOf } from "@/lib/deployment";
+import { PURPOSE_LABEL, countryLabel } from "@/lib/deployment";
 import type { Movement, Portfolio } from "@/lib/server/portfolio";
 import { fetchJson } from "@/lib/client/fetchJson";
 
@@ -161,7 +161,7 @@ export default function PortfolioPage() {
               <BarList
                 unit=" 噸"
                 rows={p.batches.map((b) => ({
-                  label: `${flagOf(b.country)} ${b.country}　批次 #${b.batchId}　${b.project}`,
+                  label: `${countryLabel(b.country)}　批次 #${b.batchId}　${b.project}`,
                   value: b.kg / 1000,
                   hint: `${b.scheme} · ${b.vintageYear} 年份`,
                 }))}
@@ -236,7 +236,7 @@ export default function PortfolioPage() {
                 {certs.map((c) => (
                   <Card key={c.certId} title={`憑證 #${c.certId}`} action={
                     <span className="rounded bg-ink-600 px-1.5 py-0.5 text-[10px] text-ink-200">
-                      {flagOf(c.country)} {c.country} {c.scheme}
+                      {countryLabel(c.country)} {c.scheme}
                     </span>
                   }>
                     <dl className="grid grid-cols-[6rem_1fr] gap-y-1 text-sm">

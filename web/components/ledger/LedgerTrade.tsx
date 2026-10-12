@@ -6,7 +6,7 @@ import { AccountGate } from "@/components/AccountGate";
 import { AgreementCheck, useAgreementGate } from "@/components/AgreementGate";
 import { ParticipantBadge } from "@/components/ParticipantBadge";
 import { Button, Card, Field, Notice, fmtKg, fmtTwd, inputCls } from "@/components/ui";
-import { flagOf } from "@/lib/deployment";
+import { flagOf, countryLabel, countryName } from "@/lib/deployment";
 import { fetchJson } from "@/lib/client/fetchJson";
 import { outcomeText, useLedger, type WithdrawStatus } from "@/lib/client/ledger";
 
@@ -107,7 +107,7 @@ export function LedgerTrade() {
       amountKg: buyKg, pricePerTonne: buyPrice, minFillKg: 0,
     }, {
       title: `買進 ${fmtKg(buyKg)}，每噸 ${buy.price} 元`,
-      detail: `${buy.batchId ? `批次 #${buy.batchId}` : `${buy.country} 任一批次`}；最多支付 ${fmtTwd(buyCost)} ${CASH}（另加手續費 ${fee / 100}%）。委託單記進帳本，不是鏈上交易。`,
+      detail: `${buy.batchId ? `批次 #${buy.batchId}` : `${countryName(buy.country)}任一批次`}；最多支付 ${fmtTwd(buyCost)} ${CASH}（另加手續費 ${fee / 100}%）。委託單記進帳本，不是鏈上交易。`,
     });
     return outcomeText(r, "買單");
   });
@@ -259,7 +259,7 @@ export function LedgerTrade() {
                 <Field label="核發國">
                   <select className={inputCls} value={buy.batchId ? `b${buy.batchId}` : buy.country}
                     onChange={(e) => setBuy({ ...buy, country: e.target.value.startsWith("b") ? buy.country : e.target.value, batchId: e.target.value.startsWith("b") ? Number(e.target.value.slice(1)) : 0 })}>
-                    {countries.map((c) => <option key={c} value={c}>{flagOf(c)} {c} 任一批次</option>)}
+                    {countries.map((c) => <option key={c} value={c}>{countryLabel(c)} 任一批次</option>)}
                     {buy.batchId > 0 && <option value={`b${buy.batchId}`}>指定批次 #{buy.batchId}</option>}
                   </select>
                 </Field>
@@ -318,7 +318,7 @@ export function LedgerTrade() {
               <thead className="text-left text-xs text-ink-300"><tr><th className="py-1">核發國</th><th className="text-right">剩餘</th><th className="text-right">每噸</th></tr></thead>
               <tbody>{bids.slice(0, 15).map((b) => (
                 <tr key={b.bidId} className="border-t border-ink-600">
-                  <td className="py-1.5">{b.country ? <>{flagOf(b.country)} {b.country}</> : "指定批次"} {b.tag && <ParticipantBadge tag={b.tag} />}</td>
+                  <td className="py-1.5">{b.country ? countryLabel(b.country) : "指定批次"} {b.tag && <ParticipantBadge tag={b.tag} />}</td>
                   <td className="tnum text-right">{fmtKg(b.remainingKg)}</td>
                   <td className="tnum text-right">{fmtTwd(b.pricePerTonne)}</td>
                 </tr>
@@ -336,7 +336,7 @@ export function LedgerTrade() {
               <tr key={o.seq} className="border-t border-ink-600">
                 <td className="tnum py-1.5">#{o.seq}</td>
                 <td className={o.side === "buy" ? "text-tide" : "text-down"}>{o.side === "buy" ? "買" : "賣"}</td>
-                <td>{o.batchId !== "0" ? `批次 #${o.batchId}` : `${flagOf(o.country)} ${o.country} 任一批次`}</td>
+                <td>{o.batchId !== "0" ? `批次 #${o.batchId}` : `${countryLabel(o.country)} 任一批次`}</td>
                 <td className="tnum text-right">{fmtKg(Number(o.remainingKg))}／{fmtKg(Number(o.amountKg))}</td>
                 <td className="tnum text-right">{fmtTwd(o.pricePerTonne)}</td>
                 <td className="text-right"><Button variant="ghost" className="px-2 py-1 text-xs" disabled={!!busy} onClick={() => cancel(o.seq)}>撤單</Button></td>

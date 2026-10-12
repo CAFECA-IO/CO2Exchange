@@ -12,6 +12,7 @@ import { addWorkingDays, type Announcement, type Bulletin } from "../bulletin";
 import { nextDisclosureDate, type Custody } from "../reserve";
 import { tagOf } from "../mm";
 import { eventHashCached, ledgerView, memoView, type View } from "./view";
+import { countryName } from "@/lib/country-names";
 
 /// 讀取面的帳本版本（設計 v4）。每一個函式都回傳**和鏈上版本相同的形狀**，
 /// 所以畫面與 API 不必知道資料是從哪裡來的——切換只發生在 lib/server 的入口。
@@ -160,7 +161,8 @@ function ledgerByCountryUncached(rangeHours: number): { rangeHours: number; asOf
   const countries: CountryStat[] = codes.map((c) => {
     const j = s.jurisdictions.get(c);
     const [lat, lon] = ANCHOR[c] ?? [0, 0];
-    return { country: c, name: j?.name || c, scheme: j?.scheme || "—", registryName: j?.registryName || "", enabled: Boolean(j?.enabled), lat, lon, ...(acc.get(c) ?? blank()) };
+    // 帳本裡還沒登記的轄區（例如還沒開放的中國、印度）沒有名稱：用國名，不要讓代碼「CN」出現在畫面上
+    return { country: c, name: j?.name || countryName(c), scheme: j?.scheme || "—", registryName: j?.registryName || "", enabled: Boolean(j?.enabled), lat, lon, ...(acc.get(c) ?? blank()) };
   });
   countries.sort((a, b) => b.issuedKg - a.issuedKg || a.country.localeCompare(b.country));
   return { rangeHours, asOf, countries };

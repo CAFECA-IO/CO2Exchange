@@ -6,7 +6,7 @@ import { useAccount } from "@/components/AccountProvider";
 import { AccountGate } from "@/components/AccountGate";
 import { AgreementCheck, useAgreementGate } from "@/components/AgreementGate";
 import { Button, Card, Field, Notice, fmtKg, inputCls } from "@/components/ui";
-import { PURPOSE_LABEL, flagOf, purposeAllowed } from "@/lib/deployment";
+import { PURPOSE_LABEL, purposeAllowed, countryLabel } from "@/lib/deployment";
 import { useReload } from "@/lib/client/useReload";
 import { fetchJson } from "@/lib/client/fetchJson";
 import { outcomeText, useLedger } from "@/lib/client/ledger";
@@ -86,7 +86,7 @@ export default function RetirePage() {
   const options: { key: string; label: string; maxKg: number; country: string; scheme: string }[] = [
     ...batches.map((b) => ({
       key: `b${b.batchId}`,
-      label: `${flagOf(b.country)} ${b.country}　批次 #${b.batchId}　${b.project}　${b.vintageYear}　持有 ${fmtKg(b.kg)}`,
+      label: `${countryLabel(b.country)}　批次 #${b.batchId}　${b.project}　${b.vintageYear}　持有 ${fmtKg(b.kg)}`,
       maxKg: b.kg,
       country: b.country,
       scheme: b.scheme,
@@ -193,7 +193,7 @@ export default function RetirePage() {
             </Field>
             {sel && sel.country !== "TW" && (
               <Notice kind="info">
-                <b>這是國外減量額度（{flagOf(sel.country)} {sel.country}．{sel.scheme}）。</b>
+                <b>這是國外減量額度（{countryLabel(sel.country)}．{sel.scheme}）。</b>
                 依氣候變遷因應法第 27 條，國外額度只能用於<b>扣除碳費排放量</b>（須經中央主管機關認可，
                 上限為收費排放量 5%，高碳洩漏風險事業不得使用）與抵銷超額量；
                 <b>不能</b>用於環評增量抵換或環評承諾事項，帳本收單時就會擋下。
@@ -236,7 +236,7 @@ export default function RetirePage() {
             <dl className="mt-4 divide-y divide-ink-500 text-sm">
               {([
                 ["標的", sel.label.split("　").slice(0, 3).join("　")],
-                ["核發國 / 機制", `${flagOf(sel.country)} ${sel.country}　${sel.scheme}`],
+                ["核發國 / 機制", `${countryLabel(sel.country)}　${sel.scheme}`],
                 ["數量", fmtKg(kg)],
                 ["受益人", beneficiary],
                 ["用途", PURPOSE_LABEL[purpose]],

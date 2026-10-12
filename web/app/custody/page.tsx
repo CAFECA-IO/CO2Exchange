@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { BarList, StatTile } from "@/components/charts";
 import { Card, Notice, fmtKg } from "@/components/ui";
-import { flagOf } from "@/lib/deployment";
+import { flagOf, countryName } from "@/lib/deployment";
 import type { Custody } from "@/lib/server/reserve";
 import { fetchJson } from "@/lib/client/fetchJson";
 import { BankSolvency } from "@/components/BankSolvency";
@@ -110,7 +110,7 @@ export default function CustodyPage() {
                       return (
                         <tr key={row.country} className="text-ink-200">
                           <td className="py-2 pr-3 whitespace-nowrap">
-                            <span className="mr-1.5">{flagOf(row.country)}</span>{row.country}
+                            <span className="mr-1.5">{flagOf(row.country)}</span>{countryName(row.country)}
                           </td>
                           <td className="py-2 pr-3">{row.custodian}</td>
                           <td className="tnum py-2 pr-3 font-mono text-xs">{row.accountRef}</td>
